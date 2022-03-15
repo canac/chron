@@ -7,10 +7,13 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process;
 use std::str::FromStr;
+use std::thread;
 
 pub struct ChronService<'job> {
     log_dir: PathBuf,
     scheduled_jobs: HashMap<String, Job<'job>>,
+    // The key is the name and the value is the command to run
+    startup_commands: HashMap<String, String>,
     scheduler: JobScheduler<'job>,
 }
 
@@ -20,12 +23,24 @@ impl<'job> ChronService<'job> {
         ChronService {
             log_dir: chron_dir.join("logs"),
             scheduled_jobs: HashMap::new(),
+            startup_commands: HashMap::new(),
             scheduler: JobScheduler::new(),
         }
     }
 
+    // Add a new command to be run on startup
+    pub fn startup(&mut self, name: &str, command: &str) -> Result<()> {
+        if self.startup_commands.contains_key(name) {
+            bail!("A job with the name {name} already exists")
+        }
+        self.startup_commands
+            .insert(name.to_string(), command.to_string());
+
+        Ok(())
+    }
+
     // Add a new command to be run on the given schedule
-    pub fn add<'cmd>(
+    pub fn schedule<'cmd>(
         &mut self,
         name: &'job str,
         schedule_expression: &str,
@@ -53,10 +68,22 @@ impl<'job> ChronService<'job> {
 
     // Start the chron service, running all scripts on their specified interval
     // Note that this function starts an infinite loop and will never return
-    pub fn run(&mut self) {
+    pub fn run(mut self) -> Result<()> {
+        // Run all of the startup scripts
+        for (name, command) in self.startup_commands.into_iter() {
+            let log_dir = self.log_dir.clone();
+            thread::spawn(move || loop {
+                Self::exec_command(&log_dir, name.as_str(), command.as_str()).unwrap();
+
+                // Re-run the command after a few seconds
+                thread::sleep(std::time::Duration::from_secs(3));
+            });
+        }
+
+        // Run the scheduled scripts
         loop {
             self.scheduler.tick();
-            std::thread::sleep(self.scheduler.time_till_next_job());
+            thread::sleep(self.scheduler.time_till_next_job());
         }
     }
 
