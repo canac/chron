@@ -1,6 +1,9 @@
 use crate::job_scheduler::{Job, JobScheduler};
+use crate::schema::run;
 use anyhow::{bail, Context, Result};
 use cron::Schedule;
+use diesel::prelude::*;
+use diesel::SqliteConnection;
 use regex::Regex;
 use std::collections::HashMap;
 use std::fs;
@@ -10,23 +13,32 @@ use std::process;
 use std::str::FromStr;
 use std::thread;
 
+embed_migrations!();
+
 pub struct ChronService<'job> {
     log_dir: PathBuf,
     scheduled_jobs: HashMap<String, Job<'job>>,
     // The key is the name and the value is the command to run
     startup_commands: HashMap<String, String>,
     scheduler: JobScheduler<'job>,
+    db_connection: SqliteConnection,
 }
 
 impl<'job> ChronService<'job> {
     // Create a new ChronService instance
-    pub fn new(chron_dir: &Path) -> Self {
-        ChronService {
+    pub fn new(chron_dir: &Path) -> Result<Self> {
+        let db_path = chron_dir.join("db.sqlite");
+        let connection = SqliteConnection::establish(&db_path.to_string_lossy())
+            .with_context(|| format!("Error opening SQLite database {db_path:?}"))?;
+        embedded_migrations::run(&connection).context("Error running SQLite migrations")?;
+
+        Ok(ChronService {
             log_dir: chron_dir.join("logs"),
             scheduled_jobs: HashMap::new(),
             startup_commands: HashMap::new(),
             scheduler: JobScheduler::new(),
-        }
+            db_connection: connection,
+        })
     }
 
     // Add a new command to be run on startup
@@ -71,6 +83,12 @@ impl<'job> ChronService<'job> {
         });
         self.scheduler.add(job);
         // self.scheduled_jobs.insert(name.to_string(), job);
+
+        // Record the run in the database
+        diesel::insert_into(run::table)
+            .values(run::dsl::name.eq(name))
+            .execute(&self.db_connection)
+            .context("Error saving run to database")?;
 
         Ok(())
     }
