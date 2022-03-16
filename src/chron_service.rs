@@ -1,6 +1,7 @@
 use crate::job_scheduler::{Job, JobScheduler};
 use anyhow::{bail, Context, Result};
 use cron::Schedule;
+use regex::Regex;
 use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
@@ -30,6 +31,10 @@ impl<'job> ChronService<'job> {
 
     // Add a new command to be run on startup
     pub fn startup(&mut self, name: &str, command: &str) -> Result<()> {
+        if !Self::validate_name(name) {
+            bail!("Invalid command name {name}")
+        }
+
         if self.startup_commands.contains_key(name) {
             bail!("A job with the name {name} already exists")
         }
@@ -49,6 +54,10 @@ impl<'job> ChronService<'job> {
     where
         'cmd: 'job,
     {
+        if !Self::validate_name(name) {
+            bail!("Invalid command name {name}")
+        }
+
         if self.scheduled_jobs.contains_key(name) {
             bail!("A job with the name {name} already exists")
         }
@@ -85,6 +94,15 @@ impl<'job> ChronService<'job> {
             self.scheduler.tick();
             thread::sleep(self.scheduler.time_till_next_job());
         }
+    }
+
+    // Helper to validate the command name
+    fn validate_name(name: &str) -> bool {
+        lazy_static::lazy_static! {
+            static ref RE: Regex =
+                Regex::new(r"^[a-zA-Z0-9]+(-[a-zA-Z0-9]+)*$").unwrap();
+        }
+        RE.is_match(name)
     }
 
     // Helper to execute the specified command
