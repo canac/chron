@@ -16,6 +16,12 @@ use std::thread;
 
 embed_migrations!();
 
+no_arg_sql_function!(
+    last_insert_rowid,
+    diesel::sql_types::Integer,
+    "Represents the SQL last_insert_row() function"
+);
+
 pub struct ChronService<'job> {
     log_dir: PathBuf,
     scheduled_jobs: HashMap<String, Job<'job>>,
@@ -134,10 +140,15 @@ impl<'job> ChronService<'job> {
         println!("{formatted_start_time} Running {name}: {command}");
 
         // Record the run in the database
+        let connection = db_connection.lock().unwrap();
         diesel::insert_into(run::table)
             .values(run::dsl::name.eq(name))
-            .execute(&*db_connection.lock().unwrap())
+            .execute(&*connection)
             .context("Error saving run to database")?;
+        let run_id = diesel::select(last_insert_rowid)
+            .get_result::<i32>(&*connection)
+            .context("Error getting inserted run id from database")?;
+        drop(connection);
 
         // Open the log file, creating the directory if necessary
         fs::create_dir_all(log_dir)
@@ -170,6 +181,14 @@ impl<'job> ChronService<'job> {
             None => "unknown".to_string(),
         };
         log_file.write_all(format!("{divider}\nStatus: {status_code}\n\n").as_bytes())?;
+
+        // Update the run status code in the database
+        if let Some(code) = status.code() {
+            diesel::update(run::table.find(run_id))
+                .set(run::dsl::status_code.eq(code))
+                .execute(&*db_connection.lock().unwrap())
+                .context("Error updating run status in the database")?;
+        }
 
         Ok(())
     }
