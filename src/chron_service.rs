@@ -1,6 +1,6 @@
 use crate::job_scheduler::{Job, JobScheduler};
 use crate::schema::run;
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use cron::Schedule;
 use diesel::prelude::*;
 use diesel::SqliteConnection;
@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process;
+use std::process::{self, Child};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -28,6 +28,7 @@ pub struct ChronService<'job> {
     // The key is the name and the value is the command to run
     startup_commands: HashMap<String, String>,
     scheduler: JobScheduler<'job>,
+    running_commands: Arc<Mutex<HashMap<String, Arc<Mutex<Child>>>>>,
     db_connection: Arc<Mutex<SqliteConnection>>,
 }
 
@@ -44,6 +45,7 @@ impl<'job> ChronService<'job> {
             scheduled_jobs: HashMap::new(),
             startup_commands: HashMap::new(),
             scheduler: JobScheduler::new(),
+            running_commands: Arc::new(Mutex::new(HashMap::new())),
             db_connection: Arc::new(Mutex::new(connection)),
         })
     }
@@ -84,10 +86,13 @@ impl<'job> ChronService<'job> {
         let schedule = Schedule::from_str(schedule_expression).with_context(|| {
             format!("Failed to parse schedule expression {schedule_expression}")
         })?;
-        let log_dir = self.log_dir.clone();
-        let db_connection = self.db_connection.clone();
+        let (db_connection, running_commands, log_dir) = (
+            self.db_connection.clone(),
+            self.running_commands.clone(),
+            self.log_dir.clone(),
+        );
         let job = Job::new(schedule, move || {
-            Self::exec_command(&db_connection, &log_dir, name, command).unwrap()
+            Self::exec_command(&db_connection, &running_commands, &log_dir, name, command).unwrap()
         });
         self.scheduler.add(job);
         // self.scheduled_jobs.insert(name.to_string(), job);
@@ -100,11 +105,20 @@ impl<'job> ChronService<'job> {
     pub fn run(mut self) -> Result<()> {
         // Run all of the startup scripts
         for (name, command) in self.startup_commands.into_iter() {
-            let log_dir = self.log_dir.clone();
-            let db_connection = self.db_connection.clone();
+            let (db_connection, running_commands, log_dir) = (
+                self.db_connection.clone(),
+                self.running_commands.clone(),
+                self.log_dir.clone(),
+            );
             thread::spawn(move || loop {
-                Self::exec_command(&db_connection, &log_dir, name.as_str(), command.as_str())
-                    .unwrap();
+                Self::exec_command(
+                    &db_connection,
+                    &running_commands,
+                    &log_dir,
+                    name.as_str(),
+                    command.as_str(),
+                )
+                .unwrap();
 
                 // Re-run the command after a few seconds
                 thread::sleep(std::time::Duration::from_secs(3));
@@ -116,6 +130,25 @@ impl<'job> ChronService<'job> {
             self.scheduler.tick();
             thread::sleep(self.scheduler.time_till_next_job());
         }
+    }
+
+    // Kill a process by its name
+    pub fn kill_by_name(&self, name: &str) -> Result<()> {
+        let running_commands = self.running_commands.lock().unwrap();
+        let child = running_commands
+            .get(name)
+            .ok_or_else(|| anyhow!("No process with name {name}"))?;
+        child.lock().unwrap().kill()?;
+        Ok(())
+    }
+
+    // Lookup the process id of a job by its name
+    pub fn pid_from_name(&self, name: &str) -> Option<u32> {
+        self.running_commands
+            .lock()
+            .unwrap()
+            .get(name)
+            .map(|child| child.lock().unwrap().id())
     }
 
     // Helper to validate the command name
@@ -130,6 +163,7 @@ impl<'job> ChronService<'job> {
     // Helper to execute the specified command
     fn exec_command(
         db_connection: &Arc<Mutex<SqliteConnection>>,
+        running_commands: &Arc<Mutex<HashMap<String, Arc<Mutex<Child>>>>>,
         log_dir: &Path,
         name: &str,
         command: &str,
@@ -167,13 +201,22 @@ impl<'job> ChronService<'job> {
 
         // Run the command
         let clone_log_file = || log_file.try_clone().context("Failed to clone log file");
-        let status = process::Command::new("sh")
-            .args(["-c", command])
-            .stdin(process::Stdio::null())
-            .stdout(clone_log_file()?)
-            .stderr(clone_log_file()?)
-            .status()
-            .with_context(|| format!("Failed to run command {command}"))?;
+        let process = Arc::new(Mutex::new(
+            process::Command::new("sh")
+                .args(["-c", command])
+                .stdin(process::Stdio::null())
+                .stdout(clone_log_file()?)
+                .stderr(clone_log_file()?)
+                .spawn()
+                .with_context(|| format!("Failed to run command {command}"))?,
+        ));
+        (*running_commands.lock().unwrap()).insert(name.to_string(), process.clone());
+        let status = process
+            .lock()
+            .unwrap()
+            .wait()
+            .with_context(|| format!("Failed to get command status for command {command}"))?;
+        (*running_commands.lock().unwrap()).remove(name);
 
         // Write the log file footer that contains the execution status
         let status_code = match status.code() {
