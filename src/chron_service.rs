@@ -11,6 +11,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process;
 use std::str::FromStr;
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 embed_migrations!();
@@ -21,7 +22,7 @@ pub struct ChronService<'job> {
     // The key is the name and the value is the command to run
     startup_commands: HashMap<String, String>,
     scheduler: JobScheduler<'job>,
-    db_connection: SqliteConnection,
+    db_connection: Arc<Mutex<SqliteConnection>>,
 }
 
 impl<'job> ChronService<'job> {
@@ -37,7 +38,7 @@ impl<'job> ChronService<'job> {
             scheduled_jobs: HashMap::new(),
             startup_commands: HashMap::new(),
             scheduler: JobScheduler::new(),
-            db_connection: connection,
+            db_connection: Arc::new(Mutex::new(connection)),
         })
     }
 
@@ -78,17 +79,12 @@ impl<'job> ChronService<'job> {
             format!("Failed to parse schedule expression {schedule_expression}")
         })?;
         let log_dir = self.log_dir.clone();
+        let db_connection = self.db_connection.clone();
         let job = Job::new(schedule, move || {
-            Self::exec_command(&log_dir, name, command).unwrap()
+            Self::exec_command(&db_connection, &log_dir, name, command).unwrap()
         });
         self.scheduler.add(job);
         // self.scheduled_jobs.insert(name.to_string(), job);
-
-        // Record the run in the database
-        diesel::insert_into(run::table)
-            .values(run::dsl::name.eq(name))
-            .execute(&self.db_connection)
-            .context("Error saving run to database")?;
 
         Ok(())
     }
@@ -99,8 +95,10 @@ impl<'job> ChronService<'job> {
         // Run all of the startup scripts
         for (name, command) in self.startup_commands.into_iter() {
             let log_dir = self.log_dir.clone();
+            let db_connection = self.db_connection.clone();
             thread::spawn(move || loop {
-                Self::exec_command(&log_dir, name.as_str(), command.as_str()).unwrap();
+                Self::exec_command(&db_connection, &log_dir, name.as_str(), command.as_str())
+                    .unwrap();
 
                 // Re-run the command after a few seconds
                 thread::sleep(std::time::Duration::from_secs(3));
@@ -124,11 +122,22 @@ impl<'job> ChronService<'job> {
     }
 
     // Helper to execute the specified command
-    fn exec_command(log_dir: &Path, name: &str, command: &str) -> Result<()> {
+    fn exec_command(
+        db_connection: &Arc<Mutex<SqliteConnection>>,
+        log_dir: &Path,
+        name: &str,
+        command: &str,
+    ) -> Result<()> {
         let start_time = chrono::Local::now();
         let formatted_start_time = start_time.to_rfc3339();
 
         println!("{formatted_start_time} Running {name}: {command}");
+
+        // Record the run in the database
+        diesel::insert_into(run::table)
+            .values(run::dsl::name.eq(name))
+            .execute(&*db_connection.lock().unwrap())
+            .context("Error saving run to database")?;
 
         // Open the log file, creating the directory if necessary
         fs::create_dir_all(log_dir)
