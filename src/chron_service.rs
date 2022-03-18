@@ -92,7 +92,17 @@ impl<'job> ChronService<'job> {
             self.log_dir.clone(),
         );
         let job = Job::new(schedule, move || {
-            Self::exec_command(&db_connection, &running_commands, &log_dir, name, command).unwrap()
+            let (db_connection, running_commands, log_dir, name, command) = (
+                db_connection.clone(),
+                running_commands.clone(),
+                log_dir.clone(),
+                name.to_string(),
+                command.to_string(),
+            );
+            thread::spawn(move || {
+                Self::exec_command(&db_connection, &running_commands, &log_dir, &name, &command)
+                    .unwrap()
+            });
         });
         self.scheduler.add(job);
         // self.scheduled_jobs.insert(name.to_string(), job);
