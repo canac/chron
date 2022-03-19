@@ -6,6 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+actix-web = "4.0.1"
 anyhow = "1.0.56"
 chrono = "0.4.19"
 cron = "0.9.0"
@@ -14,4 +15,3 @@ diesel_migrations = { version = "1.4.0", features = ["sqlite"] }
 directories = "4.0.1"
 lazy_static = "1.4.0"
 regex = "1.5.5"
-uuid = { version = "0.8.2", features = ["v4"] }
