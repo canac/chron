@@ -1,9 +1,7 @@
-use crate::schema::run;
+use crate::database::Database;
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
 use cron::Schedule;
-use diesel::prelude::*;
-use diesel::SqliteConnection;
 use regex::Regex;
 use std::collections::HashMap;
 use std::fs;
@@ -14,14 +12,6 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-
-embed_migrations!();
-
-no_arg_sql_function!(
-    last_insert_rowid,
-    diesel::sql_types::Integer,
-    "Represents the SQL last_insert_row() function"
-);
 
 struct ScheduledCommand {
     schedule: Schedule,
@@ -61,9 +51,10 @@ struct Command {
 
 #[derive(Clone)]
 struct ThreadState {
-    db_connection: Arc<Mutex<SqliteConnection>>,
+    db: Arc<Mutex<Database>>,
     commands: HashMap<String, Arc<Mutex<Command>>>,
 }
+
 pub struct ChronService {
     log_dir: PathBuf,
     state: ThreadState,
@@ -72,13 +63,9 @@ pub struct ChronService {
 impl ChronService {
     // Create a new ChronService instance
     pub fn new(chron_dir: &Path) -> Result<Self> {
-        let db_path = chron_dir.join("db.sqlite");
-        let connection = SqliteConnection::establish(&db_path.to_string_lossy())
-            .with_context(|| format!("Error opening SQLite database {db_path:?}"))?;
-        embedded_migrations::run(&connection).context("Error running SQLite migrations")?;
-
+        let db = Database::new(chron_dir)?;
         let thread_state = ThreadState {
-            db_connection: Arc::new(Mutex::new(connection)),
+            db: Arc::new(Mutex::new(db)),
             commands: HashMap::new(),
         };
         Ok(ChronService {
@@ -250,15 +237,9 @@ impl ChronService {
         );
 
         // Record the run in the database
-        let connection = thread_state.db_connection.lock().unwrap();
-        diesel::insert_into(run::table)
-            .values(run::dsl::name.eq(command.name.clone()))
-            .execute(&*connection)
-            .context("Error saving run to database")?;
-        let run_id = diesel::select(last_insert_rowid)
-            .get_result::<i32>(&*connection)
-            .context("Error getting inserted run id from database")?;
-        drop(connection);
+        let db = thread_state.db.lock().unwrap();
+        let run_id = db.insert_run(&command.name)?;
+        drop(db);
 
         // Open the log file, creating the directory if necessary
         let log_dir = command.log_path.parent().with_context(|| {
@@ -327,10 +308,11 @@ impl ChronService {
 
         // Update the run status code in the database
         if let Some(code) = status.code() {
-            diesel::update(run::table.find(run_id))
-                .set(run::dsl::status_code.eq(code))
-                .execute(&*thread_state.db_connection.lock().unwrap())
-                .context("Error updating run status in the database")?;
+            thread_state
+                .db
+                .lock()
+                .unwrap()
+                .set_run_status_code(run_id, code)?;
         }
 
         Ok(())

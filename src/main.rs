@@ -4,6 +4,7 @@ extern crate diesel;
 extern crate diesel_migrations;
 
 mod chron_service;
+mod database;
 mod run;
 mod schema;
 
