@@ -1,7 +1,8 @@
 use crate::chron_service::{CommandType, ThreadState};
 use crate::http_error::HttpError;
-use actix_web::{get, http::StatusCode, web, App, HttpServer, Responder, Result};
+use actix_web::{delete, get, http::StatusCode, web, App, HttpServer, Responder, Result};
 use serde_json::json;
+use std::fs;
 
 #[get("/status")]
 async fn status_overview(data: web::Data<ThreadState>) -> Result<impl Responder> {
@@ -63,6 +64,32 @@ async fn status(name: web::Path<String>, data: web::Data<ThreadState>) -> Result
     })))
 }
 
+#[get("/log/{name}")]
+async fn get_log(name: web::Path<String>, data: web::Data<ThreadState>) -> Result<impl Responder> {
+    let command_mutex = data
+        .commands
+        .get(&name.into_inner())
+        .ok_or_else(|| HttpError::new(StatusCode::NOT_FOUND))?;
+    let log_path = command_mutex.lock().unwrap().log_path.clone();
+    let log_contents = fs::read_to_string(log_path)?;
+    Ok(log_contents)
+}
+
+#[delete("/log/{name}")]
+async fn delete_log(
+    name: web::Path<String>,
+    data: web::Data<ThreadState>,
+) -> Result<impl Responder> {
+    let name = name.into_inner();
+    let command_mutex = data
+        .commands
+        .get(&name)
+        .ok_or_else(|| HttpError::new(StatusCode::NOT_FOUND))?;
+    let log_path = command_mutex.lock().unwrap().log_path.clone();
+    fs::write(log_path, "")?;
+    Ok(format!("Erased log file for {}", name))
+}
+
 pub async fn start_server(data: ThreadState) -> Result<(), std::io::Error> {
     let app_data = data.clone();
     HttpServer::new(move || {
@@ -71,6 +98,8 @@ pub async fn start_server(data: ThreadState) -> Result<(), std::io::Error> {
             .app_data(app_data)
             .service(status_overview)
             .service(status)
+            .service(get_log)
+            .service(delete_log)
     })
     .bind(("127.0.0.1", 8080))?
     .run()
