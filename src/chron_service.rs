@@ -1,4 +1,5 @@
 use crate::database::Database;
+use crate::http_server;
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
 use cron::Schedule;
@@ -13,12 +14,18 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-struct ScheduledCommand {
+pub struct ScheduledCommand {
     schedule: Schedule,
     last_tick: Option<DateTime<Utc>>,
 }
 
 impl ScheduledCommand {
+    // Return the date of the next time that this scheduled command will run
+    pub fn next_run(&self) -> Option<DateTime<Utc>> {
+        let now = Utc::now();
+        self.schedule.after(&now).next()
+    }
+
     fn tick(&mut self) -> bool {
         let now = Utc::now();
         let should_run = match self.last_tick {
@@ -36,23 +43,23 @@ impl ScheduledCommand {
     }
 }
 
-enum CommandType {
+pub enum CommandType {
     Startup,
     Scheduled(Box<ScheduledCommand>),
 }
 
-struct Command {
-    name: String,
-    command: String,
-    log_path: PathBuf,
-    process: Option<Child>,
-    command_type: CommandType,
+pub struct Command {
+    pub name: String,
+    pub command: String,
+    pub log_path: PathBuf,
+    pub process: Option<Child>,
+    pub command_type: CommandType,
 }
 
 #[derive(Clone)]
-struct ThreadState {
-    db: Arc<Mutex<Database>>,
-    commands: HashMap<String, Arc<Mutex<Command>>>,
+pub struct ThreadState {
+    pub db: Arc<Mutex<Database>>,
+    pub commands: HashMap<String, Arc<Mutex<Command>>>,
 }
 
 pub struct ChronService {
@@ -134,22 +141,7 @@ impl ChronService {
     }
 
     pub async fn start_server(&self) -> Result<(), std::io::Error> {
-        use actix_web::{web, App, HttpResponse, HttpServer, Responder};
-
-        async fn hello(data: web::Data<ThreadState>) -> impl Responder {
-            HttpResponse::Ok().body(data.commands.len().to_string())
-        }
-
-        let app_data = self.state.clone();
-        HttpServer::new(move || {
-            let app_data = web::Data::new(app_data.clone());
-            App::new()
-                .app_data(app_data)
-                .route("/", web::get().to(hello))
-        })
-        .bind(("127.0.0.1", 8080))?
-        .run()
-        .await
+        http_server::start_server(self.state.clone()).await
     }
 
     // Start the chron service, running all scripts on their specified interval

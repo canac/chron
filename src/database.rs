@@ -46,4 +46,14 @@ impl Database {
             .context("Error updating run status in the database")?;
         Ok(())
     }
+
+    // Read the last runs of a command
+    pub fn get_last_runs(&self, name: &str, count: u64) -> Result<Vec<crate::run::Run>> {
+        run::table
+            .filter(run::dsl::name.eq(name))
+            .order(run::dsl::timestamp.desc())
+            .limit(count as i64)
+            .load(&self.connection)
+            .context("Error loading last runs from the database")
+    }
 }

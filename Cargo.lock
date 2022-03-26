@@ -325,6 +325,8 @@ dependencies = [
  "directories",
  "lazy_static",
  "regex",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -336,6 +338,7 @@ dependencies = [
  "libc",
  "num-integer",
  "num-traits",
+ "serde",
  "time 0.1.44",
  "winapi",
 ]
