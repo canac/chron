@@ -162,8 +162,9 @@ impl ChronService {
                         thread::sleep(Duration::from_secs(3));
                     }
                     CommandType::Scheduled(scheduled_command) => {
-                        if scheduled_command.tick() {
-                            drop(command_guard);
+                        let should_run = scheduled_command.tick();
+                        drop(command_guard);
+                        if should_run {
                             Self::exec_command(&thread_state, &command).unwrap();
                             thread::sleep(Duration::from_millis(500));
                         }
@@ -279,6 +280,7 @@ impl ChronService {
                         command.command
                     )
                 })?;
+            drop(command);
             match maybe_status {
                 None => std::thread::sleep(Duration::from_millis(1000)),
                 Some(status) => {
