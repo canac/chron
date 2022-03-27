@@ -1,6 +1,6 @@
 use crate::database::Database;
 use crate::http_server;
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 use cron::Schedule;
 use regex::Regex;
@@ -174,32 +174,6 @@ impl ChronService {
         }
 
         Ok(())
-    }
-
-    // Kill a process by its name
-    pub fn kill_by_name(&self, name: &str) -> Result<()> {
-        let mut command = self
-            .state
-            .commands
-            .get(&name.to_string())
-            .ok_or_else(|| anyhow!("No process with name {name}"))?
-            .lock()
-            .unwrap();
-        if let Some(process) = command.process.as_mut() {
-            process.kill()?;
-        }
-        Ok(())
-    }
-
-    // Lookup the process id of a job by its name
-    pub fn pid_from_name(&self, name: &str) -> Option<u32> {
-        self.state
-            .commands
-            .get(&name.to_string())
-            .and_then(|child| {
-                let child = child.lock().unwrap();
-                child.process.as_ref().map(|process| process.id())
-            })
     }
 
     // Helper to validate the command name

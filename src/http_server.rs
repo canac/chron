@@ -1,6 +1,6 @@
 use crate::chron_service::{CommandType, ThreadState};
 use crate::http_error::HttpError;
-use actix_web::{delete, get, http::StatusCode, web, App, HttpServer, Responder, Result};
+use actix_web::{delete, get, http::StatusCode, post, web, App, HttpServer, Responder, Result};
 use serde_json::json;
 use std::fs;
 
@@ -90,6 +90,27 @@ async fn delete_log(
     Ok(format!("Erased log file for {}", name))
 }
 
+#[post("/terminate/{name}")]
+async fn terminate(
+    name: web::Path<String>,
+    data: web::Data<ThreadState>,
+) -> Result<impl Responder> {
+    let name = name.into_inner();
+    let command_mutex = data
+        .commands
+        .get(&name)
+        .ok_or_else(|| HttpError::new(StatusCode::NOT_FOUND))?;
+    let mut command = command_mutex.lock().unwrap();
+    let message = match command.process.as_mut() {
+        Some(process) => {
+            process.kill()?;
+            format!("Terminated command {name}")
+        }
+        None => format!("Command {name} isn't currently running"),
+    };
+    Ok(message)
+}
+
 pub async fn start_server(data: ThreadState) -> Result<(), std::io::Error> {
     let app_data = data.clone();
     HttpServer::new(move || {
@@ -100,6 +121,7 @@ pub async fn start_server(data: ThreadState) -> Result<(), std::io::Error> {
             .service(status)
             .service(get_log)
             .service(delete_log)
+            .service(terminate)
     })
     .bind(("127.0.0.1", 8080))?
     .run()
