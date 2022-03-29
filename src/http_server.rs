@@ -38,7 +38,7 @@ async fn status(name: web::Path<String>, data: web::Data<ThreadState>) -> Result
     let command_mutex = data
         .commands
         .get(&name)
-        .ok_or_else(|| HttpError::new(StatusCode::NOT_FOUND))?;
+        .ok_or_else(|| HttpError::from_status_code(StatusCode::NOT_FOUND))?;
 
     // Load the last few runs from the database
     let db = data.db.lock().unwrap();
@@ -72,7 +72,7 @@ async fn get_log(name: web::Path<String>, data: web::Data<ThreadState>) -> Resul
     let command_mutex = data
         .commands
         .get(&name.into_inner())
-        .ok_or_else(|| HttpError::new(StatusCode::NOT_FOUND))?;
+        .ok_or_else(|| HttpError::from_status_code(StatusCode::NOT_FOUND))?;
     let log_path = command_mutex.lock().unwrap().log_path.clone();
     let log_contents = fs::read_to_string(log_path)?;
     Ok(log_contents)
@@ -87,7 +87,7 @@ async fn delete_log(
     let command_mutex = data
         .commands
         .get(&name)
-        .ok_or_else(|| HttpError::new(StatusCode::NOT_FOUND))?;
+        .ok_or_else(|| HttpError::from_status_code(StatusCode::NOT_FOUND))?;
     let log_path = command_mutex.lock().unwrap().log_path.clone();
     fs::write(log_path, "")?;
     Ok(format!("Erased log file for {}", name))
@@ -102,7 +102,7 @@ async fn terminate(
     let command_mutex = data
         .commands
         .get(&name)
-        .ok_or_else(|| HttpError::new(StatusCode::NOT_FOUND))?;
+        .ok_or_else(|| HttpError::from_status_code(StatusCode::NOT_FOUND))?;
     let mut command = command_mutex.lock().unwrap();
     let message = match command.process.as_mut() {
         Some(process) => {
@@ -119,7 +119,7 @@ async fn mailbox_overview(data: web::Data<ThreadState>) -> Result<impl Responder
     let db = data.db.lock().unwrap();
     let sizes = db
         .get_mailbox_sizes()
-        .map_err(|_| HttpError::new(StatusCode::INTERNAL_SERVER_ERROR))?
+        .map_err(HttpError::from_database_error)?
         .filter(|(name, _)| data.commands.contains_key(name))
         .collect::<BTreeMap<_, _>>();
     Ok(web::Json(sizes))
@@ -133,7 +133,7 @@ async fn read_mailbox(
     let db = data.db.lock().unwrap();
     let messages = db
         .get_messages(&name.into_inner())
-        .map_err(|_| HttpError::new(StatusCode::INTERNAL_SERVER_ERROR))?;
+        .map_err(HttpError::from_database_error)?;
     Ok(web::Json(
         messages
             .into_iter()
@@ -155,12 +155,12 @@ async fn write_message(
     data: web::Data<ThreadState>,
 ) -> Result<impl Responder> {
     let name = name.into_inner();
-    let content =
-        std::str::from_utf8(&body).map_err(|_| HttpError::new(StatusCode::BAD_REQUEST))?;
+    let content = std::str::from_utf8(&body)
+        .map_err(|_| HttpError::from_status_code(StatusCode::BAD_REQUEST))?;
 
     let db = data.db.lock().unwrap();
     db.add_message(&name, content)
-        .map_err(|_| HttpError::new(StatusCode::INTERNAL_SERVER_ERROR))?;
+        .map_err(HttpError::from_database_error)?;
     Ok(format!("Added message to {name} mailbox"))
 }
 
@@ -172,7 +172,7 @@ async fn empty_mailbox(
     let name = name.into_inner();
     let db = data.db.lock().unwrap();
     db.empty_mailbox(&name)
-        .map_err(|_| HttpError::new(StatusCode::INTERNAL_SERVER_ERROR))?;
+        .map_err(HttpError::from_database_error)?;
     Ok(format!("Emptied mailbox {name}"))
 }
 

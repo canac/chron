@@ -3,37 +3,54 @@ use core::fmt;
 use std::error::Error;
 
 #[derive(Debug)]
-pub struct HttpError(StatusCode);
+pub enum HttpError {
+    GenericError(StatusCode),
+    DatabaseError(anyhow::Error),
+}
 
 // HttpError essentially wraps a StatusCode
 impl HttpError {
-    pub fn new(status_code: StatusCode) -> HttpError {
-        HttpError(status_code)
+    pub fn from_status_code(status_code: StatusCode) -> HttpError {
+        HttpError::GenericError(status_code)
     }
 
-    fn reason(&self) -> &'static str {
-        self.0.canonical_reason().unwrap_or("unknown")
+    pub fn from_database_error(error: anyhow::Error) -> HttpError {
+        HttpError::DatabaseError(error)
+    }
+
+    fn reason(&self) -> String {
+        match self {
+            HttpError::GenericError(status_code) => status_code
+                .canonical_reason()
+                .unwrap_or("unknown")
+                .to_string(),
+            HttpError::DatabaseError(err) => format!("{}", err),
+        }
     }
 }
 
 impl fmt::Display for HttpError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}: {}", self.0.as_str(), self.reason())
+        match self {
+            HttpError::GenericError(status_code) => {
+                write!(f, "{}: {}", status_code.as_str(), self.reason())
+            }
+            HttpError::DatabaseError(err) => write!(f, "{}", err),
+        }
     }
 }
 
-impl Error for HttpError {
-    fn description(&self) -> &str {
-        self.0.as_str()
-    }
-}
+impl Error for HttpError {}
 
 impl ResponseError for HttpError {
     fn error_response(&self) -> HttpResponse {
-        HttpResponse::build(self.0).body(self.reason())
+        HttpResponse::build(self.status_code()).body(self.reason())
     }
 
     fn status_code(&self) -> StatusCode {
-        self.0
+        match self {
+            HttpError::GenericError(status_code) => *status_code,
+            HttpError::DatabaseError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        }
     }
 }
