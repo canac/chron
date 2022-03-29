@@ -1,7 +1,10 @@
 use crate::chron_service::{CommandType, ThreadState};
 use crate::http_error::HttpError;
-use actix_web::{delete, get, http::StatusCode, post, web, App, HttpServer, Responder, Result};
+use actix_web::{
+    delete, get, http::StatusCode, post, web, web::Bytes, App, HttpServer, Responder, Result,
+};
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::fs;
 
 #[get("/status")]
@@ -111,6 +114,68 @@ async fn terminate(
     Ok(message)
 }
 
+#[get("/mailbox")]
+async fn mailbox_overview(data: web::Data<ThreadState>) -> Result<impl Responder> {
+    let db = data.db.lock().unwrap();
+    let sizes = db
+        .get_mailbox_sizes()
+        .map_err(|_| HttpError::new(StatusCode::INTERNAL_SERVER_ERROR))?
+        .filter(|(name, _)| data.commands.contains_key(name))
+        .collect::<BTreeMap<_, _>>();
+    Ok(web::Json(sizes))
+}
+
+#[get("/mailbox/{name}")]
+async fn read_mailbox(
+    name: web::Path<String>,
+    data: web::Data<ThreadState>,
+) -> Result<impl Responder> {
+    let db = data.db.lock().unwrap();
+    let messages = db
+        .get_messages(&name.into_inner())
+        .map_err(|_| HttpError::new(StatusCode::INTERNAL_SERVER_ERROR))?;
+    Ok(web::Json(
+        messages
+            .into_iter()
+            .map(|message| {
+                json!({
+                    "content": message.content,
+                    "timestamp": message.timestamp,
+                    "read": message.read,
+                })
+            })
+            .collect::<Vec<_>>(),
+    ))
+}
+
+#[post("/mailbox/{name}")]
+async fn write_message(
+    name: web::Path<String>,
+    body: Bytes,
+    data: web::Data<ThreadState>,
+) -> Result<impl Responder> {
+    let name = name.into_inner();
+    let content =
+        std::str::from_utf8(&body).map_err(|_| HttpError::new(StatusCode::BAD_REQUEST))?;
+
+    let db = data.db.lock().unwrap();
+    db.add_message(&name, content)
+        .map_err(|_| HttpError::new(StatusCode::INTERNAL_SERVER_ERROR))?;
+    Ok(format!("Added message to {name} mailbox"))
+}
+
+#[delete("/mailbox/{name}")]
+async fn empty_mailbox(
+    name: web::Path<String>,
+    data: web::Data<ThreadState>,
+) -> Result<impl Responder> {
+    let name = name.into_inner();
+    let db = data.db.lock().unwrap();
+    db.empty_mailbox(&name)
+        .map_err(|_| HttpError::new(StatusCode::INTERNAL_SERVER_ERROR))?;
+    Ok(format!("Emptied mailbox {name}"))
+}
+
 pub async fn start_server(data: ThreadState) -> Result<(), std::io::Error> {
     let app_data = data.clone();
     HttpServer::new(move || {
@@ -122,6 +187,10 @@ pub async fn start_server(data: ThreadState) -> Result<(), std::io::Error> {
             .service(get_log)
             .service(delete_log)
             .service(terminate)
+            .service(mailbox_overview)
+            .service(read_mailbox)
+            .service(write_message)
+            .service(empty_mailbox)
     })
     .bind(("127.0.0.1", 8080))?
     .run()

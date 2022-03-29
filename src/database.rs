@@ -1,6 +1,7 @@
 use crate::schema::{message, run};
 use anyhow::{Context, Result};
 use diesel::prelude::*;
+use diesel::sql_types::{Integer, Text};
 use diesel::SqliteConnection;
 use std::path::Path;
 
@@ -14,6 +15,14 @@ no_arg_sql_function!(
 
 pub struct Database {
     connection: SqliteConnection,
+}
+
+#[derive(QueryableByName)]
+struct MailboxSizes {
+    #[sql_type = "Text"]
+    mailbox: String,
+    #[sql_type = "Integer"]
+    size: i32,
 }
 
 impl Database {
@@ -64,6 +73,29 @@ impl Database {
             .order(message::dsl::timestamp.asc())
             .load(&self.connection)
             .context("Error loading messages from the database")
+    }
+
+    // Write a message to a particular mailbox
+    pub fn add_message(&self, mailbox: &str, content: &str) -> Result<()> {
+        diesel::insert_into(message::table)
+            .values((
+                message::dsl::mailbox.eq(mailbox),
+                message::dsl::content.eq(content),
+            ))
+            .execute(&self.connection)
+            .context("Error writing message to the database")?;
+        Ok(())
+    }
+
+    // Read the sizes of the mailboxes
+    pub fn get_mailbox_sizes(&self) -> Result<impl Iterator<Item = (String, u32)> + '_> {
+        let sizes =
+            diesel::sql_query("SELECT mailbox, COUNT(*) as size FROM message GROUP BY mailbox;")
+                .load::<MailboxSizes>(&self.connection)
+                .context("Error reading mailbox sizes from the database")?
+                .into_iter()
+                .map(|row| (row.mailbox, row.size as u32));
+        Ok(sizes)
     }
 
     // Delete all messages in a particular mailbox
