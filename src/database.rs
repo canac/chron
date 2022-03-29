@@ -1,4 +1,4 @@
-use crate::schema::run;
+use crate::schema::{message, run};
 use anyhow::{Context, Result};
 use diesel::prelude::*;
 use diesel::SqliteConnection;
@@ -55,5 +55,23 @@ impl Database {
             .limit(count as i64)
             .load(&self.connection)
             .context("Error loading last runs from the database")
+    }
+
+    // Read the messages in a particular mailbox
+    pub fn get_messages(&self, mailbox: &str) -> Result<Vec<crate::message::Message>> {
+        message::table
+            .filter(message::dsl::mailbox.eq(mailbox))
+            .order(message::dsl::timestamp.asc())
+            .load(&self.connection)
+            .context("Error loading messages from the database")
+    }
+
+    // Delete all messages in a particular mailbox
+    pub fn empty_mailbox(&self, mailbox: &str) -> Result<()> {
+        diesel::delete(message::table)
+            .filter(message::dsl::mailbox.eq(mailbox))
+            .execute(&self.connection)
+            .context("Error deleting messages from the database")?;
+        Ok(())
     }
 }

@@ -6,3 +6,13 @@ table! {
         status_code -> Nullable<Integer>,
     }
 }
+
+table! {
+    message (id) {
+        id -> Integer,
+        mailbox -> Text,
+        content -> Text,
+        timestamp -> Timestamp,
+        read -> Bool,
+    }
+}

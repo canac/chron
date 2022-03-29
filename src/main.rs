@@ -7,6 +7,7 @@ mod chron_service;
 mod database;
 mod http_error;
 mod http_server;
+mod message;
 mod run;
 mod schema;
 
