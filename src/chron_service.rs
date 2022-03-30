@@ -58,6 +58,7 @@ pub struct Command {
 
 #[derive(Clone)]
 pub struct ThreadState {
+    pub server_port: u16,
     pub db: Arc<Mutex<Database>>,
     pub commands: HashMap<String, Arc<Mutex<Command>>>,
 }
@@ -69,9 +70,10 @@ pub struct ChronService {
 
 impl ChronService {
     // Create a new ChronService instance
-    pub fn new(chron_dir: &Path) -> Result<Self> {
+    pub fn new(chron_dir: &Path, server_port: u16) -> Result<Self> {
         let db = Database::new(chron_dir)?;
         let thread_state = ThreadState {
+            server_port,
             db: Arc::new(Mutex::new(db)),
             commands: HashMap::new(),
         };
@@ -229,8 +231,16 @@ impl ChronService {
 
         // Run the command
         let clone_log_file = || log_file.try_clone().context("Failed to clone log file");
+        let mailbox_url = format!(
+            "http://127.0.0.1:{}/mailbox/{}",
+            thread_state.server_port, command.name
+        );
         let process = process::Command::new("sh")
             .args(["-c", &command.command])
+            .envs(std::collections::HashMap::from([(
+                "CHRON_MAILBOX_URL",
+                mailbox_url,
+            )]))
             .stdin(process::Stdio::null())
             .stdout(clone_log_file()?)
             .stderr(clone_log_file()?)

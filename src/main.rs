@@ -18,7 +18,11 @@ use anyhow::{Context, Result};
 async fn main() -> Result<()> {
     let project_dirs = directories::ProjectDirs::from("com", "canac", "chron")
         .context("Failed to determine application directories")?;
-    let mut chron = ChronService::new(project_dirs.data_local_dir())?;
+    let port = std::env::var("PORT")
+        .context("Environment variable PORT is not set")?
+        .parse()
+        .context("Environment variable PORT is not an integer")?;
+    let mut chron = ChronService::new(project_dirs.data_local_dir(), port)?;
     chron.startup("startup", "echo 'Startup'; sleep 5")?;
     chron.schedule("echo", "0 * * * * * *", "sleep 1; echo 'Hello world!'")?;
     chron.schedule("error", "* * * * * * *", "echo 'Hello world!'; exit 1;")?;

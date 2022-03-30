@@ -192,7 +192,7 @@ pub async fn start_server(data: ThreadState) -> Result<(), std::io::Error> {
             .service(write_message)
             .service(empty_mailbox)
     })
-    .bind(("127.0.0.1", 8080))?
+    .bind(("127.0.0.1", data.server_port))?
     .run()
     .await
 }
