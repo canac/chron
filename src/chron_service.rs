@@ -3,6 +3,7 @@ use crate::http_server;
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 use cron::Schedule;
+use lazy_static::lazy_static;
 use regex::Regex;
 use std::collections::HashMap;
 use std::fs;
@@ -180,9 +181,8 @@ impl ChronService {
 
     // Helper to validate the command name
     fn validate_name(name: &str) -> bool {
-        lazy_static::lazy_static! {
-            static ref RE: Regex =
-                Regex::new(r"^[a-zA-Z0-9]+(-[a-zA-Z0-9]+)*$").unwrap();
+        lazy_static! {
+            static ref RE: Regex = Regex::new(r"^[a-zA-Z0-9]+(-[a-zA-Z0-9]+)*$").unwrap();
         }
         RE.is_match(name)
     }
@@ -226,8 +226,10 @@ impl ChronService {
             .with_context(|| format!("Failed to open log file {:?}", command.log_path))?;
 
         // Write the log file header for this execution
-        let divider: &'static str = "----------------------------------------------------------------------------------------------------";
-        log_file.write_all(format!("{formatted_start_time}\n{divider}\n").as_bytes())?;
+        lazy_static! {
+            static ref DIVIDER: String = "-".repeat(80);
+        }
+        log_file.write_all(format!("{formatted_start_time}\n{}\n", *DIVIDER).as_bytes())?;
 
         // Run the command
         let clone_log_file = || log_file.try_clone().context("Failed to clone log file");
@@ -282,7 +284,7 @@ impl ChronService {
             Some(code) => code.to_string(),
             None => "unknown".to_string(),
         };
-        log_file.write_all(format!("{divider}\nStatus: {status_code}\n\n").as_bytes())?;
+        log_file.write_all(format!("{}\nStatus: {status_code}\n\n", *DIVIDER).as_bytes())?;
 
         // Update the run status code in the database
         if let Some(code) = status.code() {
