@@ -27,6 +27,7 @@ impl ScheduledCommand {
         self.schedule.after(&now).next()
     }
 
+    // Determine whether the command should be run
     fn tick(&mut self) -> bool {
         let now = Utc::now();
         let should_run = match self.last_tick {
@@ -166,13 +167,20 @@ impl ChronService {
                     }
                     CommandType::Scheduled(scheduled_command) => {
                         let should_run = scheduled_command.tick();
+                        let next_run = scheduled_command.next_run();
+
                         drop(command_guard);
                         if should_run {
                             Self::exec_command(&thread_state, &command).unwrap();
                         }
 
-                        // Wait a little bit before ticking again
-                        thread::sleep(Duration::from_millis(500));
+                        // Wait until the next run before ticking again
+                        let sleep_duration = next_run
+                            .and_then(|next_run| {
+                                next_run.signed_duration_since(Utc::now()).to_std().ok()
+                            })
+                            .unwrap_or_else(|| Duration::from_millis(500));
+                        thread::sleep(sleep_duration);
                     }
                 }
             });
