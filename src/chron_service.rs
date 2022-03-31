@@ -17,30 +17,28 @@ use std::time::Duration;
 
 pub struct ScheduledCommand {
     schedule: Schedule,
-    last_tick: Option<DateTime<Utc>>,
+    last_tick: DateTime<Utc>,
 }
 
 impl ScheduledCommand {
+    // Crate a new scheduled command
+    pub fn new(schedule: Schedule) -> Self {
+        ScheduledCommand {
+            schedule,
+            last_tick: Utc::now(),
+        }
+    }
+
     // Return the date of the next time that this scheduled command will run
     pub fn next_run(&self) -> Option<DateTime<Utc>> {
-        let now = Utc::now();
-        self.schedule.after(&now).next()
+        self.schedule.after(&self.last_tick).next()
     }
 
     // Determine whether the command should be run
-    fn tick(&mut self) -> bool {
+    pub fn tick(&mut self) -> bool {
         let now = Utc::now();
-        let should_run = match self.last_tick {
-            None => false,
-            Some(last_tick) => {
-                if let Some(event) = self.schedule.after(&last_tick).next() {
-                    event <= now
-                } else {
-                    false
-                }
-            }
-        };
-        self.last_tick = Some(now);
+        let should_run = self.next_run().map_or(false, |next_run| next_run <= now);
+        self.last_tick = now;
         should_run
     }
 }
@@ -132,10 +130,7 @@ impl ChronService {
             command: command.to_string(),
             log_path: self.calculate_log_path(name),
             process: None,
-            command_type: CommandType::Scheduled(Box::new(ScheduledCommand {
-                schedule,
-                last_tick: None,
-            })),
+            command_type: CommandType::Scheduled(Box::new(ScheduledCommand::new(schedule))),
         };
         self.state
             .commands
