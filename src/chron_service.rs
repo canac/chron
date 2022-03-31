@@ -169,8 +169,10 @@ impl ChronService {
                         drop(command_guard);
                         if should_run {
                             Self::exec_command(&thread_state, &command).unwrap();
-                            thread::sleep(Duration::from_millis(500));
                         }
+
+                        // Wait a little bit before ticking again
+                        thread::sleep(Duration::from_millis(500));
                     }
                 }
             });
