@@ -1,3 +1,4 @@
+use crate::run::Run;
 use crate::schema::{message, run};
 use anyhow::{Context, Result};
 use diesel::prelude::*;
@@ -57,13 +58,24 @@ impl Database {
     }
 
     // Read the last runs of a command
-    pub fn get_last_runs(&self, name: &str, count: u64) -> Result<Vec<crate::run::Run>> {
+    pub fn get_last_runs(&self, name: &str, count: u64) -> Result<Vec<Run>> {
         run::table
             .filter(run::dsl::name.eq(name))
             .order(run::dsl::timestamp.desc())
             .limit(count as i64)
             .load(&self.connection)
             .context("Error loading last runs from the database")
+    }
+
+    // Read the last run time of a command
+    pub fn get_last_run_time(&self, name: &str) -> Result<Option<chrono::NaiveDateTime>> {
+        let last_runs = run::table
+            .filter(run::dsl::name.eq(name))
+            .order(run::dsl::timestamp.desc())
+            .limit(1)
+            .load::<Run>(&self.connection)
+            .context("Error loading last run time from the database")?;
+        Ok(last_runs.get(0).map(|run| run.timestamp))
     }
 
     // Read the messages in a particular mailbox

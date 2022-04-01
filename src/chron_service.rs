@@ -1,7 +1,7 @@
 use crate::database::Database;
 use crate::http_server;
 use anyhow::{bail, Context, Result};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use cron::Schedule;
 use lazy_static::lazy_static;
 use regex::Regex;
@@ -21,11 +21,11 @@ pub struct ScheduledCommand {
 }
 
 impl ScheduledCommand {
-    // Crate a new scheduled command
-    pub fn new(schedule: Schedule) -> Self {
+    // Create a new scheduled command
+    pub fn new(schedule: Schedule, last_run: Option<DateTime<Utc>>) -> Self {
         ScheduledCommand {
             schedule,
-            last_tick: Utc::now(),
+            last_tick: last_run.unwrap_or_else(Utc::now),
         }
     }
 
@@ -122,6 +122,12 @@ impl ChronService {
             bail!("A job with the name {name} already exists")
         }
 
+        let db = self.state.db.lock().unwrap();
+        let last_run_time = db
+            .get_last_run_time(name)?
+            .map(|last_run_time| Utc.from_utc_datetime(&last_run_time));
+        drop(db);
+
         let schedule = Schedule::from_str(schedule_expression).with_context(|| {
             format!("Failed to parse schedule expression {schedule_expression}")
         })?;
@@ -130,7 +136,10 @@ impl ChronService {
             command: command.to_string(),
             log_path: self.calculate_log_path(name),
             process: None,
-            command_type: CommandType::Scheduled(Box::new(ScheduledCommand::new(schedule))),
+            command_type: CommandType::Scheduled(Box::new(ScheduledCommand::new(
+                schedule,
+                last_run_time,
+            ))),
         };
         self.state
             .commands
