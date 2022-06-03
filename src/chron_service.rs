@@ -184,7 +184,8 @@ impl ChronService {
                                 next_run.signed_duration_since(Utc::now()).to_std().ok()
                             })
                             .unwrap_or_else(|| Duration::from_millis(500));
-                        thread::sleep(sleep_duration);
+                        // Sleep for a maximum of one minute to avoid oversleeping when the computer hibernates
+                        thread::sleep(std::cmp::min(sleep_duration, Duration::from_secs(60)));
                     }
                 }
             });
