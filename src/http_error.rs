@@ -5,7 +5,6 @@ use std::error::Error;
 #[derive(Debug)]
 pub enum HttpError {
     GenericError(StatusCode),
-    DatabaseError(anyhow::Error),
 }
 
 // HttpError essentially wraps a StatusCode
@@ -14,17 +13,12 @@ impl HttpError {
         HttpError::GenericError(status_code)
     }
 
-    pub fn from_database_error(error: anyhow::Error) -> HttpError {
-        HttpError::DatabaseError(error)
-    }
-
     fn reason(&self) -> String {
         match self {
             HttpError::GenericError(status_code) => status_code
                 .canonical_reason()
                 .unwrap_or("unknown")
                 .to_string(),
-            HttpError::DatabaseError(err) => format!("{}", err),
         }
     }
 }
@@ -35,7 +29,6 @@ impl fmt::Display for HttpError {
             HttpError::GenericError(status_code) => {
                 write!(f, "{}: {}", status_code.as_str(), self.reason())
             }
-            HttpError::DatabaseError(err) => write!(f, "{}", err),
         }
     }
 }
@@ -50,7 +43,6 @@ impl ResponseError for HttpError {
     fn status_code(&self) -> StatusCode {
         match self {
             HttpError::GenericError(status_code) => *status_code,
-            HttpError::DatabaseError(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 }

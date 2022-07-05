@@ -248,16 +248,8 @@ impl ChronService {
 
         // Run the command
         let clone_log_file = || log_file.try_clone().context("Failed to clone log file");
-        let mailbox_url = format!(
-            "http://127.0.0.1:{}/mailbox/{}",
-            thread_state.server_port, command.name
-        );
         let process = process::Command::new("sh")
             .args(["-c", &command.command])
-            .envs(std::collections::HashMap::from([(
-                "CHRON_MAILBOX_URL",
-                mailbox_url,
-            )]))
             .stdin(process::Stdio::null())
             .stdout(clone_log_file()?)
             .stderr(clone_log_file()?)
