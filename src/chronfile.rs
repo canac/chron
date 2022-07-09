@@ -13,9 +13,10 @@ fn default_keep_alive() -> bool {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StartupJob {
     command: String,
-    #[serde(rename = "keepAlive", default = "default_keep_alive")]
+    #[serde(default = "default_keep_alive")]
     keep_alive: bool,
 }
 
@@ -67,12 +68,19 @@ fn default_makeup_missed_runs() -> MakeupMissedRuns {
     MakeupMissedRuns::Count(0)
 }
 
+fn default_retry_failures() -> bool {
+    true
+}
+
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ScheduledJob {
     schedule: String,
     command: String,
-    #[serde(rename = "makeupMissedRuns", default = "default_makeup_missed_runs")]
+    #[serde(default = "default_makeup_missed_runs")]
     makeup_missed_runs: MakeupMissedRuns,
+    #[serde(default = "default_retry_failures")]
+    retry_failures: bool,
 }
 
 #[derive(Deserialize)]
@@ -118,6 +126,7 @@ impl Chronfile {
                     &job.command,
                     ScheduledJobOptions {
                         makeup_missed_runs: job.makeup_missed_runs,
+                        retry_failures: job.retry_failures,
                     },
                 )
             })

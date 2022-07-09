@@ -63,6 +63,7 @@ pub struct StartupJobOptions {
 
 pub struct ScheduledJobOptions {
     pub makeup_missed_runs: MakeupMissedRuns,
+    pub retry_failures: bool,
 }
 
 pub struct Job {
@@ -71,6 +72,12 @@ pub struct Job {
     pub log_path: PathBuf,
     pub process: Option<Child>,
     pub job_type: JobType,
+}
+
+enum ExecStatus {
+    Success,
+    Failure,
+    Aborted,
 }
 
 pub struct ChronService {
@@ -247,7 +254,20 @@ impl ChronService {
                     drop(job_guard);
 
                     if should_run {
-                        Self::exec_command(&me, &job, &terminate_controller).unwrap();
+                        // Run the command up to three times if it fails
+                        let max_attempts = 3;
+                        for attempt in 0..=max_attempts {
+                            if attempt != 0 {
+                                eprintln!(
+                                    "Retrying failed job {name} attempt {attempt}/{max_attempts}"
+                                );
+                            }
+                            let status =
+                                Self::exec_command(&me, &job, &terminate_controller).unwrap();
+                            if !(options.retry_failures && matches!(status, ExecStatus::Failure)) {
+                                break;
+                            }
+                        }
                     }
 
                     // Wait until the next run before ticking again
@@ -293,10 +313,10 @@ impl ChronService {
         chron_lock: &ChronServiceLock,
         job_lock: &JobLock,
         terminate_controller: &TerminateController,
-    ) -> Result<()> {
+    ) -> Result<ExecStatus> {
         // Don't run the job at all if it is supposed to be terminated
         if terminate_controller.is_terminated() {
-            return Ok(());
+            return Ok(ExecStatus::Aborted);
         }
 
         let start_time = chrono::Local::now();
@@ -406,6 +426,9 @@ impl ChronService {
                 .set_run_status_code(run_id, code)?;
         }
 
-        Ok(())
+        Ok(match status_code {
+            Some(code) if code != 0 => ExecStatus::Failure,
+            _ => ExecStatus::Success,
+        })
     }
 }
