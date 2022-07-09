@@ -11,8 +11,7 @@ type ThreadData = Arc<RwLock<ChronService>>;
 async fn status_overview(data: web::Data<ThreadData>) -> Result<impl Responder> {
     let data_guard = data.read().unwrap();
     let response = data_guard
-        .commands
-        .iter()
+        .get_commands_iter()
         .map(|(name, command_lock)| {
             let command = command_lock.read().unwrap();
             (
@@ -38,13 +37,14 @@ async fn status(name: web::Path<String>, data: web::Data<ThreadData>) -> Result<
     // Make sure that this command exists before proceeding
     let data_guard = data.read().unwrap();
     let command_lock = data_guard
-        .commands
-        .get(&name)
+        .get_command(&name)
         .ok_or_else(|| HttpError::from_status_code(StatusCode::NOT_FOUND))?;
 
     // Load the last few runs from the database
-    let db = data_guard.db.lock().unwrap();
+    let db = data_guard.get_db();
     let runs = db
+        .lock()
+        .unwrap()
         .get_last_runs(&name, 5)
         .unwrap()
         .into_iter()
@@ -73,8 +73,7 @@ async fn status(name: web::Path<String>, data: web::Data<ThreadData>) -> Result<
 async fn get_log(name: web::Path<String>, data: web::Data<ThreadData>) -> Result<impl Responder> {
     let data_guard = data.read().unwrap();
     let command_lock = data_guard
-        .commands
-        .get(&name.into_inner())
+        .get_command(&name)
         .ok_or_else(|| HttpError::from_status_code(StatusCode::NOT_FOUND))?;
     let log_path = command_lock.read().unwrap().log_path.clone();
     let log_contents = fs::read_to_string(log_path)?;
@@ -89,8 +88,7 @@ async fn delete_log(
     let name = name.into_inner();
     let data_guard = data.read().unwrap();
     let command_lock = data_guard
-        .commands
-        .get(&name)
+        .get_command(&name)
         .ok_or_else(|| HttpError::from_status_code(StatusCode::NOT_FOUND))?;
     let log_path = command_lock.read().unwrap().log_path.clone();
     drop(data_guard);
@@ -103,8 +101,7 @@ async fn terminate(name: web::Path<String>, data: web::Data<ThreadData>) -> Resu
     let name = name.into_inner();
     let data_guard = data.read().unwrap();
     let command_lock = data_guard
-        .commands
-        .get(&name)
+        .get_command(&name)
         .ok_or_else(|| HttpError::from_status_code(StatusCode::NOT_FOUND))?;
     let mut command = command_lock.write().unwrap();
     let message = match command.process.as_mut() {

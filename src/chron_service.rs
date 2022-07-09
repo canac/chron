@@ -57,11 +57,11 @@ pub struct Command {
 }
 
 pub struct ChronService {
-    pub log_dir: PathBuf,
-    pub db: Arc<Mutex<Database>>,
-    pub commands: HashMap<String, Arc<RwLock<Command>>>,
-    pub terminate_controller: Option<TerminateController>,
-    pub me: Weak<RwLock<ChronService>>,
+    log_dir: PathBuf,
+    db: Arc<Mutex<Database>>,
+    commands: HashMap<String, Arc<RwLock<Command>>>,
+    terminate_controller: Option<TerminateController>,
+    me: Weak<RwLock<ChronService>>,
 }
 
 impl ChronService {
@@ -77,6 +77,21 @@ impl ChronService {
                 me: me.clone(),
             })
         }))
+    }
+
+    // Return the service's database connection
+    pub fn get_db(&self) -> Arc<Mutex<Database>> {
+        self.db.clone()
+    }
+
+    // Lookup a command by name
+    pub fn get_command(&self, name: &String) -> Option<&Arc<RwLock<Command>>> {
+        self.commands.get(name)
+    }
+
+    // Return an iterator of the commands
+    pub fn get_commands_iter(&self) -> impl Iterator<Item = (&String, &Arc<RwLock<Command>>)> {
+        self.commands.iter()
     }
 
     // Return the Arc<RwLock> of this ChronService
