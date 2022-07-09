@@ -43,6 +43,10 @@ impl ScheduledCommand {
     }
 }
 
+pub type ChronServiceLock = Arc<RwLock<ChronService>>;
+pub type CommandLock = Arc<RwLock<Command>>;
+pub type DatabaseLock = Arc<Mutex<Database>>;
+
 pub enum CommandType {
     Startup,
     Scheduled(Box<ScheduledCommand>),
@@ -58,15 +62,15 @@ pub struct Command {
 
 pub struct ChronService {
     log_dir: PathBuf,
-    db: Arc<Mutex<Database>>,
-    commands: HashMap<String, Arc<RwLock<Command>>>,
+    db: DatabaseLock,
+    commands: HashMap<String, CommandLock>,
     terminate_controller: Option<TerminateController>,
     me: Weak<RwLock<ChronService>>,
 }
 
 impl ChronService {
     // Create a new ChronService instance
-    pub fn new(chron_dir: &Path) -> Result<Arc<RwLock<Self>>> {
+    pub fn new(chron_dir: &Path) -> Result<ChronServiceLock> {
         let db = Database::new(chron_dir)?;
         Ok(Arc::new_cyclic(|me| {
             RwLock::new(ChronService {
@@ -80,22 +84,22 @@ impl ChronService {
     }
 
     // Return the service's database connection
-    pub fn get_db(&self) -> Arc<Mutex<Database>> {
+    pub fn get_db(&self) -> DatabaseLock {
         self.db.clone()
     }
 
     // Lookup a command by name
-    pub fn get_command(&self, name: &String) -> Option<&Arc<RwLock<Command>>> {
+    pub fn get_command(&self, name: &String) -> Option<&CommandLock> {
         self.commands.get(name)
     }
 
     // Return an iterator of the commands
-    pub fn get_commands_iter(&self) -> impl Iterator<Item = (&String, &Arc<RwLock<Command>>)> {
+    pub fn get_commands_iter(&self) -> impl Iterator<Item = (&String, &CommandLock)> {
         self.commands.iter()
     }
 
     // Return the Arc<RwLock> of this ChronService
-    pub fn get_me(&self) -> Result<Arc<RwLock<Self>>> {
+    pub fn get_me(&self) -> Result<ChronServiceLock> {
         self.me
             .upgrade()
             .ok_or_else(|| anyhow!("Self has been destructed"))
@@ -252,8 +256,8 @@ impl ChronService {
 
     // Helper to execute the specified command
     fn exec_command(
-        chron_lock: &Arc<RwLock<ChronService>>,
-        command_lock: &Arc<RwLock<Command>>,
+        chron_lock: &ChronServiceLock,
+        command_lock: &CommandLock,
         terminate_controller: &TerminateController,
     ) -> Result<()> {
         // Don't run the command at all if it is supposed to be terminated

@@ -1,11 +1,10 @@
-use crate::chron_service::{ChronService, CommandType};
+use crate::chron_service::CommandType;
 use crate::http_error::HttpError;
 use actix_web::{delete, get, http::StatusCode, post, web, App, HttpServer, Responder, Result};
 use serde_json::json;
 use std::fs;
-use std::sync::{Arc, RwLock};
 
-type ThreadData = Arc<RwLock<ChronService>>;
+type ThreadData = crate::chron_service::ChronServiceLock;
 
 #[get("/status")]
 async fn status_overview(data: web::Data<ThreadData>) -> Result<impl Responder> {
