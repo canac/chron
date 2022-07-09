@@ -1,17 +1,75 @@
 use crate::chron_service::ChronService;
 use anyhow::{Context, Result};
-use serde::Deserialize;
-use std::{collections::HashMap, path::PathBuf};
+use serde::{
+    de::{self, Visitor},
+    Deserialize, Deserializer,
+};
+use std::{collections::HashMap, fmt, path::PathBuf};
 
 #[derive(Deserialize)]
 pub struct StartupJob {
     command: String,
 }
 
+pub enum MakeupMissedRuns {
+    All,
+    Count(u64),
+}
+
+struct AllOrCountVisitor;
+
+impl<'de> Visitor<'de> for AllOrCountVisitor {
+    type Value = MakeupMissedRuns;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("string literal \"all\" or a positive integer")
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        if value == "all" {
+            Ok(MakeupMissedRuns::All)
+        } else {
+            Err(E::custom(format!(
+                "string literal is not \"all\": {}",
+                value
+            )))
+        }
+    }
+
+    fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        if value >= 0 {
+            Ok(MakeupMissedRuns::Count(value as u64))
+        } else {
+            Err(E::custom(format!("i64 is not positive: {}", value)))
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for MakeupMissedRuns {
+    fn deserialize<D>(deserializer: D) -> Result<MakeupMissedRuns, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_str(AllOrCountVisitor)
+    }
+}
+
+fn default_makeup_missed_runs() -> MakeupMissedRuns {
+    MakeupMissedRuns::Count(0)
+}
+
 #[derive(Deserialize)]
 struct ScheduledJob {
     schedule: String,
     command: String,
+    #[serde(rename = "makeupMissedRuns", default = "default_makeup_missed_runs")]
+    makeup_missed_runs: MakeupMissedRuns,
 }
 
 #[derive(Deserialize)]
@@ -32,19 +90,21 @@ impl Chronfile {
     }
 
     // Register the chronfile's jobs with a ChronService instance and start it
-    pub fn run(&self, chron: &mut ChronService) -> Result<()> {
+    pub fn run(self, chron: &mut ChronService) -> Result<()> {
         chron.reset()?;
 
         self.startup_jobs
-            .iter()
-            .map(|(name, job)| chron.startup(name, &job.command))
+            .into_iter()
+            .map(|(name, job)| chron.startup(&name, &job.command))
             .collect::<Result<Vec<_>>>()?;
 
         self.scheduled_jobs
-            .iter()
-            .map(|(name, job)| chron.schedule(name, &job.schedule, &job.command))
+            .into_iter()
+            .map(|(name, job)| {
+                chron.schedule(&name, &job.schedule, &job.command, job.makeup_missed_runs)
+            })
             .collect::<Result<Vec<_>>>()?;
 
-        chron.start()
+        Ok(())
     }
 }

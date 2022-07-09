@@ -1,3 +1,4 @@
+use crate::chronfile::MakeupMissedRuns;
 use crate::database::Database;
 use crate::terminate_controller::TerminateController;
 use anyhow::{anyhow, bail, Context, Result};
@@ -64,7 +65,7 @@ pub struct ChronService {
     log_dir: PathBuf,
     db: DatabaseLock,
     jobs: HashMap<String, JobLock>,
-    terminate_controller: Option<TerminateController>,
+    terminate_controller: TerminateController,
     me: Weak<RwLock<ChronService>>,
 }
 
@@ -77,7 +78,7 @@ impl ChronService {
                 log_dir: chron_dir.join("logs"),
                 db: Arc::new(Mutex::new(db)),
                 jobs: HashMap::new(),
-                terminate_controller: None,
+                terminate_controller: TerminateController::new(),
                 me: me.clone(),
             })
         }))
@@ -115,15 +116,32 @@ impl ChronService {
             bail!("A job with the name {name} already exists")
         }
 
-        let job = Job {
+        let job = Arc::new(RwLock::new(Job {
             name: name.to_string(),
             command: command.to_string(),
             log_path: self.calculate_log_path(name),
             process: None,
             job_type: JobType::Startup,
-        };
-        self.jobs
-            .insert(name.to_string(), Arc::new(RwLock::new(job)));
+        }));
+        self.jobs.insert(name.to_string(), job.clone());
+
+        let me = self.get_me()?;
+        let terminate_controller = self.terminate_controller.clone();
+        thread::spawn(move || loop {
+            // Stop executing if a terminate was requested
+            if terminate_controller.is_terminated() {
+                break;
+            }
+
+            let mut job_guard = job.write().unwrap();
+            if matches!(&mut job_guard.job_type, JobType::Startup) {
+                drop(job_guard);
+                Self::exec_command(&me, &job, &terminate_controller).unwrap();
+
+                // Re-run the job after a few seconds
+                thread::sleep(Duration::from_secs(3));
+            }
+        });
 
         Ok(())
     }
@@ -134,6 +152,7 @@ impl ChronService {
         name: &str,
         schedule_expression: &str,
         command: &'cmd str,
+        makeup_missed_runs: MakeupMissedRuns,
     ) -> Result<()> {
         if !Self::validate_name(name) {
             bail!("Invalid job name {name}")
@@ -153,86 +172,87 @@ impl ChronService {
         let schedule = Schedule::from_str(schedule_expression).with_context(|| {
             format!("Failed to parse schedule expression {schedule_expression}")
         })?;
-        let job = Job {
+        let job = Arc::new(RwLock::new(Job {
             name: name.to_string(),
             command: command.to_string(),
             log_path: self.calculate_log_path(name),
             process: None,
-            job_type: JobType::Scheduled(Box::new(ScheduledJob::new(schedule, last_run_time))),
-        };
-        self.jobs
-            .insert(name.to_string(), Arc::new(RwLock::new(job)));
+            job_type: JobType::Scheduled(Box::new(ScheduledJob::new(
+                schedule.clone(),
+                last_run_time,
+            ))),
+        }));
+        self.jobs.insert(name.to_string(), job.clone());
 
-        Ok(())
-    }
+        let me = self.get_me()?;
+        let terminate_controller = self.terminate_controller.clone();
+        let name = name.to_string();
+        thread::spawn(move || {
+            if let Some(last_run) = last_run_time {
+                // Count the number of missed runs
+                let now = Utc::now();
+                let max_missed_runs = match makeup_missed_runs {
+                    MakeupMissedRuns::All => None,
+                    MakeupMissedRuns::Count(count) => Some(count),
+                };
+                let missed_runs = schedule
+                    .after(&last_run)
+                    .enumerate()
+                    .take_while(|(count, run)| {
+                        run <= &now && max_missed_runs.map_or(true, |max| (*count as u64) < max)
+                    })
+                    .count();
 
-    // Delete all previously registered jobs
-    pub fn reset(&mut self) -> Result<()> {
-        self.jobs.clear();
-        self.stop()
-    }
+                // Make up the missed runs
+                if missed_runs > 0 {
+                    eprintln!("Making up {} missed runs for {}", missed_runs, name);
+                    for _ in 0..missed_runs {
+                        // Stop executing if a terminate was requested
+                        if terminate_controller.is_terminated() {
+                            break;
+                        }
 
-    // Start the chron service, running all scripts on their specified interval
-    pub fn start(&mut self) -> Result<()> {
-        self.stop()?;
+                        Self::exec_command(&me, &job, &terminate_controller).unwrap();
+                    }
+                }
+            }
 
-        let terminate_controller = TerminateController::new();
-        self.terminate_controller = Some(terminate_controller.clone());
-
-        for job in self.jobs.values() {
-            let me = self.get_me()?;
-            let job = job.clone();
-            let terminate_controller = terminate_controller.clone();
-
-            // Spawn a new thread for each job
-            thread::spawn(move || loop {
-                // If we got a terminate message, break out of the loop
+            loop {
+                // Stop executing if a terminate was requested
                 if terminate_controller.is_terminated() {
                     break;
                 }
 
                 let mut job_guard = job.write().unwrap();
-                match &mut job_guard.job_type {
-                    JobType::Startup => {
-                        drop(job_guard);
+                if let JobType::Scheduled(scheduled_job) = &mut job_guard.job_type {
+                    let should_run = scheduled_job.tick();
+                    let next_run = scheduled_job.next_run();
+                    drop(job_guard);
+
+                    if should_run {
                         Self::exec_command(&me, &job, &terminate_controller).unwrap();
-
-                        // Re-run the job after a few seconds
-                        thread::sleep(Duration::from_secs(3));
                     }
-                    JobType::Scheduled(scheduled_job) => {
-                        let should_run = scheduled_job.tick();
-                        let next_run = scheduled_job.next_run();
 
-                        drop(job_guard);
-                        if should_run {
-                            Self::exec_command(&me, &job, &terminate_controller).unwrap();
-                        }
-
-                        // Wait until the next run before ticking again
-                        let sleep_duration = next_run
-                            .and_then(|next_run| {
-                                next_run.signed_duration_since(Utc::now()).to_std().ok()
-                            })
-                            .unwrap_or_else(|| Duration::from_millis(500));
-                        // Sleep for a maximum of one minute to avoid oversleeping when the computer hibernates
-                        thread::sleep(std::cmp::min(sleep_duration, Duration::from_secs(60)));
-                    }
+                    // Wait until the next run before ticking again
+                    let sleep_duration = next_run
+                        .and_then(|next_run| {
+                            next_run.signed_duration_since(Utc::now()).to_std().ok()
+                        })
+                        .unwrap_or_else(|| Duration::from_millis(500));
+                    // Sleep for a maximum of one minute to avoid oversleeping when the computer hibernates
+                    thread::sleep(std::cmp::min(sleep_duration, Duration::from_secs(60)));
                 }
-            });
-        }
+            }
+        });
 
         Ok(())
     }
 
-    // Stop the chron service and all running jobs
-    // If the chron service hasn't been started, then this method does nothing
-    pub fn stop(&mut self) -> Result<()> {
-        if let Some(terminate_controller) = &self.terminate_controller {
-            terminate_controller.terminate();
-            self.terminate_controller = None;
-        }
-
+    // Delete and stop all previously registered jobs
+    pub fn reset(&mut self) -> Result<()> {
+        self.jobs.clear();
+        self.terminate_controller.terminate();
+        self.terminate_controller = TerminateController::new();
         Ok(())
     }
 
