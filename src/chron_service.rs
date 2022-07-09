@@ -1,7 +1,8 @@
 use crate::database::Database;
+use crate::scheduled_job::ScheduledJob;
 use crate::terminate_controller::TerminateController;
 use anyhow::{anyhow, bail, Context, Result};
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{TimeZone, Utc};
 use cron::Schedule;
 use lazy_static::lazy_static;
 use regex::Regex;
@@ -14,34 +15,6 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::thread;
 use std::time::Duration;
-
-pub struct ScheduledJob {
-    schedule: Schedule,
-    last_tick: DateTime<Utc>,
-}
-
-impl ScheduledJob {
-    // Create a new scheduled job
-    pub fn new(schedule: Schedule, last_run: Option<DateTime<Utc>>) -> Self {
-        ScheduledJob {
-            schedule,
-            last_tick: last_run.unwrap_or_else(Utc::now),
-        }
-    }
-
-    // Return the date of the next time that this scheduled job will run
-    pub fn next_run(&self) -> Option<DateTime<Utc>> {
-        self.schedule.after(&self.last_tick).next()
-    }
-
-    // Determine whether the job should be run
-    pub fn tick(&mut self) -> bool {
-        let now = Utc::now();
-        let should_run = self.next_run().map_or(false, |next_run| next_run <= now);
-        self.last_tick = now;
-        should_run
-    }
-}
 
 pub type ChronServiceLock = Arc<RwLock<ChronService>>;
 pub type JobLock = Arc<RwLock<Job>>;

@@ -9,6 +9,7 @@ mod database;
 mod http_error;
 mod http_server;
 mod run;
+mod scheduled_job;
 mod schema;
 mod terminate_controller;
 
