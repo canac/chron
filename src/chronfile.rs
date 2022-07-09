@@ -4,12 +4,12 @@ use serde::Deserialize;
 use std::{collections::HashMap, path::PathBuf};
 
 #[derive(Deserialize)]
-pub struct StartupCommand {
+pub struct StartupJob {
     command: String,
 }
 
 #[derive(Deserialize)]
-struct ScheduledCommand {
+struct ScheduledJob {
     schedule: String,
     command: String,
 }
@@ -17,9 +17,9 @@ struct ScheduledCommand {
 #[derive(Deserialize)]
 pub struct Chronfile {
     #[serde(rename = "startup", default)]
-    startup_commands: HashMap<String, StartupCommand>,
+    startup_jobs: HashMap<String, StartupJob>,
     #[serde(rename = "schedule", default)]
-    scheduled_commands: HashMap<String, ScheduledCommand>,
+    scheduled_jobs: HashMap<String, ScheduledJob>,
 }
 
 impl Chronfile {
@@ -31,18 +31,18 @@ impl Chronfile {
             .with_context(|| format!("Error deserializing TOML chronfile {path:?}"))
     }
 
-    // Register the chronfile's commands with a ChronService instance and start it
+    // Register the chronfile's jobs with a ChronService instance and start it
     pub fn run(&self, chron: &mut ChronService) -> Result<()> {
         chron.reset()?;
 
-        self.startup_commands
+        self.startup_jobs
             .iter()
-            .map(|(name, command)| chron.startup(name, &command.command))
+            .map(|(name, job)| chron.startup(name, &job.command))
             .collect::<Result<Vec<_>>>()?;
 
-        self.scheduled_commands
+        self.scheduled_jobs
             .iter()
-            .map(|(name, command)| chron.schedule(name, &command.schedule, &command.command))
+            .map(|(name, job)| chron.schedule(name, &job.schedule, &job.command))
             .collect::<Result<Vec<_>>>()?;
 
         chron.start()

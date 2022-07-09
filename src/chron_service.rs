@@ -15,26 +15,26 @@ use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::thread;
 use std::time::Duration;
 
-pub struct ScheduledCommand {
+pub struct ScheduledJob {
     schedule: Schedule,
     last_tick: DateTime<Utc>,
 }
 
-impl ScheduledCommand {
-    // Create a new scheduled command
+impl ScheduledJob {
+    // Create a new scheduled job
     pub fn new(schedule: Schedule, last_run: Option<DateTime<Utc>>) -> Self {
-        ScheduledCommand {
+        ScheduledJob {
             schedule,
             last_tick: last_run.unwrap_or_else(Utc::now),
         }
     }
 
-    // Return the date of the next time that this scheduled command will run
+    // Return the date of the next time that this scheduled job will run
     pub fn next_run(&self) -> Option<DateTime<Utc>> {
         self.schedule.after(&self.last_tick).next()
     }
 
-    // Determine whether the command should be run
+    // Determine whether the job should be run
     pub fn tick(&mut self) -> bool {
         let now = Utc::now();
         let should_run = self.next_run().map_or(false, |next_run| next_run <= now);
@@ -44,26 +44,26 @@ impl ScheduledCommand {
 }
 
 pub type ChronServiceLock = Arc<RwLock<ChronService>>;
-pub type CommandLock = Arc<RwLock<Command>>;
+pub type JobLock = Arc<RwLock<Job>>;
 pub type DatabaseLock = Arc<Mutex<Database>>;
 
-pub enum CommandType {
+pub enum JobType {
     Startup,
-    Scheduled(Box<ScheduledCommand>),
+    Scheduled(Box<ScheduledJob>),
 }
 
-pub struct Command {
+pub struct Job {
     pub name: String,
     pub command: String,
     pub log_path: PathBuf,
     pub process: Option<Child>,
-    pub command_type: CommandType,
+    pub job_type: JobType,
 }
 
 pub struct ChronService {
     log_dir: PathBuf,
     db: DatabaseLock,
-    commands: HashMap<String, CommandLock>,
+    jobs: HashMap<String, JobLock>,
     terminate_controller: Option<TerminateController>,
     me: Weak<RwLock<ChronService>>,
 }
@@ -76,7 +76,7 @@ impl ChronService {
             RwLock::new(ChronService {
                 log_dir: chron_dir.join("logs"),
                 db: Arc::new(Mutex::new(db)),
-                commands: HashMap::new(),
+                jobs: HashMap::new(),
                 terminate_controller: None,
                 me: me.clone(),
             })
@@ -88,14 +88,14 @@ impl ChronService {
         self.db.clone()
     }
 
-    // Lookup a command by name
-    pub fn get_command(&self, name: &String) -> Option<&CommandLock> {
-        self.commands.get(name)
+    // Lookup a job by name
+    pub fn get_job(&self, name: &String) -> Option<&JobLock> {
+        self.jobs.get(name)
     }
 
-    // Return an iterator of the commands
-    pub fn get_commands_iter(&self) -> impl Iterator<Item = (&String, &CommandLock)> {
-        self.commands.iter()
+    // Return an iterator of the jobs
+    pub fn get_jobs_iter(&self) -> impl Iterator<Item = (&String, &JobLock)> {
+        self.jobs.iter()
     }
 
     // Return the Arc<RwLock> of this ChronService
@@ -105,30 +105,30 @@ impl ChronService {
             .ok_or_else(|| anyhow!("Self has been destructed"))
     }
 
-    // Add a new command to be run on startup
+    // Add a new job to be run on startup
     pub fn startup(&mut self, name: &str, command: &str) -> Result<()> {
         if !Self::validate_name(name) {
-            bail!("Invalid command name {name}")
+            bail!("Invalid job name {name}")
         }
 
-        if self.commands.contains_key(name) {
+        if self.jobs.contains_key(name) {
             bail!("A job with the name {name} already exists")
         }
 
-        let command = Command {
+        let job = Job {
             name: name.to_string(),
             command: command.to_string(),
             log_path: self.calculate_log_path(name),
             process: None,
-            command_type: CommandType::Startup,
+            job_type: JobType::Startup,
         };
-        self.commands
-            .insert(name.to_string(), Arc::new(RwLock::new(command)));
+        self.jobs
+            .insert(name.to_string(), Arc::new(RwLock::new(job)));
 
         Ok(())
     }
 
-    // Add a new command to be run on the given schedule
+    // Add a new job to be run on the given schedule
     pub fn schedule<'cmd>(
         &mut self,
         name: &str,
@@ -136,10 +136,10 @@ impl ChronService {
         command: &'cmd str,
     ) -> Result<()> {
         if !Self::validate_name(name) {
-            bail!("Invalid command name {name}")
+            bail!("Invalid job name {name}")
         }
 
-        if self.commands.contains_key(name) {
+        if self.jobs.contains_key(name) {
             bail!("A job with the name {name} already exists")
         }
 
@@ -153,25 +153,22 @@ impl ChronService {
         let schedule = Schedule::from_str(schedule_expression).with_context(|| {
             format!("Failed to parse schedule expression {schedule_expression}")
         })?;
-        let command = Command {
+        let job = Job {
             name: name.to_string(),
             command: command.to_string(),
             log_path: self.calculate_log_path(name),
             process: None,
-            command_type: CommandType::Scheduled(Box::new(ScheduledCommand::new(
-                schedule,
-                last_run_time,
-            ))),
+            job_type: JobType::Scheduled(Box::new(ScheduledJob::new(schedule, last_run_time))),
         };
-        self.commands
-            .insert(name.to_string(), Arc::new(RwLock::new(command)));
+        self.jobs
+            .insert(name.to_string(), Arc::new(RwLock::new(job)));
 
         Ok(())
     }
 
-    // Delete all previously registered commands
+    // Delete all previously registered jobs
     pub fn reset(&mut self) -> Result<()> {
-        self.commands.clear();
+        self.jobs.clear();
         self.stop()
     }
 
@@ -182,34 +179,34 @@ impl ChronService {
         let terminate_controller = TerminateController::new();
         self.terminate_controller = Some(terminate_controller.clone());
 
-        for command in self.commands.values() {
+        for job in self.jobs.values() {
             let me = self.get_me()?;
-            let command = command.clone();
+            let job = job.clone();
             let terminate_controller = terminate_controller.clone();
 
-            // Spawn a new thread for each command
+            // Spawn a new thread for each job
             thread::spawn(move || loop {
                 // If we got a terminate message, break out of the loop
                 if terminate_controller.is_terminated() {
                     break;
                 }
 
-                let mut command_guard = command.write().unwrap();
-                match &mut command_guard.command_type {
-                    CommandType::Startup => {
-                        drop(command_guard);
-                        Self::exec_command(&me, &command, &terminate_controller).unwrap();
+                let mut job_guard = job.write().unwrap();
+                match &mut job_guard.job_type {
+                    JobType::Startup => {
+                        drop(job_guard);
+                        Self::exec_command(&me, &job, &terminate_controller).unwrap();
 
-                        // Re-run the command after a few seconds
+                        // Re-run the job after a few seconds
                         thread::sleep(Duration::from_secs(3));
                     }
-                    CommandType::Scheduled(scheduled_command) => {
-                        let should_run = scheduled_command.tick();
-                        let next_run = scheduled_command.next_run();
+                    JobType::Scheduled(scheduled_job) => {
+                        let should_run = scheduled_job.tick();
+                        let next_run = scheduled_job.next_run();
 
-                        drop(command_guard);
+                        drop(job_guard);
                         if should_run {
-                            Self::exec_command(&me, &command, &terminate_controller).unwrap();
+                            Self::exec_command(&me, &job, &terminate_controller).unwrap();
                         }
 
                         // Wait until the next run before ticking again
@@ -228,7 +225,7 @@ impl ChronService {
         Ok(())
     }
 
-    // Stop the chron service and all running commands
+    // Stop the chron service and all running jobs
     // If the chron service hasn't been started, then this method does nothing
     pub fn stop(&mut self) -> Result<()> {
         if let Some(terminate_controller) = &self.terminate_controller {
@@ -239,7 +236,7 @@ impl ChronService {
         Ok(())
     }
 
-    // Helper to validate the command name
+    // Helper to validate the job name
     fn validate_name(name: &str) -> bool {
         lazy_static! {
             static ref RE: Regex = Regex::new(r"^[a-zA-Z0-9]+(-[a-zA-Z0-9]+)*$").unwrap();
@@ -257,10 +254,10 @@ impl ChronService {
     // Helper to execute the specified command
     fn exec_command(
         chron_lock: &ChronServiceLock,
-        command_lock: &CommandLock,
+        job_lock: &JobLock,
         terminate_controller: &TerminateController,
     ) -> Result<()> {
-        // Don't run the command at all if it is supposed to be terminated
+        // Don't run the job at all if it is supposed to be terminated
         if terminate_controller.is_terminated() {
             return Ok(());
         }
@@ -268,33 +265,31 @@ impl ChronService {
         let start_time = chrono::Local::now();
         let formatted_start_time = start_time.to_rfc3339();
 
-        let mut command = command_lock.write().unwrap();
+        let mut job = job_lock.write().unwrap();
         println!(
             "{formatted_start_time} Running {}: {}",
-            command.name, command.command
+            job.name, job.command
         );
 
         // Record the run in the database
         let run_id = {
             let state_guard = chron_lock.read().unwrap();
             let db = state_guard.db.lock().unwrap();
-            db.insert_run(&command.name)?
+            db.insert_run(&job.name)?
         };
 
         // Open the log file, creating the directory if necessary
-        let log_dir = command.log_path.parent().with_context(|| {
-            format!(
-                "Failed to get parent dir of log file {:?}",
-                command.log_path
-            )
-        })?;
+        let log_dir = job
+            .log_path
+            .parent()
+            .with_context(|| format!("Failed to get parent dir of log file {:?}", job.log_path))?;
         fs::create_dir_all(log_dir)
             .with_context(|| format!("Failed to create log dir {log_dir:?}"))?;
         let mut log_file = fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open(command.log_path.clone())
-            .with_context(|| format!("Failed to open log file {:?}", command.log_path))?;
+            .open(job.log_path.clone())
+            .with_context(|| format!("Failed to open log file {:?}", job.log_path))?;
 
         // Write the log file header for this execution
         lazy_static! {
@@ -305,23 +300,23 @@ impl ChronService {
         // Run the command
         let clone_log_file = || log_file.try_clone().context("Failed to clone log file");
         let process = process::Command::new("sh")
-            .args(["-c", &command.command])
+            .args(["-c", &job.command])
             .stdin(process::Stdio::null())
             .stdout(clone_log_file()?)
             .stderr(clone_log_file()?)
             .spawn()
-            .with_context(|| format!("Failed to run command {}", command.command))?;
+            .with_context(|| format!("Failed to run command {}", job.command))?;
 
-        command.process = Some(process);
-        drop(command);
+        job.process = Some(process);
+        drop(job);
 
         // Check the status every second until it exists without holding onto the child process lock
         let (status_code, status_code_str) = loop {
-            let mut command = command_lock.write().unwrap();
+            let mut job = job_lock.write().unwrap();
 
             // Attempt to terminate the process if we got a terminate signal from the terminate controller
             if terminate_controller.is_terminated() {
-                let result = command.process.as_mut().unwrap().kill();
+                let result = job.process.as_mut().unwrap().kill();
 
                 // If the result was an InvalidInput error, it is because the process already
                 // terminated, so ignore that type of error
@@ -331,7 +326,7 @@ impl ChronService {
                         // Propagate other errors
                         if !matches!(&err.kind(), std::io::ErrorKind::InvalidInput) {
                             result.with_context(|| {
-                                format!("Failed to terminate command {}", command.command)
+                                format!("Failed to terminate command {}", job.command)
                             })?;
                         }
                     }
@@ -339,14 +334,11 @@ impl ChronService {
             }
 
             // Try to read the process' exit status without blocking
-            let process = command.process.as_mut().unwrap();
+            let process = job.process.as_mut().unwrap();
             let maybe_status = process.try_wait().with_context(|| {
-                format!(
-                    "Failed to get command status for command {}",
-                    command.command
-                )
+                format!("Failed to get command status for command {}", job.command)
             })?;
-            drop(command);
+            drop(job);
             match maybe_status {
                 // Wait a second, then loop again
                 None => std::thread::sleep(Duration::from_millis(1000)),
@@ -359,9 +351,9 @@ impl ChronService {
             }
         };
 
-        let mut command = command_lock.write().unwrap();
-        command.process = None;
-        drop(command);
+        let mut job = job_lock.write().unwrap();
+        job.process = None;
+        drop(job);
 
         // Write the log file footer that contains the execution status
         log_file.write_all(format!("{}\nStatus: {status_code_str}\n\n", *DIVIDER).as_bytes())?;

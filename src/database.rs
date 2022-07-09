@@ -48,7 +48,7 @@ impl Database {
         Ok(())
     }
 
-    // Read the last runs of a command
+    // Read the last runs of a job
     pub fn get_last_runs(&self, name: &str, count: u64) -> Result<Vec<Run>> {
         run::table
             .filter(run::dsl::name.eq(name))
@@ -58,7 +58,7 @@ impl Database {
             .context("Error loading last runs from the database")
     }
 
-    // Read the last run time of a command
+    // Read the last run time of a job
     pub fn get_last_run_time(&self, name: &str) -> Result<Option<chrono::NaiveDateTime>> {
         let last_runs = run::table
             .filter(run::dsl::name.eq(name))
