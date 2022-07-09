@@ -1,4 +1,3 @@
-use crate::chronfile::MakeupMissedRuns;
 use crate::database::Database;
 use crate::terminate_controller::TerminateController;
 use anyhow::{anyhow, bail, Context, Result};
@@ -51,6 +50,19 @@ pub type DatabaseLock = Arc<Mutex<Database>>;
 pub enum JobType {
     Startup,
     Scheduled(Box<ScheduledJob>),
+}
+
+pub enum MakeupMissedRuns {
+    All,
+    Count(u64),
+}
+
+pub struct StartupJobOptions {
+    pub keep_alive: bool,
+}
+
+pub struct ScheduledJobOptions {
+    pub makeup_missed_runs: MakeupMissedRuns,
 }
 
 pub struct Job {
@@ -107,7 +119,7 @@ impl ChronService {
     }
 
     // Add a new job to be run on startup
-    pub fn startup(&mut self, name: &str, command: &str) -> Result<()> {
+    pub fn startup(&mut self, name: &str, command: &str, options: StartupJobOptions) -> Result<()> {
         if !Self::validate_name(name) {
             bail!("Invalid job name {name}")
         }
@@ -138,6 +150,11 @@ impl ChronService {
                 drop(job_guard);
                 Self::exec_command(&me, &job, &terminate_controller).unwrap();
 
+                if !options.keep_alive {
+                    // Stop executing this startup job
+                    break;
+                }
+
                 // Re-run the job after a few seconds
                 thread::sleep(Duration::from_secs(3));
             }
@@ -152,7 +169,7 @@ impl ChronService {
         name: &str,
         schedule_expression: &str,
         command: &'cmd str,
-        makeup_missed_runs: MakeupMissedRuns,
+        options: ScheduledJobOptions,
     ) -> Result<()> {
         if !Self::validate_name(name) {
             bail!("Invalid job name {name}")
@@ -191,7 +208,7 @@ impl ChronService {
             if let Some(last_run) = last_run_time {
                 // Count the number of missed runs
                 let now = Utc::now();
-                let max_missed_runs = match makeup_missed_runs {
+                let max_missed_runs = match options.makeup_missed_runs {
                     MakeupMissedRuns::All => None,
                     MakeupMissedRuns::Count(count) => Some(count),
                 };

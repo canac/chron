@@ -1,4 +1,6 @@
-use crate::chron_service::ChronService;
+use crate::chron_service::{
+    ChronService, MakeupMissedRuns, ScheduledJobOptions, StartupJobOptions,
+};
 use anyhow::{Context, Result};
 use serde::{
     de::{self, Visitor},
@@ -6,14 +8,15 @@ use serde::{
 };
 use std::{collections::HashMap, fmt, path::PathBuf};
 
+fn default_keep_alive() -> bool {
+    true
+}
+
 #[derive(Deserialize)]
 pub struct StartupJob {
     command: String,
-}
-
-pub enum MakeupMissedRuns {
-    All,
-    Count(u64),
+    #[serde(rename = "keepAlive", default = "default_keep_alive")]
+    keep_alive: bool,
 }
 
 struct AllOrCountVisitor;
@@ -95,13 +98,28 @@ impl Chronfile {
 
         self.startup_jobs
             .into_iter()
-            .map(|(name, job)| chron.startup(&name, &job.command))
+            .map(|(name, job)| {
+                chron.startup(
+                    &name,
+                    &job.command,
+                    StartupJobOptions {
+                        keep_alive: job.keep_alive,
+                    },
+                )
+            })
             .collect::<Result<Vec<_>>>()?;
 
         self.scheduled_jobs
             .into_iter()
             .map(|(name, job)| {
-                chron.schedule(&name, &job.schedule, &job.command, job.makeup_missed_runs)
+                chron.schedule(
+                    &name,
+                    &job.schedule,
+                    &job.command,
+                    ScheduledJobOptions {
+                        makeup_missed_runs: job.makeup_missed_runs,
+                    },
+                )
             })
             .collect::<Result<Vec<_>>>()?;
 
