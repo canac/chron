@@ -31,8 +31,10 @@ impl Chronfile {
             .with_context(|| format!("Error deserializing TOML chronfile {path:?}"))
     }
 
-    // Register the chronfile's commands with a ChronService instance
-    pub fn register_commands(&self, chron: &mut ChronService) -> Result<()> {
+    // Register the chronfile's commands with a ChronService instance and start it
+    pub fn run(&self, chron: &mut ChronService) -> Result<()> {
+        chron.reset()?;
+
         self.startup_commands
             .iter()
             .map(|(name, command)| chron.startup(name, &command.command))
@@ -43,6 +45,6 @@ impl Chronfile {
             .map(|(name, command)| chron.schedule(name, &command.schedule, &command.command))
             .collect::<Result<Vec<_>>>()?;
 
-        Ok(())
+        chron.start()
     }
 }
