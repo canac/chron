@@ -13,8 +13,8 @@ async fn status_overview(data: web::Data<ThreadData>) -> Result<impl Responder> 
     let response = data_guard
         .commands
         .iter()
-        .map(|(name, command_mutex)| {
-            let command = command_mutex.lock().unwrap();
+        .map(|(name, command_lock)| {
+            let command = command_lock.read().unwrap();
             (
                 name.clone(),
                 json!({
@@ -37,7 +37,7 @@ async fn status(name: web::Path<String>, data: web::Data<ThreadData>) -> Result<
 
     // Make sure that this command exists before proceeding
     let data_guard = data.read().unwrap();
-    let command_mutex = data_guard
+    let command_lock = data_guard
         .commands
         .get(&name)
         .ok_or_else(|| HttpError::from_status_code(StatusCode::NOT_FOUND))?;
@@ -57,7 +57,7 @@ async fn status(name: web::Path<String>, data: web::Data<ThreadData>) -> Result<
         .collect::<Vec<_>>();
     drop(db);
 
-    let command = command_mutex.lock().unwrap();
+    let command = command_lock.read().unwrap();
     Ok(web::Json(json!({
         "name": name,
         "runs": runs,
@@ -72,11 +72,11 @@ async fn status(name: web::Path<String>, data: web::Data<ThreadData>) -> Result<
 #[get("/log/{name}")]
 async fn get_log(name: web::Path<String>, data: web::Data<ThreadData>) -> Result<impl Responder> {
     let data_guard = data.read().unwrap();
-    let command_mutex = data_guard
+    let command_lock = data_guard
         .commands
         .get(&name.into_inner())
         .ok_or_else(|| HttpError::from_status_code(StatusCode::NOT_FOUND))?;
-    let log_path = command_mutex.lock().unwrap().log_path.clone();
+    let log_path = command_lock.read().unwrap().log_path.clone();
     let log_contents = fs::read_to_string(log_path)?;
     Ok(log_contents)
 }
@@ -88,11 +88,11 @@ async fn delete_log(
 ) -> Result<impl Responder> {
     let name = name.into_inner();
     let data_guard = data.read().unwrap();
-    let command_mutex = data_guard
+    let command_lock = data_guard
         .commands
         .get(&name)
         .ok_or_else(|| HttpError::from_status_code(StatusCode::NOT_FOUND))?;
-    let log_path = command_mutex.lock().unwrap().log_path.clone();
+    let log_path = command_lock.read().unwrap().log_path.clone();
     drop(data_guard);
     fs::write(log_path, "")?;
     Ok(format!("Erased log file for {}", name))
@@ -102,11 +102,11 @@ async fn delete_log(
 async fn terminate(name: web::Path<String>, data: web::Data<ThreadData>) -> Result<impl Responder> {
     let name = name.into_inner();
     let data_guard = data.read().unwrap();
-    let command_mutex = data_guard
+    let command_lock = data_guard
         .commands
         .get(&name)
         .ok_or_else(|| HttpError::from_status_code(StatusCode::NOT_FOUND))?;
-    let mut command = command_mutex.lock().unwrap();
+    let mut command = command_lock.write().unwrap();
     let message = match command.process.as_mut() {
         Some(process) => {
             process.kill()?;

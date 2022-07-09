@@ -59,7 +59,7 @@ pub struct Command {
 pub struct ChronService {
     pub log_dir: PathBuf,
     pub db: Arc<Mutex<Database>>,
-    pub commands: HashMap<String, Arc<Mutex<Command>>>,
+    pub commands: HashMap<String, Arc<RwLock<Command>>>,
     pub terminate_controller: Option<TerminateController>,
     pub me: Weak<RwLock<ChronService>>,
 }
@@ -104,7 +104,7 @@ impl ChronService {
             command_type: CommandType::Startup,
         };
         self.commands
-            .insert(name.to_string(), Arc::new(Mutex::new(command)));
+            .insert(name.to_string(), Arc::new(RwLock::new(command)));
 
         Ok(())
     }
@@ -145,7 +145,7 @@ impl ChronService {
             ))),
         };
         self.commands
-            .insert(name.to_string(), Arc::new(Mutex::new(command)));
+            .insert(name.to_string(), Arc::new(RwLock::new(command)));
 
         Ok(())
     }
@@ -175,7 +175,7 @@ impl ChronService {
                     break;
                 }
 
-                let mut command_guard = command.lock().unwrap();
+                let mut command_guard = command.write().unwrap();
                 match &mut command_guard.command_type {
                     CommandType::Startup => {
                         drop(command_guard);
@@ -238,7 +238,7 @@ impl ChronService {
     // Helper to execute the specified command
     fn exec_command(
         chron_lock: &Arc<RwLock<ChronService>>,
-        command_mutex: &Arc<Mutex<Command>>,
+        command_lock: &Arc<RwLock<Command>>,
         terminate_controller: &TerminateController,
     ) -> Result<()> {
         // Don't run the command at all if it is supposed to be terminated
@@ -249,7 +249,7 @@ impl ChronService {
         let start_time = chrono::Local::now();
         let formatted_start_time = start_time.to_rfc3339();
 
-        let mut command = command_mutex.lock().unwrap();
+        let mut command = command_lock.write().unwrap();
         println!(
             "{formatted_start_time} Running {}: {}",
             command.name, command.command
@@ -296,9 +296,9 @@ impl ChronService {
         command.process = Some(process);
         drop(command);
 
-        // Check the status every second until it exists without holding onto the child process mutex
+        // Check the status every second until it exists without holding onto the child process lock
         let (status_code, status_code_str) = loop {
-            let mut command = command_mutex.lock().unwrap();
+            let mut command = command_lock.write().unwrap();
 
             // Attempt to terminate the process if we got a terminate signal from the terminate controller
             if terminate_controller.is_terminated() {
@@ -340,7 +340,7 @@ impl ChronService {
             }
         };
 
-        let mut command = command_mutex.lock().unwrap();
+        let mut command = command_lock.write().unwrap();
         command.process = None;
         drop(command);
 
