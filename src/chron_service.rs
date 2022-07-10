@@ -327,9 +327,9 @@ impl ChronService {
         );
 
         // Record the run in the database
-        let run_id = {
+        let run = {
             let state_guard = chron_lock.read().unwrap();
-            let db = state_guard.db.lock().unwrap();
+            let mut db = state_guard.db.lock().unwrap();
             db.insert_run(&job.name)?
         };
 
@@ -421,7 +421,7 @@ impl ChronService {
                 .db
                 .lock()
                 .unwrap()
-                .set_run_status_code(run_id, code)?;
+                .set_run_status_code(run.id, code)?;
         }
 
         Ok(match status_code {
