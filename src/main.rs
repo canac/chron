@@ -42,7 +42,7 @@ async fn main() -> Result<()> {
     std::thread::spawn(move || -> Result<()> {
         // Watch for changes to the chronfile
         let (tx, rx) = std::sync::mpsc::channel();
-        let mut watcher: RecommendedWatcher = Watcher::new(tx, std::time::Duration::from_secs(5))
+        let mut watcher: RecommendedWatcher = Watcher::new(tx, std::time::Duration::from_secs(1))
             .context("Failed to create chronfile watcher")?;
         watcher
             .watch(chronfile_path.clone(), RecursiveMode::NonRecursive)
