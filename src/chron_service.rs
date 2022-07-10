@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{self, Child};
+use std::process::{self, Child, Command, Stdio};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::thread;
@@ -313,16 +313,14 @@ impl ChronService {
         let formatted_start_time = start_time.to_rfc3339();
 
         let mut job = job_lock.write().unwrap();
-        println!(
-            "{formatted_start_time} Running {}: {}",
-            job.name, job.command
-        );
+        let name = job.name.clone();
+        println!("{formatted_start_time} Running {}: {}", name, job.command);
 
         // Record the run in the database
         let run = {
             let state_guard = chron_lock.read().unwrap();
             let mut db = state_guard.db.lock().unwrap();
-            db.insert_run(&job.name)?
+            db.insert_run(&name)?
         };
 
         // Open the log file, creating the directory if necessary
@@ -405,8 +403,8 @@ impl ChronService {
         // Write the log file footer that contains the execution status
         log_file.write_all(format!("{}\nStatus: {status_code_str}\n\n", *DIVIDER).as_bytes())?;
 
-        // Update the run status code in the database
         if let Some(code) = status_code {
+            // Update the run status code in the database
             chron_lock
                 .read()
                 .unwrap()
@@ -414,6 +412,21 @@ impl ChronService {
                 .lock()
                 .unwrap()
                 .set_run_status_code(run.id, code)?;
+
+            if code != 0
+                && Command::new("mailbox")
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .args([
+                        "add",
+                        format!("chron/error/{name}").as_str(),
+                        format!("{name} failed with exit code {code}").as_str(),
+                    ])
+                    .spawn()
+                    .is_err()
+            {
+                eprintln!("Failed to write mailbox message");
+            }
         }
 
         Ok(match status_code {
