@@ -25,11 +25,6 @@ pub enum JobType {
     Scheduled(Box<ScheduledJob>),
 }
 
-pub enum MakeupMissedRuns {
-    All,
-    Count(u64),
-}
-
 pub struct RetryConfig {
     pub failures: bool,
     pub successes: bool,
@@ -57,7 +52,8 @@ pub struct StartupJobOptions {
 }
 
 pub struct ScheduledJobOptions {
-    pub makeup_missed_runs: MakeupMissedRuns,
+    // Maximum number of missed runs to make up
+    pub makeup_missed_runs: u64,
     pub retry: RetryConfig,
 }
 
@@ -211,15 +207,11 @@ impl ChronService {
             if let Some(last_run) = last_run_time {
                 // Count the number of missed runs
                 let now = Utc::now();
-                let max_missed_runs = match options.makeup_missed_runs {
-                    MakeupMissedRuns::All => None,
-                    MakeupMissedRuns::Count(count) => Some(count),
-                };
                 let missed_runs = schedule
                     .after(&last_run)
                     .enumerate()
                     .take_while(|(count, run)| {
-                        run <= &now && max_missed_runs.map_or(true, |max| (*count as u64) < max)
+                        run <= &now && (*count as u64) < options.makeup_missed_runs
                     })
                     .count();
 

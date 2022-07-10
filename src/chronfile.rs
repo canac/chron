@@ -1,12 +1,30 @@
-use crate::chron_service::{
-    ChronService, MakeupMissedRuns, RetryConfig, ScheduledJobOptions, StartupJobOptions,
-};
+use crate::chron_service::{ChronService, RetryConfig, ScheduledJobOptions, StartupJobOptions};
 use anyhow::{Context, Result};
-use serde::{
-    de::{self, Visitor},
-    Deserialize, Deserializer,
-};
-use std::{collections::HashMap, fmt, path::PathBuf, time::Duration};
+use serde::Deserialize;
+use std::{collections::HashMap, path::PathBuf, time::Duration};
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, untagged)]
+enum MakeupRunsVariant {
+    Simple(bool),
+    Complex { limit: u64 },
+}
+
+impl Default for MakeupRunsVariant {
+    fn default() -> Self {
+        MakeupRunsVariant::Simple(false)
+    }
+}
+
+impl From<MakeupRunsVariant> for u64 {
+    fn from(val: MakeupRunsVariant) -> Self {
+        match val {
+            MakeupRunsVariant::Simple(false) => 0,
+            MakeupRunsVariant::Simple(true) => u64::MAX,
+            MakeupRunsVariant::Complex { limit } => limit,
+        }
+    }
+}
 
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -67,61 +85,13 @@ struct StartupJob {
     keep_alive: RawRetryConfig,
 }
 
-struct AllOrCountVisitor;
-
-impl<'de> Visitor<'de> for AllOrCountVisitor {
-    type Value = MakeupMissedRuns;
-
-    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        formatter.write_str("string literal \"all\" or a positive integer")
-    }
-
-    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
-    where
-        E: de::Error,
-    {
-        if value == "all" {
-            Ok(MakeupMissedRuns::All)
-        } else {
-            Err(E::custom(format!(
-                "string literal is not \"all\": {}",
-                value
-            )))
-        }
-    }
-
-    fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
-    where
-        E: de::Error,
-    {
-        if value >= 0 {
-            Ok(MakeupMissedRuns::Count(value as u64))
-        } else {
-            Err(E::custom(format!("i64 is not positive: {}", value)))
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for MakeupMissedRuns {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deserializer.deserialize_str(AllOrCountVisitor)
-    }
-}
-
-fn default_makeup_missed_runs() -> MakeupMissedRuns {
-    MakeupMissedRuns::Count(0)
-}
-
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct ScheduledJob {
     schedule: String,
     command: String,
-    #[serde(default = "default_makeup_missed_runs")]
-    makeup_missed_runs: MakeupMissedRuns,
+    #[serde(default)]
+    makeup_missed_runs: MakeupRunsVariant,
     #[serde(default)]
     retry: RawRetryConfig,
 }
@@ -177,7 +147,7 @@ impl Chronfile {
                     &job.schedule,
                     &job.command,
                     ScheduledJobOptions {
-                        makeup_missed_runs: job.makeup_missed_runs,
+                        makeup_missed_runs: job.makeup_missed_runs.into(),
                         retry: RetryConfig {
                             failures: job.retry.failures.unwrap_or(true),
                             successes: job.retry.successes.unwrap_or(false),
