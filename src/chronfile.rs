@@ -1,23 +1,29 @@
 use crate::chron_service::{
-    ChronService, MakeupMissedRuns, ScheduledJobOptions, StartupJobOptions,
+    ChronService, MakeupMissedRuns, RetryConfig, ScheduledJobOptions, StartupJobOptions,
 };
 use anyhow::{Context, Result};
 use serde::{
     de::{self, Visitor},
     Deserialize, Deserializer,
 };
-use std::{collections::HashMap, fmt, path::PathBuf};
+use std::{collections::HashMap, fmt, path::PathBuf, time::Duration};
 
-fn default_keep_alive() -> bool {
-    true
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct RawRetryConfig {
+    failures: Option<bool>,
+    successes: Option<bool>,
+    limit: Option<u64>,
+    #[serde(default, with = "humantime_serde")]
+    delay: Option<Duration>,
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct StartupJob {
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct StartupJob {
     command: String,
-    #[serde(default = "default_keep_alive")]
-    keep_alive: bool,
+    #[serde(default)]
+    keep_alive: RawRetryConfig,
 }
 
 struct AllOrCountVisitor;
@@ -68,22 +74,19 @@ fn default_makeup_missed_runs() -> MakeupMissedRuns {
     MakeupMissedRuns::Count(0)
 }
 
-fn default_retry_failures() -> bool {
-    true
-}
-
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct ScheduledJob {
     schedule: String,
     command: String,
     #[serde(default = "default_makeup_missed_runs")]
     makeup_missed_runs: MakeupMissedRuns,
-    #[serde(default = "default_retry_failures")]
-    retry_failures: bool,
+    #[serde(default)]
+    retry: RawRetryConfig,
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Chronfile {
     #[serde(rename = "startup", default)]
     startup_jobs: HashMap<String, StartupJob>,
@@ -111,7 +114,15 @@ impl Chronfile {
                     &name,
                     &job.command,
                     StartupJobOptions {
-                        keep_alive: job.keep_alive,
+                        keep_alive: RetryConfig {
+                            failures: job.keep_alive.failures.unwrap_or(true),
+                            successes: job.keep_alive.successes.unwrap_or(true),
+                            limit: job.keep_alive.limit,
+                            delay: job
+                                .keep_alive
+                                .delay
+                                .unwrap_or_else(|| Duration::from_secs(0)),
+                        },
                     },
                 )
             })
@@ -126,7 +137,12 @@ impl Chronfile {
                     &job.command,
                     ScheduledJobOptions {
                         makeup_missed_runs: job.makeup_missed_runs,
-                        retry_failures: job.retry_failures,
+                        retry: RetryConfig {
+                            failures: job.retry.failures.unwrap_or(true),
+                            successes: job.retry.successes.unwrap_or(false),
+                            limit: job.retry.limit,
+                            delay: job.retry.delay.unwrap_or_else(|| Duration::from_secs(60)),
+                        },
                     },
                 )
             })

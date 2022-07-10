@@ -30,13 +30,35 @@ pub enum MakeupMissedRuns {
     Count(u64),
 }
 
+pub struct RetryConfig {
+    pub failures: bool,
+    pub successes: bool,
+    pub limit: Option<u64>,
+    pub delay: Duration,
+}
+
+impl RetryConfig {
+    // Determine the number of times that a job should be retried
+    fn get_retry_count(&self) -> u64 {
+        self.limit.unwrap_or(std::u64::MAX)
+    }
+
+    // Determine whether a command with a certain status should be retried
+    fn should_retry(&self, exec_status: ExecStatus) -> bool {
+        match exec_status {
+            ExecStatus::Aborted | ExecStatus::Failure => self.failures,
+            ExecStatus::Success => self.successes,
+        }
+    }
+}
+
 pub struct StartupJobOptions {
-    pub keep_alive: bool,
+    pub keep_alive: RetryConfig,
 }
 
 pub struct ScheduledJobOptions {
     pub makeup_missed_runs: MakeupMissedRuns,
-    pub retry_failures: bool,
+    pub retry: RetryConfig,
 }
 
 pub struct Job {
@@ -119,24 +141,25 @@ impl ChronService {
 
         let me = self.get_me()?;
         let terminate_controller = self.terminate_controller.clone();
-        thread::spawn(move || loop {
-            // Stop executing if a terminate was requested
-            if terminate_controller.is_terminated() {
-                break;
-            }
-
-            let mut job_guard = job.write().unwrap();
-            if matches!(&mut job_guard.job_type, JobType::Startup) {
-                drop(job_guard);
-                Self::exec_command(&me, &job, &terminate_controller).unwrap();
-
-                if !options.keep_alive {
-                    // Stop executing this startup job
+        thread::spawn(move || {
+            // Loop up to the configured number of retries
+            for _ in 0..options.keep_alive.get_retry_count() {
+                // Stop executing if a terminate was requested
+                if terminate_controller.is_terminated() {
                     break;
                 }
 
-                // Re-run the job after a few seconds
-                thread::sleep(Duration::from_secs(3));
+                let mut job_guard = job.write().unwrap();
+                if matches!(&mut job_guard.job_type, JobType::Startup) {
+                    drop(job_guard);
+                    let status = Self::exec_command(&me, &job, &terminate_controller).unwrap();
+                    if !&options.keep_alive.should_retry(status) {
+                        break;
+                    }
+
+                    // Re-run the job after the configured delay
+                    thread::sleep(options.keep_alive.delay);
+                }
             }
         });
 
@@ -227,17 +250,19 @@ impl ChronService {
                     drop(job_guard);
 
                     if should_run {
-                        // Run the command up to three times if it fails
-                        let max_attempts = 3;
-                        for attempt in 0..=max_attempts {
+                        // Run the command up to the configured number of times
+                        for attempt in 0..=RetryConfig::get_retry_count(&options.retry) {
+                            // Stop executing if a terminate was requested
+                            if terminate_controller.is_terminated() {
+                                break;
+                            }
+
                             if attempt != 0 {
-                                eprintln!(
-                                    "Retrying failed job {name} attempt {attempt}/{max_attempts}"
-                                );
+                                eprintln!("Retrying failed job {name} attempt {attempt}");
                             }
                             let status =
                                 Self::exec_command(&me, &job, &terminate_controller).unwrap();
-                            if !(options.retry_failures && matches!(status, ExecStatus::Failure)) {
+                            if !RetryConfig::should_retry(&options.retry, status) {
                                 break;
                             }
                         }
