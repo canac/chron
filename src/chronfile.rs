@@ -9,13 +9,54 @@ use serde::{
 use std::{collections::HashMap, fmt, path::PathBuf, time::Duration};
 
 #[derive(Default, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct RawRetryConfig {
+#[serde(deny_unknown_fields)]
+struct RawRetryConfigInternal {
     failures: Option<bool>,
     successes: Option<bool>,
     limit: Option<u64>,
     #[serde(default, with = "humantime_serde")]
     delay: Option<Duration>,
+}
+
+// Allow RawRetryConfig to be deserialized from a boolean or a full retry config
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, untagged)]
+enum RetryConfigVariant {
+    Simple(bool),
+    Complex(RawRetryConfigInternal),
+}
+
+impl Default for RetryConfigVariant {
+    fn default() -> Self {
+        RetryConfigVariant::Complex(Default::default())
+    }
+}
+
+#[derive(Default, Deserialize)]
+#[serde(from = "RetryConfigVariant")]
+struct RawRetryConfig {
+    failures: Option<bool>,
+    successes: Option<bool>,
+    limit: Option<u64>,
+    delay: Option<Duration>,
+}
+
+impl From<RetryConfigVariant> for RawRetryConfig {
+    fn from(value: RetryConfigVariant) -> Self {
+        match value {
+            RetryConfigVariant::Simple(value) => RawRetryConfig {
+                failures: Some(value),
+                successes: Some(value),
+                ..Default::default()
+            },
+            RetryConfigVariant::Complex(config) => RawRetryConfig {
+                failures: config.failures,
+                successes: config.successes,
+                limit: config.limit,
+                delay: config.delay,
+            },
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -62,7 +103,7 @@ impl<'de> Visitor<'de> for AllOrCountVisitor {
 }
 
 impl<'de> Deserialize<'de> for MakeupMissedRuns {
-    fn deserialize<D>(deserializer: D) -> Result<MakeupMissedRuns, D::Error>
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
