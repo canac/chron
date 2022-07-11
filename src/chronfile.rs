@@ -7,7 +7,7 @@ use std::{collections::HashMap, path::PathBuf, time::Duration};
 #[serde(deny_unknown_fields, untagged)]
 enum MakeUpRunsVariant {
     Simple(bool),
-    Complex { limit: u64 },
+    Complex(u64),
 }
 
 impl Default for MakeUpRunsVariant {
@@ -21,7 +21,7 @@ impl From<MakeUpRunsVariant> for u64 {
         match val {
             MakeUpRunsVariant::Simple(false) => 0,
             MakeUpRunsVariant::Simple(true) => u64::MAX,
-            MakeUpRunsVariant::Complex { limit } => limit,
+            MakeUpRunsVariant::Complex(limit) => limit,
         }
     }
 }
