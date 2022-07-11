@@ -5,23 +5,23 @@ use std::{collections::HashMap, path::PathBuf, time::Duration};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, untagged)]
-enum MakeupRunsVariant {
+enum MakeUpRunsVariant {
     Simple(bool),
     Complex { limit: u64 },
 }
 
-impl Default for MakeupRunsVariant {
+impl Default for MakeUpRunsVariant {
     fn default() -> Self {
-        MakeupRunsVariant::Simple(false)
+        MakeUpRunsVariant::Simple(false)
     }
 }
 
-impl From<MakeupRunsVariant> for u64 {
-    fn from(val: MakeupRunsVariant) -> Self {
+impl From<MakeUpRunsVariant> for u64 {
+    fn from(val: MakeUpRunsVariant) -> Self {
         match val {
-            MakeupRunsVariant::Simple(false) => 0,
-            MakeupRunsVariant::Simple(true) => u64::MAX,
-            MakeupRunsVariant::Complex { limit } => limit,
+            MakeUpRunsVariant::Simple(false) => 0,
+            MakeUpRunsVariant::Simple(true) => u64::MAX,
+            MakeUpRunsVariant::Complex { limit } => limit,
         }
     }
 }
@@ -91,7 +91,7 @@ struct ScheduledJob {
     schedule: String,
     command: String,
     #[serde(default)]
-    makeup_missed_runs: MakeupRunsVariant,
+    make_up_missed_runs: MakeUpRunsVariant,
     #[serde(default)]
     retry: RawRetryConfig,
 }
@@ -147,7 +147,7 @@ impl Chronfile {
                     &job.schedule,
                     &job.command,
                     ScheduledJobOptions {
-                        makeup_missed_runs: job.makeup_missed_runs.into(),
+                        make_up_missed_runs: job.make_up_missed_runs.into(),
                         retry: RetryConfig {
                             failures: job.retry.failures.unwrap_or(true),
                             successes: job.retry.successes.unwrap_or(false),

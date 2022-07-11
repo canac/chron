@@ -53,7 +53,7 @@ pub struct StartupJobOptions {
 
 pub struct ScheduledJobOptions {
     // Maximum number of missed runs to make up
-    pub makeup_missed_runs: u64,
+    pub make_up_missed_runs: u64,
     pub retry: RetryConfig,
 }
 
@@ -211,7 +211,7 @@ impl ChronService {
                     .after(&last_run)
                     .enumerate()
                     .take_while(|(count, run)| {
-                        run <= &now && (*count as u64) < options.makeup_missed_runs
+                        run <= &now && (*count as u64) < options.make_up_missed_runs
                     })
                     .count();
 
