@@ -63,6 +63,8 @@ jobs:
         run: >
           tar -cv
           LICENSE README.md
+          man/
+          -C contrib/ completions/ -C ../
           -C target/${{ matrix.target }}/release/ chron
           | gzip --best > '${{ env.ARTIFACT_NAME }}.tar.gz'
       - name: Package (Windows)
@@ -70,6 +72,8 @@ jobs:
         run: >
           7z a ${{ env.ARTIFACT_NAME }}.zip
           LICENSE README.md
+          ./man/
+          ./contrib/completions/
           ./target/${{ matrix.target }}/release/chron.exe
 
       - name: Upload artifact
