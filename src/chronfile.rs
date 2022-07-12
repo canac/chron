@@ -3,7 +3,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::{collections::HashMap, path::PathBuf, time::Duration};
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, untagged)]
 enum MakeUpRunsVariant {
     Simple(bool),
@@ -40,7 +40,7 @@ enum RetryConfigVariant {
     },
 }
 
-#[derive(Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Eq, PartialEq)]
 #[serde(from = "RetryConfigVariant")]
 struct RawRetryConfig {
     failures: Option<bool>,
@@ -72,7 +72,7 @@ impl From<RetryConfigVariant> for RawRetryConfig {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct StartupJob {
     command: String,
@@ -80,7 +80,7 @@ struct StartupJob {
     keep_alive: RawRetryConfig,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct ScheduledJob {
     schedule: String,
@@ -91,7 +91,7 @@ struct ScheduledJob {
     retry: RawRetryConfig,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Chronfile {
     #[serde(rename = "startup", default)]
@@ -155,5 +155,190 @@ impl Chronfile {
             .collect::<Result<Vec<_>>>()?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use assert_matches::assert_matches;
+
+    use super::*;
+
+    fn load_chronfile(toml: &str) -> Result<Chronfile> {
+        Ok(toml::from_str(toml)?)
+    }
+
+    #[test]
+    fn test_empty() {
+        assert!(load_chronfile("").is_ok())
+    }
+
+    #[test]
+    fn test_simple() -> Result<()> {
+        let chronfile = load_chronfile(
+            "[startup.startup]
+            command = 'echo'
+
+            [schedule.schedule]
+            schedule = '* * * * * *'
+            command = 'echo'",
+        )?;
+        assert_matches!(
+            chronfile,
+            Chronfile {
+                startup_jobs,
+                scheduled_jobs,
+            } => {
+                assert_eq!(startup_jobs.len(), 1);
+                assert_matches!(startup_jobs.get("startup"), Some(StartupJob { command, .. }) => {
+                    assert_eq!(command, &"echo");
+                });
+                assert_eq!(scheduled_jobs.len(), 1);
+                assert_matches!(scheduled_jobs.get("schedule"), Some(ScheduledJob { schedule, command, .. }) => {
+                    assert_eq!(schedule, &"* * * * * *");
+                    assert_eq!(command, &"echo");
+                });
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_keep_alive() -> Result<()> {
+        assert_eq!(
+            toml::from_str::<StartupJob>("command = 'echo'\nkeepAlive = false")?.keep_alive,
+            RawRetryConfig {
+                failures: Some(false),
+                successes: Some(false),
+                ..Default::default()
+            }
+        );
+
+        assert_eq!(
+            toml::from_str::<StartupJob>("command = 'echo'\nkeepAlive = true")?.keep_alive,
+            RawRetryConfig {
+                failures: Some(true),
+                successes: Some(true),
+                ..Default::default()
+            }
+        );
+
+        assert_eq!(
+            toml::from_str::<StartupJob>(
+                "command = 'echo'\nkeepAlive = { successes = true, limit = 3 }"
+            )?
+            .keep_alive,
+            RawRetryConfig {
+                failures: None,
+                successes: Some(true),
+                limit: Some(3),
+                delay: None,
+            }
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_makeup_missed_runs() -> Result<()> {
+        let make_up_missed_runs: u64 = toml::from_str::<ScheduledJob>(
+            "command = 'echo'\nschedule = '* * * * * *'\nmakeUpMissedRuns = false",
+        )?
+        .make_up_missed_runs
+        .into();
+        assert_eq!(make_up_missed_runs, 0);
+
+        let make_up_missed_runs: u64 = toml::from_str::<ScheduledJob>(
+            "command = 'echo'\nschedule = '* * * * * *'\nmakeUpMissedRuns = true",
+        )?
+        .make_up_missed_runs
+        .into();
+        assert_eq!(make_up_missed_runs, u64::MAX);
+
+        let make_up_missed_runs: u64 = toml::from_str::<ScheduledJob>(
+            "command = 'echo'\nschedule = '* * * * * *'\nmakeUpMissedRuns = 3",
+        )?
+        .make_up_missed_runs
+        .into();
+        assert_eq!(make_up_missed_runs, 3);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_retry() -> Result<()> {
+        assert_eq!(
+            toml::from_str::<ScheduledJob>(
+                "command = 'echo'\nschedule = '* * * * * *'\nretry = false"
+            )?
+            .retry,
+            RawRetryConfig {
+                failures: Some(false),
+                successes: Some(false),
+                ..Default::default()
+            }
+        );
+
+        assert_eq!(
+            toml::from_str::<ScheduledJob>(
+                "command = 'echo'\nschedule = '* * * * * *'\nretry = true"
+            )?
+            .retry,
+            RawRetryConfig {
+                failures: Some(true),
+                successes: Some(true),
+                ..Default::default()
+            }
+        );
+
+        assert_eq!(
+            toml::from_str::<ScheduledJob>(
+                "command = 'echo'\nschedule = '* * * * * *'\nretry = { failures = true, delay = '10m' }"
+            )?
+            .retry,
+            RawRetryConfig {
+                failures: Some(true),
+                successes: None,
+                limit: None,
+                delay: Some(Duration::from_secs(600)),
+            }
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_extra_fields() {
+        assert!(load_chronfile("foo = 'bar'").is_err());
+
+        assert!(load_chronfile(
+            "[startup.startup]
+            command = 'echo'
+            foo = 'bar'"
+        )
+        .is_err());
+
+        assert!(load_chronfile(
+            "[schedule.schedule]
+            schedule = '* * * * * *'
+            command = 'echo'
+            foo = 'bar'"
+        )
+        .is_err());
+
+        assert!(load_chronfile(
+            "[startup.startup]
+            command = 'echo'
+            keepAlive = { foo = 'bar' }"
+        )
+        .is_err());
+
+        assert!(load_chronfile(
+            "[schedule.schedule]
+            schedule = '* * * * * *'
+            command = 'echo'
+            retry = { foo = 'bar' }"
+        )
+        .is_err());
     }
 }
