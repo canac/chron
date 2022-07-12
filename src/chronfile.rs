@@ -26,28 +26,18 @@ impl From<MakeUpRunsVariant> for u64 {
     }
 }
 
-#[derive(Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawRetryConfigInternal {
-    failures: Option<bool>,
-    successes: Option<bool>,
-    limit: Option<u64>,
-    #[serde(default, with = "humantime_serde")]
-    delay: Option<Duration>,
-}
-
 // Allow RawRetryConfig to be deserialized from a boolean or a full retry config
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, untagged)]
 enum RetryConfigVariant {
     Simple(bool),
-    Complex(RawRetryConfigInternal),
-}
-
-impl Default for RetryConfigVariant {
-    fn default() -> Self {
-        RetryConfigVariant::Complex(Default::default())
-    }
+    Complex {
+        failures: Option<bool>,
+        successes: Option<bool>,
+        limit: Option<u64>,
+        #[serde(default, with = "humantime_serde")]
+        delay: Option<Duration>,
+    },
 }
 
 #[derive(Default, Deserialize)]
@@ -67,11 +57,16 @@ impl From<RetryConfigVariant> for RawRetryConfig {
                 successes: Some(value),
                 ..Default::default()
             },
-            RetryConfigVariant::Complex(config) => RawRetryConfig {
-                failures: config.failures,
-                successes: config.successes,
-                limit: config.limit,
-                delay: config.delay,
+            RetryConfigVariant::Complex {
+                failures,
+                successes,
+                limit,
+                delay,
+            } => RawRetryConfig {
+                failures,
+                successes,
+                limit,
+                delay,
             },
         }
     }
