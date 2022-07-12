@@ -5,6 +5,7 @@ extern crate diesel_migrations;
 
 mod chron_service;
 mod chronfile;
+mod cli;
 mod database;
 mod http_error;
 mod http_server;
@@ -15,33 +16,31 @@ mod terminate_controller;
 
 use crate::chron_service::ChronService;
 use crate::chronfile::Chronfile;
-use anyhow::{anyhow, Context, Result};
+use crate::cli::Cli;
+use anyhow::{Context, Result};
+use clap::Parser;
 use log::{debug, error, LevelFilter};
 use notify::{DebouncedEvent, RecommendedWatcher, RecursiveMode, Watcher};
 
 #[actix_web::main]
 async fn main() -> Result<()> {
+    let cli = Cli::parse();
+
     simple_logger::SimpleLogger::new()
         .with_module_level("actix_server", LevelFilter::Off)
         .with_module_level("mio", LevelFilter::Off)
-        .with_level(LevelFilter::Debug)
+        .with_level(if cli.quiet {
+            LevelFilter::Warn
+        } else {
+            LevelFilter::Debug
+        })
         .init()?;
+
+    let chronfile_path = cli.chronfile;
+    let chronfile = Chronfile::load(chronfile_path.clone())?;
 
     let project_dirs = directories::ProjectDirs::from("com", "canac", "chron")
         .context("Failed to determine application directories")?;
-
-    let port = std::env::var("PORT")
-        .context("Environment variable PORT is not set")?
-        .parse()
-        .context("Environment variable PORT is not an integer")?;
-
-    let args = std::env::args().collect::<Vec<_>>();
-    let chronfile_path = args
-        .get(1)
-        .ok_or_else(|| anyhow!("No chronfile argument was provided"))?;
-    let chronfile_path = std::path::PathBuf::from(chronfile_path);
-    let chronfile = Chronfile::load(chronfile_path.clone())?;
-
     let chron_lock = ChronService::new(project_dirs.data_local_dir())?;
     chronfile.run(&mut chron_lock.write().unwrap())?;
 
@@ -72,7 +71,7 @@ async fn main() -> Result<()> {
         }
     });
 
-    http_server::start_server(chron_lock, port).await?;
+    http_server::start_server(chron_lock, cli.port).await?;
 
     Ok(())
 }
