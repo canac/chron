@@ -5,6 +5,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use chrono::{TimeZone, Utc};
 use cron::Schedule;
 use lazy_static::lazy_static;
+use log::{debug, info, warn};
 use regex::Regex;
 use std::collections::HashMap;
 use std::fs;
@@ -217,13 +218,13 @@ impl ChronService {
 
                 // Make up the missed runs
                 if missed_runs > 0 {
-                    eprintln!("Making up {} missed runs for {}", missed_runs, name);
-                    for _ in 0..missed_runs {
+                    for run in 1..=missed_runs {
                         // Stop executing if a terminate was requested
                         if terminate_controller.is_terminated() {
                             break;
                         }
 
+                        debug!("{name}: making up missed run {run} of {missed_runs}");
                         Self::exec_command(&me, &job, &terminate_controller).unwrap();
                     }
                 }
@@ -250,7 +251,7 @@ impl ChronService {
                             }
 
                             if attempt != 0 {
-                                eprintln!("Retrying failed job {name} attempt {attempt}");
+                                debug!("{name}: retry attempt {attempt}");
                             }
                             let status =
                                 Self::exec_command(&me, &job, &terminate_controller).unwrap();
@@ -314,7 +315,7 @@ impl ChronService {
 
         let mut job = job_lock.write().unwrap();
         let name = job.name.clone();
-        println!("{formatted_start_time} Running {}: {}", name, job.command);
+        info!("{name}: running \"{}\"", job.command);
 
         // Record the run in the database
         let run = {
@@ -413,8 +414,10 @@ impl ChronService {
                 .unwrap()
                 .set_run_status_code(run.id, code)?;
 
-            if code != 0
-                && Command::new("mailbox")
+            if code != 0 {
+                warn!("{name}: failed with exit code {code}");
+
+                if Command::new("mailbox")
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())
                     .args([
@@ -424,8 +427,9 @@ impl ChronService {
                     ])
                     .spawn()
                     .is_err()
-            {
-                eprintln!("Failed to write mailbox message");
+                {
+                    warn!("Failed to write mailbox message");
+                }
             }
         }
 

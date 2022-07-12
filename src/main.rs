@@ -16,10 +16,17 @@ mod terminate_controller;
 use crate::chron_service::ChronService;
 use crate::chronfile::Chronfile;
 use anyhow::{anyhow, Context, Result};
+use log::{debug, error, LevelFilter};
 use notify::{DebouncedEvent, RecommendedWatcher, RecursiveMode, Watcher};
 
 #[actix_web::main]
 async fn main() -> Result<()> {
+    simple_logger::SimpleLogger::new()
+        .with_module_level("actix_server", LevelFilter::Off)
+        .with_module_level("mio", LevelFilter::Off)
+        .with_level(LevelFilter::Debug)
+        .init()?;
+
     let project_dirs = directories::ProjectDirs::from("com", "canac", "chron")
         .context("Failed to determine application directories")?;
 
@@ -51,9 +58,16 @@ async fn main() -> Result<()> {
             let event = rx.recv().context("Failed to read watcher receiver")?;
             if let DebouncedEvent::Write(_) = event {
                 // Reload the chronfile
-                eprintln!("Reloading chronfile {chronfile_path:?} ...");
-                let chronfile = Chronfile::load(chronfile_path.clone())?;
-                chronfile.run(&mut *chron.write().unwrap())?;
+                match Chronfile::load(chronfile_path.clone()) {
+                    Ok(chronfile) => {
+                        debug!("Reloaded chronfile {}", chronfile_path.to_string_lossy());
+                        chronfile.run(&mut *chron.write().unwrap())?;
+                    }
+                    Err(err) => error!(
+                        "Error reloading chronfile {}\n{err:?}",
+                        chronfile_path.to_string_lossy()
+                    ),
+                };
             }
         }
     });
