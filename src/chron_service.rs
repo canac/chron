@@ -2,7 +2,7 @@ use crate::database::Database;
 use crate::scheduled_job::ScheduledJob;
 use crate::terminate_controller::TerminateController;
 use anyhow::{anyhow, bail, Context, Result};
-use chrono::{TimeZone, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use cron::Schedule;
 use lazy_static::lazy_static;
 use log::{debug, info, warn};
@@ -155,7 +155,7 @@ impl ChronService {
                     }
 
                     // Re-run the job after the configured delay
-                    thread::sleep(options.keep_alive.delay);
+                    Self::sleep_duration(options.keep_alive.delay).unwrap();
                 }
             }
         });
@@ -262,13 +262,10 @@ impl ChronService {
                     }
 
                     // Wait until the next run before ticking again
-                    let sleep_duration = next_run
-                        .and_then(|next_run| {
-                            next_run.signed_duration_since(Utc::now()).to_std().ok()
-                        })
-                        .unwrap_or_else(|| Duration::from_millis(500));
-                    // Sleep for a maximum of one minute to avoid oversleeping when the computer hibernates
-                    thread::sleep(std::cmp::min(sleep_duration, Duration::from_secs(60)));
+                    match next_run {
+                        Some(next_run) => Self::sleep_until(next_run).unwrap(),
+                        None => break,
+                    };
                 }
             }
         });
@@ -437,5 +434,30 @@ impl ChronService {
             Some(code) if code != 0 => ExecStatus::Failure,
             _ => ExecStatus::Success,
         })
+    }
+
+    // Sleep for the specified duration, preventing oversleeping during hibernation
+    fn sleep_duration(duration: Duration) -> Result<()> {
+        Self::sleep_until(Utc::now() + chrono::Duration::from_std(duration)?)
+    }
+
+    // Sleep until the specified timestamp, preventing oversleeping during hibernation
+    fn sleep_until(timestamp: DateTime<Utc>) -> Result<()> {
+        let max_sleep = Duration::from_secs(60);
+        loop {
+            let now = Utc::now();
+            if now >= timestamp {
+                // We hit the timestamp, so stop sleeping
+                break;
+            }
+
+            // Sleep for a maximum of one minute to prevent oversleeping when
+            // the computer hibernates
+            std::thread::sleep(std::cmp::min(
+                timestamp.signed_duration_since(now).to_std()?,
+                max_sleep,
+            ));
+        }
+        Ok(())
     }
 }
