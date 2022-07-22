@@ -353,7 +353,8 @@ impl ChronService {
         job.process = Some(process);
         drop(job);
 
-        // Check the status every second until it exists without holding onto the child process lock
+        // Check the status periodically until it exits without holding onto the child process lock
+        let mut poll_interval = Duration::from_millis(1);
         let (status_code, status_code_str) = loop {
             let mut job = job_lock.write().unwrap();
 
@@ -383,8 +384,12 @@ impl ChronService {
             })?;
             drop(job);
             match maybe_status {
-                // Wait a second, then loop again
-                None => std::thread::sleep(Duration::from_millis(1000)),
+                // Wait briefly then loop again
+                None => {
+                    // Wait even longer the next time with a maximum poll delay
+                    poll_interval = std::cmp::min(poll_interval * 2, Duration::from_secs(5));
+                    std::thread::sleep(poll_interval);
+                }
                 Some(status) => {
                     break match status.code() {
                         Some(code) => (Some(code), code.to_string()),
