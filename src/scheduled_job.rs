@@ -22,12 +22,15 @@ impl ScheduledJob {
         self.schedule.after(&self.last_tick).next()
     }
 
-    // Determine whether the job should be run
-    pub fn tick(&mut self) -> bool {
+    // Tick and return an iterator of the elapsed runs since the last tick
+    pub fn tick(&mut self) -> impl Iterator<Item = DateTime<Utc>> + '_ {
         let now = Utc::now();
-        let should_run = self.next_run().map_or(false, |next_run| next_run <= now);
+        let elapsed_runs = self
+            .schedule
+            .after(&self.last_tick)
+            .take_while(move |run| run <= &now);
         self.last_tick = now;
-        should_run
+        elapsed_runs
     }
 
     // Calculate the estimated duration between the last run and the next run

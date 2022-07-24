@@ -177,10 +177,7 @@ impl ChronService {
             command: command.to_string(),
             log_path: self.calculate_log_path(name),
             process: None,
-            job_type: JobType::Scheduled(Box::new(ScheduledJob::new(
-                schedule.clone(),
-                last_run_time,
-            ))),
+            job_type: JobType::Scheduled(Box::new(ScheduledJob::new(schedule, last_run_time))),
         }));
         self.jobs.insert(name.to_string(), job.clone());
 
@@ -188,35 +185,6 @@ impl ChronService {
         let terminate_controller = self.terminate_controller.clone();
         let name = name.to_string();
         thread::spawn(move || {
-            if let Some(last_run) = last_run_time {
-                // Count the number of missed runs
-                let now = Utc::now();
-                let missed_runs = schedule
-                    .after(&last_run)
-                    .enumerate()
-                    .take_while(|(count, run)| run <= &now && count < &options.make_up_missed_runs)
-                    .count();
-
-                // Make up the missed runs
-                if missed_runs > 0 {
-                    for run in 1..=missed_runs {
-                        // Stop executing if a terminate was requested
-                        if terminate_controller.is_terminated() {
-                            break;
-                        }
-
-                        debug!("{name}: making up missed run {run} of {missed_runs}");
-                        Self::exec_command_with_retry(
-                            &me,
-                            &job,
-                            &terminate_controller,
-                            &options.retry,
-                        )
-                        .unwrap();
-                    }
-                }
-            }
-
             loop {
                 // Stop executing if a terminate was requested
                 if terminate_controller.is_terminated() {
@@ -225,7 +193,14 @@ impl ChronService {
 
                 let mut job_guard = job.write().unwrap();
                 if let JobType::Scheduled(scheduled_job) = &mut job_guard.job_type {
-                    let should_run = scheduled_job.tick();
+                    // Lazily count how many times the job should be run so
+                    // that if there are a million missed runs, but
+                    // make_up_missed_runs is 3, only three items from the tick
+                    // iterator are consumed
+                    let runs = scheduled_job
+                        .tick()
+                        .take(options.make_up_missed_runs + 1)
+                        .count();
                     let next_run = scheduled_job.next_run();
                     // Retry delay defaults to one sixth of the job's period
                     let retry_delay = options
@@ -234,7 +209,17 @@ impl ChronService {
                         .unwrap_or_else(|| scheduled_job.get_current_period().unwrap() / 6);
                     drop(job_guard);
 
-                    if should_run {
+                    for run in 0..runs {
+                        // Stop executing if a terminate was requested
+                        if terminate_controller.is_terminated() {
+                            break;
+                        }
+
+                        // The last run is a regular run, not a makeup run, so
+                        // don't print a message for it
+                        if run != runs - 1 {
+                            debug!("{name}: making up missed run {} of {}", run + 1, runs - 1);
+                        }
                         Self::exec_command_with_retry(
                             &me,
                             &job,
