@@ -443,7 +443,14 @@ impl ChronService {
             }
 
             if attempt > 0 {
-                debug!("{name}: retry attempt {attempt} of {retry_count}");
+                debug!(
+                    "{name}: retry attempt {attempt} of {}",
+                    if retry_config.limit.is_some() {
+                        retry_count.to_string()
+                    } else {
+                        "unlimited".to_string()
+                    }
+                );
             }
 
             let status = Self::exec_command(chron_lock, job_lock, terminate_controller)?;
