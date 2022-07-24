@@ -29,14 +29,14 @@ pub enum JobType {
 pub struct RetryConfig {
     pub failures: bool,
     pub successes: bool,
-    pub limit: Option<u64>,
+    pub limit: Option<usize>,
     pub delay: Option<Duration>,
 }
 
 impl RetryConfig {
     // Determine the number of times that a job should be retried
-    fn get_retry_count(&self) -> u64 {
-        self.limit.unwrap_or(std::u64::MAX)
+    fn get_retry_count(&self) -> usize {
+        self.limit.unwrap_or(std::usize::MAX)
     }
 
     // Determine whether a command with a certain status should be retried
@@ -54,7 +54,7 @@ pub struct StartupJobOptions {
 
 pub struct ScheduledJobOptions {
     // Maximum number of missed runs to make up
-    pub make_up_missed_runs: u64,
+    pub make_up_missed_runs: usize,
     pub retry: RetryConfig,
 }
 
@@ -194,9 +194,7 @@ impl ChronService {
                 let missed_runs = schedule
                     .after(&last_run)
                     .enumerate()
-                    .take_while(|(count, run)| {
-                        run <= &now && (*count as u64) < options.make_up_missed_runs
-                    })
+                    .take_while(|(count, run)| run <= &now && count < &options.make_up_missed_runs)
                     .count();
 
                 // Make up the missed runs

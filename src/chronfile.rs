@@ -7,7 +7,7 @@ use std::{collections::HashMap, path::PathBuf, time::Duration};
 #[serde(deny_unknown_fields, untagged)]
 enum MakeUpRunsVariant {
     Simple(bool),
-    Complex(u64),
+    Complex(usize),
 }
 
 impl Default for MakeUpRunsVariant {
@@ -16,11 +16,11 @@ impl Default for MakeUpRunsVariant {
     }
 }
 
-impl From<MakeUpRunsVariant> for u64 {
+impl From<MakeUpRunsVariant> for usize {
     fn from(val: MakeUpRunsVariant) -> Self {
         match val {
             MakeUpRunsVariant::Simple(false) => 0,
-            MakeUpRunsVariant::Simple(true) => u64::MAX,
+            MakeUpRunsVariant::Simple(true) => usize::MAX,
             MakeUpRunsVariant::Complex(limit) => limit,
         }
     }
@@ -34,7 +34,7 @@ enum RetryConfigVariant {
     Complex {
         failures: Option<bool>,
         successes: Option<bool>,
-        limit: Option<u64>,
+        limit: Option<usize>,
         #[serde(default, with = "humantime_serde")]
         delay: Option<Duration>,
     },
@@ -45,7 +45,7 @@ enum RetryConfigVariant {
 struct RawRetryConfig {
     failures: Option<bool>,
     successes: Option<bool>,
-    limit: Option<u64>,
+    limit: Option<usize>,
     delay: Option<Duration>,
 }
 
@@ -273,21 +273,21 @@ mod tests {
 
     #[test]
     fn test_makeup_missed_runs() -> Result<()> {
-        let make_up_missed_runs: u64 = toml::from_str::<ScheduledJob>(
+        let make_up_missed_runs: usize = toml::from_str::<ScheduledJob>(
             "command = 'echo'\nschedule = '* * * * * *'\nmakeUpMissedRuns = false",
         )?
         .make_up_missed_runs
         .into();
         assert_eq!(make_up_missed_runs, 0);
 
-        let make_up_missed_runs: u64 = toml::from_str::<ScheduledJob>(
+        let make_up_missed_runs: usize = toml::from_str::<ScheduledJob>(
             "command = 'echo'\nschedule = '* * * * * *'\nmakeUpMissedRuns = true",
         )?
         .make_up_missed_runs
         .into();
-        assert_eq!(make_up_missed_runs, u64::MAX);
+        assert_eq!(make_up_missed_runs, usize::MAX);
 
-        let make_up_missed_runs: u64 = toml::from_str::<ScheduledJob>(
+        let make_up_missed_runs: usize = toml::from_str::<ScheduledJob>(
             "command = 'echo'\nschedule = '* * * * * *'\nmakeUpMissedRuns = 3",
         )?
         .make_up_missed_runs
