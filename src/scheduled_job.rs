@@ -1,5 +1,7 @@
+use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use cron::Schedule;
+use std::time::Duration;
 
 pub struct ScheduledJob {
     schedule: Schedule,
@@ -26,5 +28,35 @@ impl ScheduledJob {
         let should_run = self.next_run().map_or(false, |next_run| next_run <= now);
         self.last_tick = now;
         should_run
+    }
+
+    // Calculate the estimated duration between the last run and the next run
+    pub fn get_current_period(&self) -> Result<Duration> {
+        let mut upcoming = self.schedule.after(&Utc::now());
+        let last = upcoming
+            .next_back()
+            .ok_or_else(|| anyhow!("Failed to get previous run"))?;
+        let next = upcoming
+            .next()
+            .ok_or_else(|| anyhow!("Failed to get next run"))?;
+        next.signed_duration_since(last)
+            .to_std()
+            .context("Failed to convert duration")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::Result;
+    use cron::Schedule;
+    use std::str::FromStr;
+
+    use super::*;
+
+    #[test]
+    fn test_period() -> Result<()> {
+        let job = ScheduledJob::new(Schedule::from_str("*/5 * * * * *")?, None);
+        assert_eq!(job.get_current_period()?, Duration::from_secs(5));
+        Ok(())
     }
 }

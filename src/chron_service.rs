@@ -30,7 +30,7 @@ pub struct RetryConfig {
     pub failures: bool,
     pub successes: bool,
     pub limit: Option<u64>,
-    pub delay: Duration,
+    pub delay: Option<Duration>,
 }
 
 impl RetryConfig {
@@ -139,25 +139,8 @@ impl ChronService {
         let me = self.get_me()?;
         let terminate_controller = self.terminate_controller.clone();
         thread::spawn(move || {
-            // Loop up to the configured number of retries
-            for _ in 0..options.keep_alive.get_retry_count() {
-                // Stop executing if a terminate was requested
-                if terminate_controller.is_terminated() {
-                    break;
-                }
-
-                let mut job_guard = job.write().unwrap();
-                if matches!(&mut job_guard.job_type, JobType::Startup) {
-                    drop(job_guard);
-                    let status = Self::exec_command(&me, &job, &terminate_controller).unwrap();
-                    if !&options.keep_alive.should_retry(status) {
-                        break;
-                    }
-
-                    // Re-run the job after the configured delay
-                    Self::sleep_duration(options.keep_alive.delay).unwrap();
-                }
-            }
+            Self::exec_command_with_retry(&me, &job, &terminate_controller, &options.keep_alive)
+                .unwrap();
         });
 
         Ok(())
@@ -225,7 +208,13 @@ impl ChronService {
                         }
 
                         debug!("{name}: making up missed run {run} of {missed_runs}");
-                        Self::exec_command(&me, &job, &terminate_controller).unwrap();
+                        Self::exec_command_with_retry(
+                            &me,
+                            &job,
+                            &terminate_controller,
+                            &options.retry,
+                        )
+                        .unwrap();
                     }
                 }
             }
@@ -240,25 +229,24 @@ impl ChronService {
                 if let JobType::Scheduled(scheduled_job) = &mut job_guard.job_type {
                     let should_run = scheduled_job.tick();
                     let next_run = scheduled_job.next_run();
+                    // Retry delay defaults to one sixth of the job's period
+                    let retry_delay = options
+                        .retry
+                        .delay
+                        .unwrap_or_else(|| scheduled_job.get_current_period().unwrap() / 6);
                     drop(job_guard);
 
                     if should_run {
-                        // Run the command up to the configured number of times
-                        for attempt in 0..=RetryConfig::get_retry_count(&options.retry) {
-                            // Stop executing if a terminate was requested
-                            if terminate_controller.is_terminated() {
-                                break;
-                            }
-
-                            if attempt != 0 {
-                                debug!("{name}: retry attempt {attempt}");
-                            }
-                            let status =
-                                Self::exec_command(&me, &job, &terminate_controller).unwrap();
-                            if !RetryConfig::should_retry(&options.retry, status) {
-                                break;
-                            }
-                        }
+                        Self::exec_command_with_retry(
+                            &me,
+                            &job,
+                            &terminate_controller,
+                            &RetryConfig {
+                                delay: Some(retry_delay),
+                                ..options.retry
+                            },
+                        )
+                        .unwrap();
                     }
 
                     // Wait until the next run before ticking again
@@ -439,6 +427,39 @@ impl ChronService {
             Some(code) if code != 0 => ExecStatus::Failure,
             _ => ExecStatus::Success,
         })
+    }
+
+    // Execute the job's command, handling retries
+    fn exec_command_with_retry(
+        chron_lock: &ChronServiceLock,
+        job_lock: &JobLock,
+        terminate_controller: &TerminateController,
+        retry_config: &RetryConfig,
+    ) -> Result<()> {
+        let name = job_lock.read().unwrap().name.clone();
+        let retry_count = retry_config.get_retry_count();
+        for attempt in 0..=retry_count {
+            // Stop executing if a terminate was requested
+            if terminate_controller.is_terminated() {
+                break;
+            }
+
+            if attempt > 0 {
+                debug!("{name}: retry attempt {attempt} of {retry_count}");
+            }
+
+            let status = Self::exec_command(chron_lock, job_lock, terminate_controller)?;
+            if !retry_config.should_retry(status) {
+                break;
+            }
+
+            // Re-run the job after the configured delay if it is set
+            if let Some(delay) = retry_config.delay {
+                Self::sleep_duration(delay)?;
+            }
+        }
+
+        Ok(())
     }
 
     // Sleep for the specified duration, preventing oversleeping during hibernation

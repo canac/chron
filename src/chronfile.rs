@@ -129,10 +129,7 @@ impl Chronfile {
                             failures: job.keep_alive.failures.unwrap_or(true),
                             successes: job.keep_alive.successes.unwrap_or(true),
                             limit: job.keep_alive.limit,
-                            delay: job
-                                .keep_alive
-                                .delay
-                                .unwrap_or_else(|| Duration::from_secs(0)),
+                            delay: job.keep_alive.delay,
                         },
                     },
                 )
@@ -152,7 +149,7 @@ impl Chronfile {
                             failures: job.retry.failures.unwrap_or(true),
                             successes: job.retry.successes.unwrap_or(false),
                             limit: job.retry.limit,
-                            delay: job.retry.delay.unwrap_or_else(|| Duration::from_secs(60)),
+                            delay: job.retry.delay,
                         },
                     },
                 )
