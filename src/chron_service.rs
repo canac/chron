@@ -182,7 +182,7 @@ impl ChronService {
         let terminate_controller = self.terminate_controller.clone();
         let name = name.to_string();
         thread::spawn(move || {
-            loop {
+            for iteration in 0.. {
                 // Stop executing if a terminate was requested
                 if terminate_controller.is_terminated() {
                     break;
@@ -190,14 +190,25 @@ impl ChronService {
 
                 let mut job_guard = job.write().unwrap();
                 if let JobType::Scheduled(scheduled_job) = &mut job_guard.job_type {
-                    // Extract the (make_up_missed_runs + 1) most recent runs
+                    // On the first tick, all of the runs are makeup runs, but
+                    // on subsequent ticks, the last run is a regular run and
+                    // the rest are makeup runs
+                    let (max_runs, has_regular_run) = if iteration == 0 {
+                        // Startup tick
+                        (options.make_up_missed_runs, false)
+                    } else {
+                        // Regular tick after startup
+                        (options.make_up_missed_runs + 1, true)
+                    };
+
+                    // Extract the max_runs most recent runs
                     // ordered from oldest to newest
                     let runs = scheduled_job
                         .tick()
                         .collect::<Vec<_>>()
                         .into_iter()
                         .rev()
-                        .take(options.make_up_missed_runs + 1)
+                        .take(max_runs)
                         .rev()
                         .collect::<Vec<_>>();
 
@@ -210,23 +221,33 @@ impl ChronService {
                     let next_run = scheduled_job.next_run();
                     drop(job_guard);
 
-                    // Iterate over the most recent runs
+                    // Execute the most recent runs
                     let run_count = runs.len();
+                    let makeup_run_count = if has_regular_run {
+                        run_count - 1
+                    } else {
+                        run_count
+                    };
                     for (run, scheduled_timestamp) in runs.into_iter().enumerate() {
                         // Stop executing if a terminate was requested
                         if terminate_controller.is_terminated() {
                             break;
                         }
 
-                        // The last run is a regular run, not a makeup run, so
-                        // don't print a message for it
-                        if run != run_count - 1 {
+                        let is_makeup_run = if has_regular_run {
+                            // The last run is a regular run, not a makeup run
+                            run != run_count - 1
+                        } else {
+                            true
+                        };
+                        if is_makeup_run {
                             debug!(
                                 "{name}: making up missed run {} of {}",
                                 run + 1,
-                                run_count - 1
+                                makeup_run_count
                             );
                         }
+
                         let completed = Self::exec_command_with_retry(
                             &me,
                             &job,
