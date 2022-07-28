@@ -1,4 +1,12 @@
 table! {
+    checkpoint (id) {
+        id -> Integer,
+        job -> Text,
+        timestamp -> Timestamp,
+    }
+}
+
+table! {
     run (id) {
         id -> Integer,
         name -> Text,

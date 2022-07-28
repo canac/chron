@@ -1,6 +1,7 @@
-use crate::run::Run;
-use crate::schema::run;
+use crate::models::{Checkpoint, Run};
+use crate::schema::{checkpoint, run};
 use anyhow::{Context, Result};
+use chrono::{DateTime, TimeZone, Utc};
 use diesel::prelude::*;
 use diesel::SqliteConnection;
 use diesel_migrations::{EmbeddedMigrations, MigrationHarness};
@@ -52,14 +53,31 @@ impl Database {
             .context("Error loading last runs from the database")
     }
 
-    // Read the last run time of a job
-    pub fn get_last_run_time(&mut self, name: &str) -> Result<Option<chrono::NaiveDateTime>> {
-        let last_runs = run::table
-            .filter(run::dsl::name.eq(name))
-            .order(run::dsl::timestamp.desc())
+    // Read the checkpoint time of a job
+    pub fn get_checkpoint(&mut self, job: &str) -> Result<Option<DateTime<Utc>>> {
+        let checkpoints = checkpoint::table
+            .filter(checkpoint::dsl::job.eq(job))
             .limit(1)
-            .load::<Run>(&mut self.connection)
-            .context("Error loading last run time from the database")?;
-        Ok(last_runs.get(0).map(|run| run.timestamp))
+            .load::<Checkpoint>(&mut self.connection)
+            .context("Error loading checkpoint time from the database")?;
+        Ok(checkpoints
+            .get(0)
+            .map(|checkpoint| Utc.from_utc_datetime(&checkpoint.timestamp)))
+    }
+
+    // Write the checkpoint time of a job
+    pub fn set_checkpoint(&mut self, job: &str, timestamp: DateTime<Utc>) -> Result<()> {
+        let timestamp = timestamp.naive_utc();
+        diesel::insert_into(checkpoint::table)
+            .values((
+                checkpoint::dsl::job.eq(job.to_string()),
+                checkpoint::dsl::timestamp.eq(timestamp),
+            ))
+            .on_conflict(checkpoint::dsl::job)
+            .do_update()
+            .set(checkpoint::dsl::timestamp.eq(timestamp))
+            .execute(&mut self.connection)
+            .context("Error saving checkpoint time from the database")?;
+        Ok(())
     }
 }
