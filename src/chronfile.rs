@@ -1,4 +1,6 @@
-use crate::chron_service::{ChronService, RetryConfig, ScheduledJobOptions, StartupJobOptions};
+use crate::chron_service::{
+    ChronService, MakeUpMissedRuns, RetryConfig, ScheduledJobOptions, StartupJobOptions,
+};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::{collections::HashMap, path::PathBuf, time::Duration};
@@ -16,12 +18,12 @@ impl Default for MakeUpRunsVariant {
     }
 }
 
-impl From<MakeUpRunsVariant> for usize {
+impl From<MakeUpRunsVariant> for MakeUpMissedRuns {
     fn from(val: MakeUpRunsVariant) -> Self {
         match val {
-            MakeUpRunsVariant::Simple(false) => 0,
-            MakeUpRunsVariant::Simple(true) => usize::MAX,
-            MakeUpRunsVariant::Complex(limit) => limit,
+            MakeUpRunsVariant::Simple(false) => MakeUpMissedRuns::Limited(0),
+            MakeUpRunsVariant::Simple(true) => MakeUpMissedRuns::Unlimited,
+            MakeUpRunsVariant::Complex(limit) => MakeUpMissedRuns::Limited(limit),
         }
     }
 }
@@ -273,26 +275,26 @@ mod tests {
 
     #[test]
     fn test_makeup_missed_runs() -> Result<()> {
-        let make_up_missed_runs: usize = toml::from_str::<ScheduledJob>(
+        let make_up_missed_runs: MakeUpMissedRuns = toml::from_str::<ScheduledJob>(
             "command = 'echo'\nschedule = '* * * * * *'\nmakeUpMissedRuns = false",
         )?
         .make_up_missed_runs
         .into();
-        assert_eq!(make_up_missed_runs, 0);
+        assert_eq!(make_up_missed_runs, MakeUpMissedRuns::Limited(0));
 
-        let make_up_missed_runs: usize = toml::from_str::<ScheduledJob>(
+        let make_up_missed_runs: MakeUpMissedRuns = toml::from_str::<ScheduledJob>(
             "command = 'echo'\nschedule = '* * * * * *'\nmakeUpMissedRuns = true",
         )?
         .make_up_missed_runs
         .into();
-        assert_eq!(make_up_missed_runs, usize::MAX);
+        assert_eq!(make_up_missed_runs, MakeUpMissedRuns::Unlimited);
 
-        let make_up_missed_runs: usize = toml::from_str::<ScheduledJob>(
+        let make_up_missed_runs: MakeUpMissedRuns = toml::from_str::<ScheduledJob>(
             "command = 'echo'\nschedule = '* * * * * *'\nmakeUpMissedRuns = 3",
         )?
         .make_up_missed_runs
         .into();
-        assert_eq!(make_up_missed_runs, 3);
+        assert_eq!(make_up_missed_runs, MakeUpMissedRuns::Limited(3));
 
         Ok(())
     }

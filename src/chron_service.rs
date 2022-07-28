@@ -52,9 +52,15 @@ pub struct StartupJobOptions {
     pub keep_alive: RetryConfig,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub enum MakeUpMissedRuns {
+    Limited(usize),
+    Unlimited,
+}
+
 pub struct ScheduledJobOptions {
     // Maximum number of missed runs to make up
-    pub make_up_missed_runs: usize,
+    pub make_up_missed_runs: MakeUpMissedRuns,
     pub retry: RetryConfig,
 }
 
@@ -193,12 +199,11 @@ impl ChronService {
                     // On the first tick, all of the runs are makeup runs, but
                     // on subsequent ticks, the last run is a regular run and
                     // the rest are makeup runs
-                    let (max_runs, has_regular_run) = if iteration == 0 {
-                        // Startup tick
-                        (options.make_up_missed_runs, false)
-                    } else {
-                        // Regular tick after startup
-                        (options.make_up_missed_runs + 1, true)
+                    let has_regular_run = iteration != 0;
+                    let num_regular_runs = if has_regular_run { 1 } else { 0 };
+                    let max_runs = match options.make_up_missed_runs {
+                        MakeUpMissedRuns::Unlimited => usize::MAX,
+                        MakeUpMissedRuns::Limited(limit) => limit + num_regular_runs,
                     };
 
                     // Extract the max_runs most recent runs
@@ -223,11 +228,7 @@ impl ChronService {
 
                     // Execute the most recent runs
                     let run_count = runs.len();
-                    let makeup_run_count = if has_regular_run {
-                        run_count - 1
-                    } else {
-                        run_count
-                    };
+                    let makeup_run_count = run_count - num_regular_runs;
                     for (run, scheduled_timestamp) in runs.into_iter().enumerate() {
                         // Stop executing if a terminate was requested
                         if terminate_controller.is_terminated() {
