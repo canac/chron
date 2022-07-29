@@ -202,20 +202,12 @@ impl ChronService {
                     let has_regular_run = iteration != 0;
                     let num_regular_runs = if has_regular_run { 1 } else { 0 };
                     let max_runs = match options.make_up_missed_runs {
-                        MakeUpMissedRuns::Unlimited => usize::MAX,
-                        MakeUpMissedRuns::Limited(limit) => limit + num_regular_runs,
+                        MakeUpMissedRuns::Unlimited => None,
+                        MakeUpMissedRuns::Limited(limit) => Some(limit + num_regular_runs),
                     };
 
-                    // Extract the max_runs most recent runs
-                    // ordered from oldest to newest
-                    let runs = scheduled_job
-                        .tick()
-                        .collect::<Vec<_>>()
-                        .into_iter()
-                        .rev()
-                        .take(max_runs)
-                        .rev()
-                        .collect::<Vec<_>>();
+                    // Get the elapsed runs
+                    let runs = scheduled_job.tick(max_runs);
 
                     // Retry delay defaults to one sixth of the job's period
                     let retry_delay = options

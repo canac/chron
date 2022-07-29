@@ -22,15 +22,27 @@ impl ScheduledJob {
         self.schedule.after(&self.last_tick).next()
     }
 
-    // Tick and return an iterator of the elapsed runs since the last tick
-    pub fn tick(&mut self) -> impl Iterator<Item = DateTime<Utc>> + '_ {
+    // Tick and return a list of the elapsed runs since the last tick. The
+    // vector contain the `max` most recent items, arranged from oldest to newest
+    pub fn tick(&mut self, max: Option<usize>) -> Vec<DateTime<Utc>> {
         let now = Utc::now();
-        let elapsed_runs = self
-            .schedule
-            .after(&self.last_tick)
-            .take_while(move |run| run <= &now);
+        let last_tick = self.last_tick;
         self.last_tick = now;
-        elapsed_runs
+
+        let mut runs = self
+            .schedule
+            // Get the runs from now
+            .after(&now)
+            // Iterating backwards in time (from newest to oldest)
+            .rev()
+            // Capped at `max`
+            .take(max.unwrap_or(usize::MAX))
+            // Until the last tick
+            .take_while(|run| run >= &last_tick)
+            .collect::<Vec<_>>();
+        // Sort by oldest to newest
+        runs.reverse();
+        runs
     }
 
     // Calculate the estimated duration between the last run and the next run
