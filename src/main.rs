@@ -9,9 +9,7 @@ mod cli;
 mod database;
 mod http_error;
 mod http_server;
-mod models;
 mod scheduled_job;
-mod schema;
 mod sleep;
 mod terminate_controller;
 

@@ -1,5 +1,8 @@
-use crate::models::{Checkpoint, Run};
-use crate::schema::{checkpoint, run};
+mod models;
+mod schema;
+
+use self::models::{Checkpoint, Run};
+use self::schema::{checkpoint, run};
 use anyhow::{Context, Result};
 use chrono::{DateTime, TimeZone, Utc};
 use diesel::prelude::*;
