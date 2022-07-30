@@ -352,4 +352,15 @@ mod tests {
         assert!(unlimited_retries.should_retry(ExecStatus::Success, 1000000));
         assert!(unlimited_retries.should_retry(ExecStatus::Success, usize::MAX));
     }
+
+    #[test]
+    fn test_validate_name() {
+        assert!(ChronService::validate_name("abc"));
+        assert!(ChronService::validate_name("abc-def-ghi"));
+        assert!(ChronService::validate_name("123-456-789"));
+        assert!(!ChronService::validate_name("-abc-def-ghi"));
+        assert!(!ChronService::validate_name("abc-def-ghi-"));
+        assert!(!ChronService::validate_name("abc--def-ghi"));
+        assert!(!ChronService::validate_name("1*2$3"));
+    }
 }
