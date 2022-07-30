@@ -38,7 +38,7 @@ impl ScheduledJob {
             // Capped at `max`
             .take(max.unwrap_or(usize::MAX))
             // Until the last tick
-            .take_while(|run| run >= &last_tick)
+            .take_while(|run| run > &last_tick)
             .collect::<Vec<_>>();
         // Sort by oldest to newest
         runs.reverse();
