@@ -219,7 +219,6 @@ impl ChronService {
 
                     // Execute the most recent runs
                     let run_count = runs.len();
-                    let makeup_run_count = run_count - num_regular_runs;
                     for (run, scheduled_timestamp) in runs.into_iter().enumerate() {
                         // Stop executing if a terminate was requested
                         if terminate_controller.is_terminated() {
@@ -236,7 +235,7 @@ impl ChronService {
                             debug!(
                                 "{name}: making up missed run {} of {}",
                                 run + 1,
-                                makeup_run_count
+                                run_count - num_regular_runs
                             );
                         }
 
