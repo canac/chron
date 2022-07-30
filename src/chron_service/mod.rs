@@ -1,10 +1,12 @@
 mod exec;
+mod scheduled_job;
+mod terminate_controller;
 
 use self::exec::exec_command;
+use self::scheduled_job::ScheduledJob;
+use self::terminate_controller::TerminateController;
 use crate::database::Database;
-use crate::scheduled_job::ScheduledJob;
 use crate::sleep::sleep_until;
-use crate::terminate_controller::TerminateController;
 use anyhow::{anyhow, bail, Context, Result};
 use cron::Schedule;
 use lazy_static::lazy_static;

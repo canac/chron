@@ -8,9 +8,7 @@ mod chronfile;
 mod cli;
 mod database;
 mod http;
-mod scheduled_job;
 mod sleep;
-mod terminate_controller;
 
 use crate::chron_service::ChronService;
 use crate::chronfile::Chronfile;
