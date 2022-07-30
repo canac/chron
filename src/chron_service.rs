@@ -34,17 +34,16 @@ pub struct RetryConfig {
 }
 
 impl RetryConfig {
-    // Determine the number of times that a job should be retried
-    fn get_retry_count(&self) -> usize {
-        self.limit.unwrap_or(std::usize::MAX)
-    }
-
-    // Determine whether a command with a certain status should be retried
-    fn should_retry(&self, exec_status: ExecStatus) -> bool {
-        match exec_status {
+    // Determine whether a command with a certain status and a certain number
+    // of previous attempts should be retried
+    fn should_retry(&self, exec_status: ExecStatus, attempt: usize) -> bool {
+        (match exec_status {
             ExecStatus::Aborted | ExecStatus::Failure => self.failures,
             ExecStatus::Success => self.successes,
-        }
+        } && match self.limit {
+            None => true,
+            Some(limit) => attempt < limit,
+        })
     }
 }
 
@@ -451,8 +450,11 @@ impl ChronService {
         retry_config: &RetryConfig,
     ) -> Result<bool> {
         let name = job_lock.read().unwrap().name.clone();
-        let retry_count = retry_config.get_retry_count();
-        for attempt in 0..=retry_count {
+        let num_attempts = match retry_config.limit {
+            Some(limit) => limit.to_string(),
+            None => "unlimited".to_string(),
+        };
+        for attempt in 0.. {
             // Stop executing if a terminate was requested
             if terminate_controller.is_terminated() {
                 // The command is only considered incomplete if it aborts
@@ -460,18 +462,11 @@ impl ChronService {
             }
 
             if attempt > 0 {
-                debug!(
-                    "{name}: retry attempt {attempt} of {}",
-                    if retry_config.limit.is_some() {
-                        retry_count.to_string()
-                    } else {
-                        "unlimited".to_string()
-                    }
-                );
+                debug!("{name}: retry attempt {attempt} of {num_attempts}");
             }
 
             let status = Self::exec_command(chron_lock, job_lock, terminate_controller)?;
-            if !retry_config.should_retry(status) {
+            if !retry_config.should_retry(status, attempt) {
                 break;
             }
 
@@ -500,5 +495,62 @@ impl ChronService {
             // the computer hibernates
             std::thread::sleep(std::cmp::min(duration, max_sleep))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_should_retry() {
+        let no_retries = RetryConfig {
+            failures: false,
+            successes: false,
+            limit: None,
+            delay: None,
+        };
+        let only_failures = RetryConfig {
+            failures: true,
+            successes: false,
+            limit: None,
+            delay: None,
+        };
+        let only_success = RetryConfig {
+            failures: false,
+            successes: true,
+            limit: None,
+            delay: None,
+        };
+        let limited_retries = RetryConfig {
+            failures: true,
+            successes: true,
+            limit: Some(2),
+            delay: None,
+        };
+        let unlimited_retries = RetryConfig {
+            failures: true,
+            successes: true,
+            limit: None,
+            delay: None,
+        };
+
+        assert!(!no_retries.should_retry(ExecStatus::Success, 0));
+        assert!(!no_retries.should_retry(ExecStatus::Failure, 0));
+
+        assert!(!only_failures.should_retry(ExecStatus::Success, 0));
+        assert!(only_failures.should_retry(ExecStatus::Failure, 0));
+
+        assert!(only_success.should_retry(ExecStatus::Success, 0));
+        assert!(!only_success.should_retry(ExecStatus::Failure, 0));
+
+        assert!(limited_retries.should_retry(ExecStatus::Success, 0));
+        assert!(limited_retries.should_retry(ExecStatus::Success, 1));
+        assert!(!limited_retries.should_retry(ExecStatus::Success, 2));
+
+        assert!(unlimited_retries.should_retry(ExecStatus::Success, 0));
+        assert!(unlimited_retries.should_retry(ExecStatus::Success, 1000));
+        assert!(unlimited_retries.should_retry(ExecStatus::Success, 1000000));
+        assert!(unlimited_retries.should_retry(ExecStatus::Success, usize::MAX));
     }
 }
