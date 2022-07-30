@@ -12,6 +12,7 @@ mod http_server;
 mod models;
 mod scheduled_job;
 mod schema;
+mod sleep;
 mod terminate_controller;
 
 use crate::chron_service::ChronService;

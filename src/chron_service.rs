@@ -1,8 +1,8 @@
 use crate::database::Database;
 use crate::scheduled_job::ScheduledJob;
+use crate::sleep::{sleep_duration, sleep_until};
 use crate::terminate_controller::TerminateController;
 use anyhow::{anyhow, bail, Context, Result};
-use chrono::{DateTime, Utc};
 use cron::Schedule;
 use lazy_static::lazy_static;
 use log::{debug, info, warn};
@@ -263,7 +263,7 @@ impl ChronService {
 
                     // Wait until the next run before ticking again
                     match next_run {
-                        Some(next_run) => Self::sleep_until(next_run),
+                        Some(next_run) => sleep_until(next_run),
                         None => break,
                     };
                 }
@@ -472,29 +472,11 @@ impl ChronService {
 
             // Re-run the job after the configured delay if it is set
             if let Some(delay) = retry_config.delay {
-                Self::sleep_duration(delay)?;
+                sleep_duration(delay)?;
             }
         }
 
         Ok(true)
-    }
-
-    // Sleep for the specified duration, preventing oversleeping during hibernation
-    fn sleep_duration(duration: Duration) -> Result<()> {
-        Self::sleep_until(Utc::now() + chrono::Duration::from_std(duration)?);
-        Ok(())
-    }
-
-    // Sleep until the specified timestamp, preventing oversleeping during hibernation
-    fn sleep_until(timestamp: DateTime<Utc>) {
-        let max_sleep = Duration::from_secs(60);
-        // to_std returns Err if the duration is negative, in which case we
-        // have hit the timestamp and cam stop looping
-        while let Ok(duration) = timestamp.signed_duration_since(Utc::now()).to_std() {
-            // Sleep for a maximum of one minute to prevent oversleeping when
-            // the computer hibernates
-            std::thread::sleep(std::cmp::min(duration, max_sleep))
-        }
     }
 }
 
