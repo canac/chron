@@ -1,5 +1,7 @@
+mod http_error;
+
+use self::http_error::HttpError;
 use crate::chron_service::JobType;
-use crate::http_error::HttpError;
 use actix_web::{delete, get, http::StatusCode, post, web, App, HttpServer, Responder, Result};
 use serde_json::json;
 use std::fs;

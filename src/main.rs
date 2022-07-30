@@ -7,8 +7,7 @@ mod chron_service;
 mod chronfile;
 mod cli;
 mod database;
-mod http_error;
-mod http_server;
+mod http;
 mod scheduled_job;
 mod sleep;
 mod terminate_controller;
@@ -70,7 +69,7 @@ async fn main() -> Result<()> {
         }
     });
 
-    http_server::start_server(chron_lock, cli.port).await?;
+    http::start_server(chron_lock, cli.port).await?;
 
     Ok(())
 }
