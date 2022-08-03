@@ -19,7 +19,7 @@ pub struct Database {
 impl Database {
     // Create a new Database instance
     pub fn new(chron_dir: &Path) -> Result<Self> {
-        let db_path = chron_dir.join("db.sqlite");
+        let db_path = chron_dir.join("chron.db");
         let mut connection = SqliteConnection::establish(&db_path.to_string_lossy())
             .with_context(|| format!("Error opening SQLite database {db_path:?}"))?;
         connection
