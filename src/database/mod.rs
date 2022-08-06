@@ -80,7 +80,7 @@ impl Database {
             .do_update()
             .set(checkpoint::dsl::timestamp.eq(timestamp))
             .execute(&mut self.connection)
-            .context("Error saving checkpoint time from the database")?;
+            .context("Error saving checkpoint time to the database")?;
         Ok(())
     }
 }
