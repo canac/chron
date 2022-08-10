@@ -32,7 +32,13 @@ impl ScheduledJob {
         let mut runs = self
             .schedule
             // Get the runs from now
-            .after(&now)
+            // There is a bug in cron where reverse iterators starts counting
+            // from the second rounded down, so add a second to compensate
+            // https://github.com/zslayton/cron/issues/108
+            .after(
+                &now.checked_add_signed(chrono::Duration::seconds(1))
+                    .unwrap(),
+            )
             // Iterating backwards in time (from newest to oldest)
             .rev()
             // Capped at `max`
