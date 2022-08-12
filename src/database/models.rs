@@ -1,3 +1,5 @@
+use chrono::NaiveDateTime;
+
 /*
  * The checkpoint table records the last time that a job completed. This
  * information is used to correctly calculate missed job runs between runs
@@ -11,7 +13,7 @@
 pub struct Checkpoint {
     pub id: i32,
     pub job: String,
-    pub timestamp: chrono::NaiveDateTime,
+    pub timestamp: NaiveDateTime,
 }
 
 #[derive(Queryable)]
@@ -19,6 +21,6 @@ pub struct Checkpoint {
 pub struct Run {
     pub id: i32,
     pub name: String,
-    pub timestamp: chrono::NaiveDateTime,
+    pub timestamp: NaiveDateTime,
     pub status_code: Option<i32>,
 }
