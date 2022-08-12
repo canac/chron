@@ -1,8 +1,11 @@
 use anyhow::{anyhow, Context, Result};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Local, Utc};
 use cron::Schedule;
 use std::time::Duration;
 
+// Tracks when a job should run over time based on its schedule
+// The schedule is interpreted in local time, but all ScheduledJob methods
+// return Utc times
 pub struct ScheduledJob {
     schedule: Schedule,
     last_tick: DateTime<Utc>,
@@ -19,7 +22,10 @@ impl ScheduledJob {
 
     // Return the date of the next time that this scheduled job will run
     pub fn next_run(&self) -> Option<DateTime<Utc>> {
-        self.schedule.after(&self.last_tick).next()
+        self.schedule
+            .after::<Local>(&self.last_tick.into())
+            .next()
+            .map(|run| run.into())
     }
 
     // Tick and return a list of the elapsed runs since the last tick. The
@@ -35,9 +41,10 @@ impl ScheduledJob {
             // There is a bug in cron where reverse iterators starts counting
             // from the second rounded down, so add a second to compensate
             // https://github.com/zslayton/cron/issues/108
-            .after(
+            .after::<Local>(
                 &now.checked_add_signed(chrono::Duration::seconds(1))
-                    .unwrap(),
+                    .unwrap()
+                    .into(),
             )
             // Iterating backwards in time (from newest to oldest)
             .rev()
@@ -45,6 +52,8 @@ impl ScheduledJob {
             .take(max.unwrap_or(usize::MAX))
             // Until the last tick
             .take_while(|run| run > &last_tick)
+            // Convert from local time to UTC
+            .map(|run| run.into())
             .collect::<Vec<_>>();
         // Sort by oldest to newest
         runs.reverse();
