@@ -13,7 +13,7 @@ use std::{collections::HashMap, path::PathBuf};
 pub struct Chronfile {
     #[serde(rename = "startup", default)]
     startup_jobs: HashMap<String, StartupJob>,
-    #[serde(rename = "schedule", default)]
+    #[serde(rename = "scheduled", default)]
     scheduled_jobs: HashMap<String, ScheduledJob>,
 }
 
@@ -69,7 +69,7 @@ mod tests {
             "[startup.startup]
             command = 'echo'
 
-            [schedule.schedule]
+            [scheduled.schedule]
             schedule = '* * * * * *'
             command = 'echo'",
         )?;
@@ -102,7 +102,7 @@ mod tests {
             command = 'echo'
             disabled = false
 
-            [schedule.schedule]
+            [scheduled.schedule]
             schedule = '* * * * * *'
             command = 'echo'
             disabled = true",
@@ -136,7 +136,7 @@ mod tests {
         .is_err());
 
         assert!(load_chronfile(
-            "[schedule.schedule]
+            "[scheduled.schedule]
             schedule = '* * * * * *'
             command = 'echo'
             foo = 'bar'"
@@ -151,7 +151,7 @@ mod tests {
         .is_err());
 
         assert!(load_chronfile(
-            "[schedule.schedule]
+            "[scheduled.schedule]
             schedule = '* * * * * *'
             command = 'echo'
             retry = { foo = 'bar' }"
