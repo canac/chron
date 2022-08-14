@@ -2,6 +2,14 @@
 
 `chron` is a CLI tool inspired by `chron` that runs commands on startup or on a predetermined schedule. For example, it can be used to launch web servers and startup database processes and restart them if they crash. It can be used to perform daily online backup or clear out temporary files on a monthly basis.
 
+## Installation
+
+Install `chron` via Homebrew.
+
+```sh
+brew install canac/tap/chron
+```
+
 ## Basic `chronfile.toml`
 
 Jobs are defined in a `chronfile` written in TOML. Here is a simple example:
