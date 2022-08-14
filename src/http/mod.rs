@@ -4,6 +4,7 @@ use self::http_error::HttpError;
 use crate::chron_service::JobType;
 use actix_web::web::{Data, Json, Path};
 use actix_web::{delete, get, http::StatusCode, post, App, HttpServer, Responder, Result};
+use log::info;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::fs::{read_to_string, write};
@@ -115,6 +116,7 @@ async fn terminate(name: Path<String>, data: Data<ThreadData>) -> Result<impl Re
 }
 
 pub async fn start_server(data: ThreadData, port: u16) -> Result<(), std::io::Error> {
+    info!("Starting HTTP server on port {}", port);
     HttpServer::new(move || {
         let app_data = Data::new(data.clone());
         App::new()

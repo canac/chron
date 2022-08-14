@@ -26,7 +26,10 @@ fn exec_command_once(
 
     let mut job = job_lock.write().unwrap();
     let name = job.name.clone();
-    info!("{name}: running \"{}\"", job.command);
+    info!(
+        "{name}: running \"{}\" with shell \"{}\"",
+        job.command, job.shell
+    );
 
     // Record the run in the database
     let run = chron_lock
