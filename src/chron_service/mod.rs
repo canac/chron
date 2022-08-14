@@ -14,6 +14,7 @@ use lazy_static::lazy_static;
 use log::debug;
 use regex::Regex;
 use std::collections::HashMap;
+use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::str::FromStr;
@@ -70,6 +71,7 @@ pub struct ScheduledJobOptions {
 pub struct Job {
     pub name: String,
     pub command: String,
+    pub shell: String,
     pub log_path: PathBuf,
     pub process: Option<Child>,
     pub job_type: JobType,
@@ -85,6 +87,8 @@ pub struct ChronService {
     log_dir: PathBuf,
     db: DatabaseLock,
     jobs: HashMap<String, JobLock>,
+    default_shell: String,
+    shell: Option<String>,
     terminate_controller: TerminateController,
     me: Weak<RwLock<ChronService>>,
 }
@@ -98,6 +102,8 @@ impl ChronService {
                 log_dir: chron_dir.join("logs"),
                 db: Arc::new(Mutex::new(db)),
                 jobs: HashMap::new(),
+                default_shell: Self::get_user_shell().unwrap(),
+                shell: None,
                 terminate_controller: TerminateController::new(),
                 me: me.clone(),
             })
@@ -117,6 +123,16 @@ impl ChronService {
     // Return an iterator of the jobs
     pub fn get_jobs_iter(&self) -> impl Iterator<Item = (&String, &JobLock)> {
         self.jobs.iter()
+    }
+
+    // Get the shell to execute commands with
+    pub fn get_shell(&self) -> String {
+        self.shell.as_ref().unwrap_or(&self.default_shell).clone()
+    }
+
+    // Set the shell to execute commands with, None means the default shell
+    pub fn set_shell(&mut self, shell: Option<String>) {
+        self.shell = shell
     }
 
     // Return the Arc<RwLock> of this ChronService
@@ -139,6 +155,7 @@ impl ChronService {
         let job = Arc::new(RwLock::new(Job {
             name: name.to_string(),
             command: command.to_string(),
+            shell: self.get_shell(),
             log_path: self.calculate_log_path(name),
             process: None,
             job_type: JobType::Startup,
@@ -180,6 +197,7 @@ impl ChronService {
         let job = Arc::new(RwLock::new(Job {
             name: name.to_string(),
             command: command.to_string(),
+            shell: self.get_shell(),
             log_path: self.calculate_log_path(name),
             process: None,
             job_type: JobType::Scheduled(Box::new(ScheduledJob::new(schedule, resume_time))),
@@ -302,6 +320,18 @@ impl ChronService {
         let mut log_path = self.log_dir.join(name);
         log_path.set_extension("log");
         log_path
+    }
+
+    // Get the user's shell
+    #[cfg(target_os = "windows")]
+    fn get_user_shell() -> Result<String> {
+        Ok("Invoke-Expression")
+    }
+
+    // Get the user's shell
+    #[cfg(not(target_os = "windows"))]
+    fn get_user_shell() -> Result<String> {
+        env::var("SHELL").context("Couldn't get $SHELL environment variable")
     }
 }
 

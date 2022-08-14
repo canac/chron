@@ -8,9 +8,17 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::{collections::HashMap, path::PathBuf};
 
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Config {
+    shell: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Chronfile {
+    #[serde(default)]
+    config: Config,
     #[serde(rename = "startup", default)]
     startup_jobs: HashMap<String, StartupJob>,
     #[serde(rename = "scheduled", default)]
@@ -29,6 +37,8 @@ impl Chronfile {
     // Register the chronfile's jobs with a ChronService instance and start it
     pub fn run(self, chron: &mut ChronService) -> Result<()> {
         chron.reset()?;
+
+        chron.set_shell(self.config.shell);
 
         self.startup_jobs
             .into_iter()
@@ -78,6 +88,7 @@ mod tests {
             Chronfile {
                 startup_jobs,
                 scheduled_jobs,
+                ..
             } => {
                 assert_eq!(startup_jobs.len(), 1);
                 assert_matches!(startup_jobs.get("startup"), Some(StartupJob { command, disabled, .. }) => {
@@ -112,6 +123,7 @@ mod tests {
             Chronfile {
                 startup_jobs,
                 scheduled_jobs,
+                ..
             } => {
                 assert_matches!(startup_jobs.get("startup"), Some(StartupJob { disabled, .. }) => {
                     assert_eq!(disabled, &false);
@@ -157,5 +169,19 @@ mod tests {
             retry = { foo = 'bar' }"
         )
         .is_err());
+    }
+
+    #[test]
+    fn test_config() -> Result<()> {
+        let chronfile = load_chronfile("[config]\nshell = 'bash'")?;
+        assert_eq!(chronfile.config.shell, Some("bash".to_string()));
+
+        let chronfile = load_chronfile("[config]")?;
+        assert_eq!(chronfile.config.shell, None);
+
+        let chronfile = load_chronfile("")?;
+        assert_eq!(chronfile.config.shell, None);
+
+        Ok(())
     }
 }

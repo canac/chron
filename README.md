@@ -123,6 +123,14 @@ Set `makeUpMissedRuns` to `false` to disable making up missed runs. This is equi
 
 Set `makeUpMissedRuns` to `true` to enable making up an infinite number of missed runs. Be careful when combining this with frequently-run jobs. For example, if a job is configured to run every 5 seconds and `chron` hasn't run for 3 months, `chron` will run the job over 1.5 million times.
 
+### `config`
+
+At the top level of the chronfile, you can define configuration for the entire `chron` instance.
+
+#### `config.shell`
+
+`shell` is a string that specifies which shell to use when executing all commands in the chronfile. When the `shell` command is run, `chron` passes `-c` as the first argument and the job's command as the second argument. `shell` defaults to the contents of the `$SHELL` environment variable on Unix and `Invoke-Expression` on Windows. If you want to run just one command in a different shell, just put the shell in the job's command itself like this: `command = 'fish -c "my_fish_function"`.
+
 ## HTTP server
 
 When run, `chron` starts a basic HTTP server that lets you see the status of your commands and perform basic operations. Set the HTTP server port through the `--port` flag or the `PORT` environment variable.

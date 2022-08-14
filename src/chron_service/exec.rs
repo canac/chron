@@ -57,7 +57,7 @@ fn exec_command_once(
 
     // Run the command
     let clone_log_file = || log_file.try_clone().context("Failed to clone log file");
-    let process = process::Command::new("sh")
+    let process = process::Command::new(&job.shell)
         .args(["-c", &job.command])
         .stdin(process::Stdio::null())
         .stdout(clone_log_file()?)
