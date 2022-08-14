@@ -1,7 +1,6 @@
+use crate::chron_service::{self, StartupJobOptions};
 use serde::Deserialize;
 use std::time::Duration;
-
-use crate::chron_service::{self, StartupJobOptions};
 
 // Allow RawRetryConfig to be deserialized from a boolean or a full config
 #[derive(Deserialize)]
