@@ -17,6 +17,8 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use log::{debug, error, LevelFilter};
 use notify::{DebouncedEvent, RecommendedWatcher, RecursiveMode, Watcher};
+use std::thread;
+use std::time::Duration;
 
 #[actix_web::main]
 async fn main() -> Result<()> {
@@ -41,10 +43,10 @@ async fn main() -> Result<()> {
     chronfile.run(&mut chron_lock.write().unwrap())?;
 
     let chron = chron_lock.clone();
-    std::thread::spawn(move || -> Result<()> {
+    thread::spawn(move || -> Result<()> {
         // Watch for changes to the chronfile
         let (tx, rx) = std::sync::mpsc::channel();
-        let mut watcher: RecommendedWatcher = Watcher::new(tx, std::time::Duration::from_secs(1))
+        let mut watcher: RecommendedWatcher = Watcher::new(tx, Duration::from_secs(1))
             .context("Failed to create chronfile watcher")?;
         watcher
             .watch(chronfile_path.clone(), RecursiveMode::NonRecursive)
@@ -67,7 +69,14 @@ async fn main() -> Result<()> {
         }
     });
 
-    http::start_server(chron_lock, cli.port).await?;
+    match cli.port {
+        // Start the server, which will wait indefinitely
+        Some(port) => http::start_server(chron_lock, port).await?,
+        // When there is no server, wait forever
+        None => loop {
+            thread::sleep(Duration::MAX);
+        },
+    }
 
     Ok(())
 }

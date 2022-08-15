@@ -11,7 +11,7 @@ use std::path::PathBuf;
 pub struct Cli {
     /// HTTP server port
     #[clap(short = 'p', long, env = "PORT")]
-    pub port: u16,
+    pub port: Option<u16>,
 
     /// Log fewer messages
     #[clap(short = 'q', long)]

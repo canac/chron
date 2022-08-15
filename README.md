@@ -31,7 +31,7 @@ The job name must only contain letters and numbers in kebab case, like "my-1st-j
 
 ## Running chron
 
-Now that you have a chronfile, you can run chron like this `chron chronfile.toml --port=8000`. Ignore the port argument for now or learn more about it [below](#http-server). Assuming that you provided a valid chronfile, `chron` will run the `webserver` job immediately, run the `online-backup` job every hour, and continue running indefinitely. If you modify the chronfile, `chron` will automatically reload with the new jobs.
+Now that you have a chronfile, you can run `chron` like this: `chron chronfile.toml`. Assuming that you provided a valid chronfile, `chron` will run the `webserver` job immediately, run the `online-backup` job every hour, and continue running indefinitely. If you modify the chronfile, `chron` will automatically reload with the new jobs.
 
 ## Configuring chron
 
@@ -141,7 +141,7 @@ At the top level of the chronfile, you can define configuration for the entire `
 
 ## HTTP server
 
-When run, `chron` starts a basic HTTP server that lets you see the status of your commands and perform basic operations. Set the HTTP server port through the `--port` flag or the `PORT` environment variable.
+`chron` can optionally start a basic HTTP server that lets you see the status of your commands and perform basic operations. To enable to HTTP server, provide `chron` with the port port through the `--port` flag or the `PORT` environment variable.
 
 ```sh
 $ chron chronfile.toml --port=8000
