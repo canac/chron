@@ -5,6 +5,7 @@ use self::models::{Checkpoint, Run};
 use self::schema::{checkpoint, run};
 use anyhow::{Context, Result};
 use chrono::{DateTime, TimeZone, Utc};
+use diesel::connection::SimpleConnection;
 use diesel::prelude::*;
 use diesel::SqliteConnection;
 use diesel_migrations::{EmbeddedMigrations, MigrationHarness};
@@ -25,6 +26,11 @@ impl Database {
         connection
             .run_pending_migrations(MIGRATIONS)
             .expect("Error running SQLite migrations");
+        // Add a busy timeout so that when multiple processes try to write to
+        // the database, they wait for each other to finish instead of erroring
+        connection
+            .batch_execute("PRAGMA busy_timeout = 1000")
+            .context("Error setting busy timeout")?;
         Ok(Database { connection })
     }
 
