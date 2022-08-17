@@ -8,7 +8,7 @@ use self::terminate_controller::TerminateController;
 use crate::database::Database;
 use crate::sleep::sleep_until;
 use anyhow::{anyhow, bail, Context, Result};
-use chrono_humanize::{Accuracy, HumanTime, Tense};
+use chrono_humanize::HumanTime;
 use cron::Schedule;
 use lazy_static::lazy_static;
 use log::debug;
@@ -261,10 +261,7 @@ impl ChronService {
                         }
 
                         let late = HumanTime::from(scheduled_timestamp);
-                        debug!(
-                            "{name}: scheduled for {scheduled_timestamp} ({})",
-                            late.to_text_en(Accuracy::Precise, Tense::Past)
-                        );
+                        debug!("{name}: scheduled for {scheduled_timestamp} ({:#})", late);
 
                         let completed = exec_command(
                             &me,
