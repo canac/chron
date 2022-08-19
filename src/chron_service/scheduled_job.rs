@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Context, Result};
-use chrono::{DateTime, Local, Utc};
+use chrono::{DateTime, Local, Timelike, Utc};
 use cron::Schedule;
 use std::time::Duration;
 
@@ -18,6 +18,23 @@ impl ScheduledJob {
             schedule,
             last_tick: last_run.unwrap_or_else(Utc::now),
         }
+    }
+
+    // Return the date of the last time that this scheduled job ran
+    pub fn prev_run(&self) -> Option<DateTime<Utc>> {
+        let last_tick: DateTime<Local> = self.last_tick.into();
+        // Schedule::after ignores fractional seconds, so compensate by
+        // rounding fractional seconds up
+        // https://github.com/zslayton/cron/issues/108
+        let after = if last_tick.timestamp_subsec_nanos() == 0 {
+            last_tick
+        } else {
+            last_tick.with_nanosecond(0).unwrap() + chrono::Duration::seconds(1)
+        };
+        self.schedule
+            .after(&after)
+            .next_back()
+            .map(|run| run.into())
     }
 
     // Return the date of the next time that this scheduled job will run
@@ -78,6 +95,7 @@ impl ScheduledJob {
 #[cfg(test)]
 mod tests {
     use anyhow::Result;
+    use chrono::NaiveDate;
     use cron::Schedule;
     use std::str::FromStr;
 
@@ -88,5 +106,57 @@ mod tests {
         let job = ScheduledJob::new(Schedule::from_str("*/5 * * * * *")?, None);
         assert_eq!(job.get_current_period()?, Duration::from_secs(5));
         Ok(())
+    }
+
+    #[test]
+    fn test_prev_run_whole_seconds() {
+        let start_time = NaiveDate::from_ymd(2022, 1, 1).and_hms(0, 0, 1);
+        let job = ScheduledJob::new(
+            Schedule::from_str("* * * * * *").unwrap(),
+            Some(DateTime::<Utc>::from_utc(start_time, Utc)),
+        );
+        assert_eq!(
+            job.prev_run().unwrap().naive_utc(),
+            NaiveDate::from_ymd(2022, 1, 1).and_hms(0, 0, 0)
+        );
+    }
+
+    #[test]
+    fn test_prev_run_fractional_seconds() {
+        let start_time = NaiveDate::from_ymd(2022, 1, 1).and_hms_milli(0, 0, 0, 1);
+        let job = ScheduledJob::new(
+            Schedule::from_str("* * * * * *").unwrap(),
+            Some(DateTime::<Utc>::from_utc(start_time, Utc)),
+        );
+        assert_eq!(
+            job.prev_run().unwrap().naive_utc(),
+            NaiveDate::from_ymd(2022, 1, 1).and_hms(0, 0, 0)
+        );
+    }
+
+    #[test]
+    fn test_next_run_whole_seconds() {
+        let start_time = NaiveDate::from_ymd(2022, 1, 1).and_hms(0, 0, 0);
+        let job = ScheduledJob::new(
+            Schedule::from_str("* * * * * *").unwrap(),
+            Some(DateTime::<Utc>::from_utc(start_time, Utc)),
+        );
+        assert_eq!(
+            job.next_run().unwrap().naive_utc(),
+            NaiveDate::from_ymd(2022, 1, 1).and_hms(0, 0, 1)
+        );
+    }
+
+    #[test]
+    fn test_next_run_fractional_seconds() {
+        let start_time = NaiveDate::from_ymd(2022, 1, 1).and_hms_milli(0, 0, 0, 1);
+        let job = ScheduledJob::new(
+            Schedule::from_str("* * * * * *").unwrap(),
+            Some(DateTime::<Utc>::from_utc(start_time, Utc)),
+        );
+        assert_eq!(
+            job.next_run().unwrap().naive_utc(),
+            NaiveDate::from_ymd(2022, 1, 1).and_hms(0, 0, 1)
+        );
     }
 }

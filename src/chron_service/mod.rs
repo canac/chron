@@ -194,13 +194,29 @@ impl ChronService {
         let schedule = Schedule::from_str(schedule_expression).with_context(|| {
             format!("Failed to parse schedule expression {schedule_expression}")
         })?;
+        let scheduled_job = ScheduledJob::new(schedule, resume_time);
+        if resume_time.is_none() {
+            // If the job doesn't have a checkpoint, estimate one based on the
+            // schedule extrapolated backwards in time. This is to prevent jobs
+            // with a long period from never running if chron isn't running
+            // when they are scheduled to run. For example, assume a job is
+            // scheduled to run on Sundays at midnight, and chron is stopped on
+            // Saturday and restarted on Monday. When it restarts, because
+            // there isn't a checkpoint, it won't be able to resume and will
+            // schedule the backup for the next Sunday. Eagerly saving a
+            // checkpoint prevents this problem.
+            let start_time = scheduled_job
+                .prev_run()
+                .ok_or_else(|| anyhow!("Failed to calculate start time"))?;
+            self.db.lock().unwrap().set_checkpoint(name, start_time)?;
+        }
         let job = Arc::new(RwLock::new(Job {
             name: name.to_string(),
             command: command.to_string(),
             shell: self.get_shell(),
             log_path: self.calculate_log_path(name),
             process: None,
-            job_type: JobType::Scheduled(Box::new(ScheduledJob::new(schedule, resume_time))),
+            job_type: JobType::Scheduled(Box::new(scheduled_job)),
         }));
         self.jobs.insert(name.to_string(), job.clone());
 
