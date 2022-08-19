@@ -79,7 +79,7 @@ impl ScheduledJob {
 
     // Calculate the estimated duration between the last run and the next run
     pub fn get_current_period(&self) -> Result<Duration> {
-        let mut upcoming = self.schedule.after(&Utc::now());
+        let mut upcoming = self.schedule.after(&Local::now());
         let last = upcoming
             .next_back()
             .ok_or_else(|| anyhow!("Failed to get previous run"))?;
