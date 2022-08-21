@@ -56,7 +56,7 @@ Commenting out the job achieves the same effect
 
 ### `keepAlive`
 
-Startup jobs can set `keepAlive` to configure whether and how the job will be re-run if it terminates. `keepAlive` can be an object with four optional fields, `successes`, `failures`, `limit` and `delay`, or a boolean value. If omitted, `keepAlive` defaults to `{ successes = true, failures = true, delay = "0s" }`.
+Startup jobs can set `keepAlive` to configure whether and how the job will be re-run if it terminates. `keepAlive` can be an object with four optional fields, `successes`, `failures`, `limit` and `delay`, or a boolean value. If omitted, `keepAlive` defaults to `{ successes = false, failures = false }`.
 
 #### `keepAlive.successes`
 

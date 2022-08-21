@@ -1,4 +1,4 @@
-use crate::chron_service::{self, StartupJobOptions};
+use crate::chron_service::{RetryConfig, StartupJobOptions};
 use serde::Deserialize;
 use std::time::Duration;
 
@@ -61,9 +61,9 @@ pub(super) struct StartupJob {
 impl StartupJob {
     pub fn get_options(&self) -> StartupJobOptions {
         StartupJobOptions {
-            keep_alive: chron_service::RetryConfig {
-                failures: self.keep_alive.failures.unwrap_or(true),
-                successes: self.keep_alive.successes.unwrap_or(true),
+            keep_alive: RetryConfig {
+                failures: self.keep_alive.failures.unwrap_or(false),
+                successes: self.keep_alive.successes.unwrap_or(false),
                 limit: self.keep_alive.limit,
                 delay: self.keep_alive.delay,
             },
@@ -76,6 +76,22 @@ mod tests {
     use anyhow::Result;
 
     use super::*;
+
+    #[test]
+    fn test_keep_alive_default() -> Result<()> {
+        assert_eq!(
+            toml::from_str::<StartupJob>("command = 'echo'")?
+                .get_options()
+                .keep_alive,
+            RetryConfig {
+                failures: false,
+                successes: false,
+                limit: None,
+                delay: None,
+            }
+        );
+        Ok(())
+    }
 
     #[test]
     fn test_keep_alive() -> Result<()> {

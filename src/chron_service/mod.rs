@@ -31,6 +31,7 @@ pub enum JobType {
     Scheduled(Box<ScheduledJob>),
 }
 
+#[derive(Debug, Eq, PartialEq)]
 pub struct RetryConfig {
     pub failures: bool,
     pub successes: bool,
