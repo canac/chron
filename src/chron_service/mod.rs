@@ -14,7 +14,6 @@ use lazy_static::lazy_static;
 use log::debug;
 use regex::Regex;
 use std::collections::HashMap;
-use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::str::FromStr;
@@ -339,13 +338,13 @@ impl ChronService {
     // Get the user's shell
     #[cfg(target_os = "windows")]
     fn get_user_shell() -> Result<String> {
-        Ok("Invoke-Expression")
+        Ok("Invoke-Expression".to_string())
     }
 
     // Get the user's shell
     #[cfg(not(target_os = "windows"))]
     fn get_user_shell() -> Result<String> {
-        env::var("SHELL").context("Couldn't get $SHELL environment variable")
+        std::env::var("SHELL").context("Couldn't get $SHELL environment variable")
     }
 }
 
