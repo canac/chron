@@ -96,6 +96,9 @@ pub struct ChronService {
 impl ChronService {
     // Create a new ChronService instance
     pub fn new(chron_dir: &Path) -> Result<ChronServiceLock> {
+        // Make sure that the chron directory exists
+        std::fs::create_dir_all(chron_dir)?;
+
         let db = Database::new(chron_dir)?;
         Ok(Arc::new_cyclic(|me| {
             RwLock::new(ChronService {
