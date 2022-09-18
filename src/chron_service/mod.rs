@@ -2,7 +2,7 @@ mod exec;
 mod scheduled_job;
 mod terminate_controller;
 
-use self::exec::exec_command;
+use self::exec::{exec_command, ExecStatus};
 use self::scheduled_job::ScheduledJob;
 use self::terminate_controller::TerminateController;
 use crate::database::Database;
@@ -75,12 +75,6 @@ pub struct Job {
     pub log_path: PathBuf,
     pub process: Option<Child>,
     pub job_type: JobType,
-}
-
-pub(crate) enum ExecStatus {
-    Success,
-    Failure,
-    Aborted,
 }
 
 pub struct ChronService {

@@ -1,6 +1,6 @@
 use super::terminate_controller::TerminateController;
 use super::RetryConfig;
-use crate::chron_service::{ChronServiceLock, ExecStatus, JobLock};
+use crate::chron_service::{ChronServiceLock, JobLock};
 use crate::sleep::sleep_duration;
 use anyhow::{Context, Result};
 use lazy_static::lazy_static;
@@ -9,6 +9,12 @@ use std::fs;
 use std::io::Write;
 use std::process::{self, Command, Stdio};
 use std::time::Duration;
+
+pub(crate) enum ExecStatus {
+    Success,
+    Failure,
+    Aborted,
+}
 
 // Helper to execute the specified command without retries
 fn exec_command_once(
