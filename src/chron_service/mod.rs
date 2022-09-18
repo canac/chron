@@ -141,10 +141,7 @@ impl ChronService {
 
     // Add a new job to be run on startup
     pub fn startup(&mut self, name: &str, command: &str, options: StartupJobOptions) -> Result<()> {
-        if !Self::validate_name(name) {
-            bail!("Invalid job name {name}")
-        }
-
+        Self::validate_name(name)?;
         if self.jobs.contains_key(name) {
             bail!("A job with the name {name} already exists")
         }
@@ -176,10 +173,7 @@ impl ChronService {
         command: &'cmd str,
         options: ScheduledJobOptions,
     ) -> Result<()> {
-        if !Self::validate_name(name) {
-            bail!("Invalid job name {name}")
-        }
-
+        Self::validate_name(name)?;
         if self.jobs.contains_key(name) {
             bail!("A job with the name {name} already exists")
         }
@@ -318,11 +312,15 @@ impl ChronService {
     }
 
     // Helper to validate the job name
-    fn validate_name(name: &str) -> bool {
+    fn validate_name(name: &str) -> Result<()> {
         lazy_static! {
             static ref RE: Regex = Regex::new(r"^[a-zA-Z0-9]+(-[a-zA-Z0-9]+)*$").unwrap();
         }
-        RE.is_match(name)
+        if RE.is_match(name) {
+            Ok(())
+        } else {
+            bail!("Invalid job name {name}")
+        }
     }
 
     // Helper to get the log file path for a command
@@ -403,12 +401,12 @@ mod tests {
 
     #[test]
     fn test_validate_name() {
-        assert!(ChronService::validate_name("abc"));
-        assert!(ChronService::validate_name("abc-def-ghi"));
-        assert!(ChronService::validate_name("123-456-789"));
-        assert!(!ChronService::validate_name("-abc-def-ghi"));
-        assert!(!ChronService::validate_name("abc-def-ghi-"));
-        assert!(!ChronService::validate_name("abc--def-ghi"));
-        assert!(!ChronService::validate_name("1*2$3"));
+        assert!(ChronService::validate_name("abc").is_ok());
+        assert!(ChronService::validate_name("abc-def-ghi").is_ok());
+        assert!(ChronService::validate_name("123-456-789").is_ok());
+        assert!(ChronService::validate_name("-abc-def-ghi").is_err());
+        assert!(ChronService::validate_name("abc-def-ghi-").is_err());
+        assert!(ChronService::validate_name("abc--def-ghi").is_err());
+        assert!(ChronService::validate_name("1*2$3").is_err());
     }
 }
