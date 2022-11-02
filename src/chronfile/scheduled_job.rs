@@ -1,64 +1,62 @@
 use crate::chron_service::{self, MakeUpMissedRuns, ScheduledJobOptions};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use std::time::Duration;
 
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields, untagged)]
-enum MakeUpRunsVariant {
-    Simple(bool),
-    Complex(usize),
+fn default_make_up_missed_runs() -> MakeUpMissedRuns {
+    MakeUpMissedRuns::Limited(0)
 }
 
-impl Default for MakeUpRunsVariant {
-    fn default() -> Self {
-        MakeUpRunsVariant::Simple(false)
+// Allow MakeUpMissedRuns to be deserialized from a boolean or an integer
+fn deserialize_make_up_missed_runs<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<MakeUpMissedRuns, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields, untagged)]
+    enum MakeUpRunsVariant {
+        Simple(bool),
+        Complex(usize),
     }
-}
 
-impl From<MakeUpRunsVariant> for MakeUpMissedRuns {
-    fn from(val: MakeUpRunsVariant) -> Self {
-        match val {
-            MakeUpRunsVariant::Simple(false) => MakeUpMissedRuns::Limited(0),
-            MakeUpRunsVariant::Simple(true) => MakeUpMissedRuns::Unlimited,
-            MakeUpRunsVariant::Complex(limit) => MakeUpMissedRuns::Limited(limit),
-        }
-    }
+    Ok(match MakeUpRunsVariant::deserialize(deserializer)? {
+        MakeUpRunsVariant::Simple(false) => MakeUpMissedRuns::Limited(0),
+        MakeUpRunsVariant::Simple(true) => MakeUpMissedRuns::Unlimited,
+        MakeUpRunsVariant::Complex(limit) => MakeUpMissedRuns::Limited(limit),
+    })
 }
 
 // Allow RetryConfig to be deserialized from a boolean or a full retry config
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields, untagged)]
-enum RetryVariant {
-    Simple(bool),
-    Complex {
-        limit: Option<usize>,
-        #[serde(default, with = "humantime_serde")]
-        delay: Option<Duration>,
-    },
+fn deserialize_retry_config<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<RetryConfig, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields, untagged)]
+    enum RetryConfigVariant {
+        Simple(bool),
+        Complex {
+            limit: Option<usize>,
+            #[serde(default, with = "humantime_serde")]
+            delay: Option<Duration>,
+        },
+    }
+
+    Ok(match RetryConfigVariant::deserialize(deserializer)? {
+        RetryConfigVariant::Simple(retry) => RetryConfig {
+            retry,
+            ..Default::default()
+        },
+        RetryConfigVariant::Complex { limit, delay } => RetryConfig {
+            retry: true,
+            limit,
+            delay,
+        },
+    })
 }
 
 #[derive(Debug, Default, Deserialize, Eq, PartialEq)]
-#[serde(from = "RetryVariant")]
 struct RetryConfig {
     retry: bool,
     limit: Option<usize>,
     delay: Option<Duration>,
-}
-
-impl From<RetryVariant> for RetryConfig {
-    fn from(value: RetryVariant) -> Self {
-        match value {
-            RetryVariant::Simple(retry) => RetryConfig {
-                retry,
-                ..Default::default()
-            },
-            RetryVariant::Complex { limit, delay } => RetryConfig {
-                retry: true,
-                limit,
-                delay,
-            },
-        }
-    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -68,16 +66,19 @@ pub(super) struct ScheduledJob {
     pub(super) command: String,
     #[serde(default)]
     pub(super) disabled: bool,
-    #[serde(default)]
-    make_up_missed_runs: MakeUpRunsVariant,
-    #[serde(default)]
+    #[serde(
+        default = "default_make_up_missed_runs",
+        deserialize_with = "deserialize_make_up_missed_runs"
+    )]
+    make_up_missed_runs: MakeUpMissedRuns,
+    #[serde(default, deserialize_with = "deserialize_retry_config")]
     retry: RetryConfig,
 }
 
 impl ScheduledJob {
     pub fn get_options(&self) -> ScheduledJobOptions {
         ScheduledJobOptions {
-            make_up_missed_runs: self.make_up_missed_runs.clone().into(),
+            make_up_missed_runs: self.make_up_missed_runs,
             retry: chron_service::RetryConfig {
                 failures: self.retry.retry,
                 successes: false,
@@ -100,22 +101,19 @@ mod tests {
         let make_up_missed_runs: MakeUpMissedRuns = toml::from_str::<ScheduledJob>(
             "command = 'echo'\nschedule = '* * * * * *'\nmakeUpMissedRuns = false",
         )?
-        .make_up_missed_runs
-        .into();
+        .make_up_missed_runs;
         assert_eq!(make_up_missed_runs, MakeUpMissedRuns::Limited(0));
 
         let make_up_missed_runs: MakeUpMissedRuns = toml::from_str::<ScheduledJob>(
             "command = 'echo'\nschedule = '* * * * * *'\nmakeUpMissedRuns = true",
         )?
-        .make_up_missed_runs
-        .into();
+        .make_up_missed_runs;
         assert_eq!(make_up_missed_runs, MakeUpMissedRuns::Unlimited);
 
         let make_up_missed_runs: MakeUpMissedRuns = toml::from_str::<ScheduledJob>(
             "command = 'echo'\nschedule = '* * * * * *'\nmakeUpMissedRuns = 3",
         )?
-        .make_up_missed_runs
-        .into();
+        .make_up_missed_runs;
         assert_eq!(make_up_missed_runs, MakeUpMissedRuns::Limited(3));
 
         Ok(())

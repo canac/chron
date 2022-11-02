@@ -1,23 +1,8 @@
 use crate::chron_service::{RetryConfig, StartupJobOptions};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use std::time::Duration;
 
-// Allow RawRetryConfig to be deserialized from a boolean or a full config
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields, untagged)]
-enum KeepAliveVariant {
-    Simple(bool),
-    Complex {
-        failures: Option<bool>,
-        successes: Option<bool>,
-        limit: Option<usize>,
-        #[serde(default, with = "humantime_serde")]
-        delay: Option<Duration>,
-    },
-}
-
 #[derive(Debug, Default, Deserialize, Eq, PartialEq)]
-#[serde(from = "KeepAliveVariant")]
 struct KeepAliveConfig {
     failures: Option<bool>,
     successes: Option<bool>,
@@ -25,27 +10,41 @@ struct KeepAliveConfig {
     delay: Option<Duration>,
 }
 
-impl From<KeepAliveVariant> for KeepAliveConfig {
-    fn from(value: KeepAliveVariant) -> Self {
-        match value {
-            KeepAliveVariant::Simple(value) => KeepAliveConfig {
-                failures: Some(value),
-                successes: Some(value),
-                ..Default::default()
-            },
-            KeepAliveVariant::Complex {
-                failures,
-                successes,
-                limit,
-                delay,
-            } => KeepAliveConfig {
-                failures,
-                successes,
-                limit,
-                delay,
-            },
-        }
+// Allow KeepAliveConfig to be deserialized from a boolean or a full config
+fn deserialize_keep_alive<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<KeepAliveConfig, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields, untagged)]
+    enum KeepAliveVariant {
+        Simple(bool),
+        Complex {
+            failures: Option<bool>,
+            successes: Option<bool>,
+            limit: Option<usize>,
+            #[serde(default, with = "humantime_serde")]
+            delay: Option<Duration>,
+        },
     }
+
+    Ok(match KeepAliveVariant::deserialize(deserializer)? {
+        KeepAliveVariant::Simple(value) => KeepAliveConfig {
+            failures: Some(value),
+            successes: Some(value),
+            ..Default::default()
+        },
+        KeepAliveVariant::Complex {
+            failures,
+            successes,
+            limit,
+            delay,
+        } => KeepAliveConfig {
+            failures,
+            successes,
+            limit,
+            delay,
+        },
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -54,7 +53,7 @@ pub(super) struct StartupJob {
     pub(super) command: String,
     #[serde(default)]
     pub(super) disabled: bool,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_keep_alive")]
     keep_alive: KeepAliveConfig,
 }
 
