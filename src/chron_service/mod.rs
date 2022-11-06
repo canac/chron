@@ -227,7 +227,7 @@ impl ChronService {
                     // on subsequent ticks, the last run is a regular run and
                     // the rest are makeup runs
                     let has_regular_run = iteration != 0;
-                    let num_regular_runs = if has_regular_run { 1 } else { 0 };
+                    let num_regular_runs = usize::from(has_regular_run);
                     let max_runs = match options.make_up_missed_runs {
                         MakeUpMissedRuns::Unlimited => None,
                         MakeUpMissedRuns::Limited(limit) => Some(limit + num_regular_runs),

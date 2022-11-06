@@ -58,7 +58,7 @@ async fn main() -> Result<()> {
                 match Chronfile::load(chronfile_path.clone()) {
                     Ok(chronfile) => {
                         debug!("Reloaded chronfile {}", chronfile_path.to_string_lossy());
-                        chronfile.run(&mut *chron.write().unwrap())?;
+                        chronfile.run(&mut chron.write().unwrap())?;
                     }
                     Err(err) => error!(
                         "Error reloading chronfile {}\n{err:?}",
