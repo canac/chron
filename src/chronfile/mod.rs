@@ -27,8 +27,8 @@ pub struct Chronfile {
 
 impl Chronfile {
     // Load a chronfile
-    pub fn load(path: PathBuf) -> Result<Self> {
-        let toml_str = std::fs::read_to_string(&path)
+    pub fn load(path: &PathBuf) -> Result<Self> {
+        let toml_str = std::fs::read_to_string(path)
             .with_context(|| format!("Error reading chronfile {path:?}"))?;
         toml::from_str(&toml_str)
             .with_context(|| format!("Error deserializing TOML chronfile {path:?}"))
@@ -36,7 +36,7 @@ impl Chronfile {
 
     // Register the chronfile's jobs with a ChronService instance and start it
     pub fn run(self, chron: &mut ChronService) -> Result<()> {
-        chron.reset()?;
+        chron.reset();
 
         chron.set_shell(self.config.shell);
 
@@ -70,7 +70,7 @@ mod tests {
 
     #[test]
     fn test_empty() {
-        assert!(load_chronfile("").is_ok())
+        assert!(load_chronfile("").is_ok());
     }
 
     #[test]

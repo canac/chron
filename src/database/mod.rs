@@ -53,6 +53,7 @@ impl Database {
     }
 
     // Read the last runs of a job
+    #[allow(clippy::cast_possible_wrap)]
     pub fn get_last_runs(&mut self, name: &str, count: u64) -> Result<Vec<Run>> {
         run::table
             .filter(run::dsl::name.eq(name))

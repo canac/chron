@@ -34,7 +34,7 @@ impl ScheduledJob {
         self.schedule
             .after(&after)
             .next_back()
-            .map(|run| run.into())
+            .map(std::convert::Into::into)
     }
 
     // Return the date of the next time that this scheduled job will run
@@ -42,7 +42,7 @@ impl ScheduledJob {
         self.schedule
             .after::<Local>(&self.last_tick.into())
             .next()
-            .map(|run| run.into())
+            .map(std::convert::Into::into)
     }
 
     // Tick and return a list of the elapsed runs since the last tick. The
@@ -70,7 +70,7 @@ impl ScheduledJob {
             // Until the last tick
             .take_while(|run| run > &last_tick)
             // Convert from local time to UTC
-            .map(|run| run.into())
+            .map(std::convert::Into::into)
             .collect::<Vec<_>>();
         // Sort by oldest to newest
         runs.reverse();

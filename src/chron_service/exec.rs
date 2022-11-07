@@ -10,6 +10,7 @@ use std::io::Write;
 use std::process::{self, Command, Stdio};
 use std::time::Duration;
 
+#[derive(Clone, Copy)]
 pub(crate) enum ExecStatus {
     Success,
     Failure,
@@ -78,50 +79,7 @@ fn exec_command_once(
     drop(job);
 
     // Check the status periodically until it exits without holding onto the child process lock
-    let mut poll_interval = Duration::from_millis(1);
-    let (status_code, status_code_str) = loop {
-        let mut job = job_lock.write().unwrap();
-
-        // Attempt to terminate the process if we got a terminate signal from the terminate controller
-        if terminate_controller.is_terminated() {
-            let result = job.process.as_mut().unwrap().kill();
-
-            // If the result was an InvalidInput error, it is because the process already
-            // terminated, so ignore that type of error
-            match result {
-                Ok(_) => break (None, "terminated".to_string()),
-                Err(ref err) => {
-                    // Propagate other errors
-                    if !matches!(&err.kind(), std::io::ErrorKind::InvalidInput) {
-                        result.with_context(|| {
-                            format!("Failed to terminate command {}", job.command)
-                        })?;
-                    }
-                }
-            }
-        }
-
-        // Try to read the process' exit status without blocking
-        let process = job.process.as_mut().unwrap();
-        let maybe_status = process
-            .try_wait()
-            .with_context(|| format!("Failed to get command status for command {}", job.command))?;
-        drop(job);
-        match maybe_status {
-            // Wait briefly then loop again
-            None => {
-                // Wait even longer the next time with a maximum poll delay
-                poll_interval = std::cmp::min(poll_interval * 2, Duration::from_secs(5));
-                std::thread::sleep(poll_interval);
-            }
-            Some(status) => {
-                break match status.code() {
-                    Some(code) => (Some(code), code.to_string()),
-                    None => (None, "unknown".to_string()),
-                };
-            }
-        }
-    };
+    let (status_code, status_code_str) = poll_exit_status(job_lock, terminate_controller)?;
 
     let mut job = job_lock.write().unwrap();
     job.process = None;
@@ -163,6 +121,60 @@ fn exec_command_once(
         Some(code) if code != 0 => ExecStatus::Failure,
         _ => ExecStatus::Success,
     })
+}
+
+// Check the status of a job until it exits without holding onto the child process lock
+// The first element in the tuple is the exit status if available and the second element is
+// a human-readable representation of the exit status
+fn poll_exit_status(
+    job_lock: &JobLock,
+    terminate_controller: &TerminateController,
+) -> Result<(Option<i32>, String)> {
+    // Check the status periodically until it exits without holding onto the child process lock
+    let mut poll_interval = Duration::from_millis(1);
+    loop {
+        let mut job = job_lock.write().unwrap();
+
+        // Attempt to terminate the process if we got a terminate signal from the terminate controller
+        if terminate_controller.is_terminated() {
+            let result = job.process.as_mut().unwrap().kill();
+
+            // If the result was an InvalidInput error, it is because the process already
+            // terminated, so ignore that type of error
+            match result {
+                Ok(_) => return Ok((None, "terminated".to_string())),
+                Err(ref err) => {
+                    // Propagate other errors
+                    if !matches!(&err.kind(), std::io::ErrorKind::InvalidInput) {
+                        result.with_context(|| {
+                            format!("Failed to terminate command {}", job.command)
+                        })?;
+                    }
+                }
+            }
+        }
+
+        // Try to read the process' exit status without blocking
+        let process = job.process.as_mut().unwrap();
+        let maybe_status = process
+            .try_wait()
+            .with_context(|| format!("Failed to get command status for command {}", job.command))?;
+        drop(job);
+        match maybe_status {
+            // Wait briefly then loop again
+            None => {
+                // Wait even longer the next time with a maximum poll delay
+                poll_interval = std::cmp::min(poll_interval * 2, Duration::from_secs(5));
+                std::thread::sleep(poll_interval);
+            }
+            Some(status) => {
+                return Ok(match status.code() {
+                    Some(code) => (Some(code), code.to_string()),
+                    None => (None, "unknown".to_string()),
+                });
+            }
+        }
+    }
 }
 
 // Execute the job's command, handling retries

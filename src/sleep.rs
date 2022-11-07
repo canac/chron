@@ -16,6 +16,6 @@ pub fn sleep_until(timestamp: DateTime<Utc>) {
     while let Ok(duration) = timestamp.signed_duration_since(Utc::now()).to_std() {
         // Sleep for a maximum of one minute to prevent oversleeping when
         // the computer hibernates
-        std::thread::sleep(std::cmp::min(duration, max_sleep))
+        std::thread::sleep(std::cmp::min(duration, max_sleep));
     }
 }

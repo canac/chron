@@ -129,7 +129,7 @@ impl ChronService {
 
     // Set the shell to execute commands with, None means the default shell
     pub fn set_shell(&mut self, shell: Option<String>) {
-        self.shell = shell
+        self.shell = shell;
     }
 
     // Return the Arc<RwLock> of this ChronService
@@ -166,6 +166,7 @@ impl ChronService {
     }
 
     // Add a new job to be run on the given schedule
+    #[allow(clippy::needless_pass_by_value)]
     pub fn schedule<'cmd>(
         &mut self,
         name: &str,
@@ -304,11 +305,10 @@ impl ChronService {
     }
 
     // Delete and stop all previously registered jobs
-    pub fn reset(&mut self) -> Result<()> {
+    pub fn reset(&mut self) {
         self.jobs.clear();
         self.terminate_controller.terminate();
         self.terminate_controller = TerminateController::new();
-        Ok(())
     }
 
     // Helper to validate the job name
@@ -395,7 +395,7 @@ mod tests {
 
         assert!(unlimited_retries.should_retry(ExecStatus::Success, 0));
         assert!(unlimited_retries.should_retry(ExecStatus::Success, 1000));
-        assert!(unlimited_retries.should_retry(ExecStatus::Success, 1000000));
+        assert!(unlimited_retries.should_retry(ExecStatus::Success, 1_000_000));
         assert!(unlimited_retries.should_retry(ExecStatus::Success, usize::MAX));
     }
 

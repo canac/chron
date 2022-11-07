@@ -1,3 +1,5 @@
+#![allow(clippy::unused_async)]
+
 mod http_error;
 
 use self::http_error::HttpError;
@@ -69,7 +71,7 @@ async fn status(name: Path<String>, data: Data<ThreadData>) -> Result<impl Respo
             JobType::Startup => None,
             JobType::Scheduled(scheduled_job) => scheduled_job.next_run(),
         },
-        "pid": job.process.as_ref().map(|process| process.id()),
+        "pid": job.process.as_ref().map(std::process::Child::id),
     })))
 }
 
@@ -105,12 +107,11 @@ async fn terminate(name: Path<String>, data: Data<ThreadData>) -> Result<impl Re
         .get_job(&name)
         .ok_or_else(|| HttpError::from_status_code(StatusCode::NOT_FOUND))?;
     let mut job = job_lock.write().unwrap();
-    let message = match job.process.as_mut() {
-        Some(process) => {
-            process.kill()?;
-            format!("Terminated job {name}")
-        }
-        None => format!("Job {name} isn't currently running"),
+    let message = if let Some(process) = job.process.as_mut() {
+        process.kill()?;
+        format!("Terminated job {name}")
+    } else {
+        format!("Job {name} isn't currently running")
     };
     Ok(message)
 }

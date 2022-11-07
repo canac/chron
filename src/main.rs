@@ -1,3 +1,6 @@
+#![warn(clippy::pedantic)]
+#![allow(clippy::module_name_repetitions)]
+
 #[macro_use]
 extern crate diesel;
 #[macro_use]
@@ -35,7 +38,7 @@ async fn main() -> Result<()> {
         .init()?;
 
     let chronfile_path = cli.chronfile;
-    let chronfile = Chronfile::load(chronfile_path.clone())?;
+    let chronfile = Chronfile::load(&chronfile_path)?;
 
     let project_dirs = directories::ProjectDirs::from("com", "canac", "chron")
         .context("Failed to determine application directories")?;
@@ -55,7 +58,7 @@ async fn main() -> Result<()> {
             let event = rx.recv().context("Failed to read watcher receiver")?;
             if let DebouncedEvent::Write(_) = event {
                 // Reload the chronfile
-                match Chronfile::load(chronfile_path.clone()) {
+                match Chronfile::load(&chronfile_path) {
                     Ok(chronfile) => {
                         debug!("Reloaded chronfile {}", chronfile_path.to_string_lossy());
                         chronfile.run(&mut chron.write().unwrap())?;
