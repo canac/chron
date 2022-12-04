@@ -56,7 +56,13 @@ async fn main() -> Result<()> {
             .context("Failed to start chronfile watcher")?;
         loop {
             let event = rx.recv().context("Failed to read watcher receiver")?;
-            if let DebouncedEvent::Write(_) = event {
+            if matches!(
+                event,
+                DebouncedEvent::Create(_)
+                    | DebouncedEvent::Rename(_, _)
+                    | DebouncedEvent::Remove(_)
+                    | DebouncedEvent::Write(_)
+            ) {
                 // Reload the chronfile
                 match Chronfile::load(&chronfile_path) {
                     Ok(chronfile) => {
