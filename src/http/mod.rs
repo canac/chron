@@ -96,7 +96,7 @@ async fn delete_log(name: Path<String>, data: Data<ThreadData>) -> Result<impl R
     let log_path = job_lock.read().unwrap().log_path.clone();
     drop(data_guard);
     write(log_path, "")?;
-    Ok(format!("Erased log file for {}", name))
+    Ok(format!("Erased log file for {name}"))
 }
 
 #[post("/terminate/{name}")]
