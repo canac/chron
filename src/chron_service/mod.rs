@@ -167,11 +167,11 @@ impl ChronService {
 
     // Add a new job to be run on the given schedule
     #[allow(clippy::needless_pass_by_value)]
-    pub fn schedule<'cmd>(
+    pub fn schedule(
         &mut self,
         name: &str,
         schedule_expression: &str,
-        command: &'cmd str,
+        command: &str,
         options: ScheduledJobOptions,
     ) -> Result<()> {
         Self::validate_name(name)?;
