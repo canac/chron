@@ -19,7 +19,8 @@ use crate::cli::Cli;
 use anyhow::{Context, Result};
 use clap::Parser;
 use log::{debug, error, LevelFilter};
-use notify::{DebouncedEvent, RecommendedWatcher, RecursiveMode, Watcher};
+use notify::RecursiveMode;
+use notify_debouncer_mini::new_debouncer;
 use std::thread;
 use std::time::Duration;
 
@@ -49,20 +50,15 @@ async fn main() -> Result<()> {
     thread::spawn(move || -> Result<()> {
         // Watch for changes to the chronfile
         let (tx, rx) = std::sync::mpsc::channel();
-        let mut watcher: RecommendedWatcher = Watcher::new(tx, Duration::from_secs(1))
-            .context("Failed to create chronfile watcher")?;
-        watcher
-            .watch(chronfile_path.clone(), RecursiveMode::NonRecursive)
+        let mut debouncer = new_debouncer(Duration::from_secs(1), None, tx)
+            .context("Failed to create watcher debouncer")?;
+        debouncer
+            .watcher()
+            .watch(&chronfile_path, RecursiveMode::NonRecursive)
             .context("Failed to start chronfile watcher")?;
         loop {
-            let event = rx.recv().context("Failed to read watcher receiver")?;
-            if matches!(
-                event,
-                DebouncedEvent::Create(_)
-                    | DebouncedEvent::Rename(_, _)
-                    | DebouncedEvent::Remove(_)
-                    | DebouncedEvent::Write(_)
-            ) {
+            let events = rx.recv().context("Failed to read watcher receiver")?;
+            if events.is_ok() {
                 // Reload the chronfile
                 match Chronfile::load(&chronfile_path) {
                     Ok(chronfile) => {
@@ -74,7 +70,7 @@ async fn main() -> Result<()> {
                         chronfile_path.to_string_lossy()
                     ),
                 };
-            }
+            };
         }
     });
 

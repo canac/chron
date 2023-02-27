@@ -95,11 +95,26 @@ impl ScheduledJob {
 #[cfg(test)]
 mod tests {
     use anyhow::Result;
-    use chrono::NaiveDate;
+    use chrono::{NaiveDate, NaiveDateTime};
     use cron::Schedule;
     use std::str::FromStr;
 
     use super::*;
+
+    fn date(
+        year: i32,
+        month: u32,
+        day: u32,
+        hour: u32,
+        min: u32,
+        sec: u32,
+        milli: u32,
+    ) -> NaiveDateTime {
+        NaiveDate::from_ymd_opt(year, month, day)
+            .unwrap()
+            .and_hms_milli_opt(hour, min, sec, milli)
+            .unwrap()
+    }
 
     #[test]
     fn test_period() -> Result<()> {
@@ -110,53 +125,53 @@ mod tests {
 
     #[test]
     fn test_prev_run_whole_seconds() {
-        let start_time = NaiveDate::from_ymd(2022, 1, 1).and_hms(0, 0, 1);
+        let start_time = date(2022, 1, 1, 0, 0, 1, 0);
         let job = ScheduledJob::new(
             Schedule::from_str("* * * * * *").unwrap(),
             Some(DateTime::<Utc>::from_utc(start_time, Utc)),
         );
         assert_eq!(
             job.prev_run().unwrap().naive_utc(),
-            NaiveDate::from_ymd(2022, 1, 1).and_hms(0, 0, 0)
+            date(2022, 1, 1, 0, 0, 0, 0)
         );
     }
 
     #[test]
     fn test_prev_run_fractional_seconds() {
-        let start_time = NaiveDate::from_ymd(2022, 1, 1).and_hms_milli(0, 0, 0, 1);
+        let start_time = date(2022, 1, 1, 0, 0, 0, 1);
         let job = ScheduledJob::new(
             Schedule::from_str("* * * * * *").unwrap(),
             Some(DateTime::<Utc>::from_utc(start_time, Utc)),
         );
         assert_eq!(
             job.prev_run().unwrap().naive_utc(),
-            NaiveDate::from_ymd(2022, 1, 1).and_hms(0, 0, 0)
+            date(2022, 1, 1, 0, 0, 0, 0)
         );
     }
 
     #[test]
     fn test_next_run_whole_seconds() {
-        let start_time = NaiveDate::from_ymd(2022, 1, 1).and_hms(0, 0, 0);
+        let start_time = date(2022, 1, 1, 0, 0, 0, 0);
         let job = ScheduledJob::new(
             Schedule::from_str("* * * * * *").unwrap(),
             Some(DateTime::<Utc>::from_utc(start_time, Utc)),
         );
         assert_eq!(
             job.next_run().unwrap().naive_utc(),
-            NaiveDate::from_ymd(2022, 1, 1).and_hms(0, 0, 1)
+            date(2022, 1, 1, 0, 0, 1, 0)
         );
     }
 
     #[test]
     fn test_next_run_fractional_seconds() {
-        let start_time = NaiveDate::from_ymd(2022, 1, 1).and_hms_milli(0, 0, 0, 1);
+        let start_time = date(2022, 1, 1, 0, 0, 0, 1);
         let job = ScheduledJob::new(
             Schedule::from_str("* * * * * *").unwrap(),
             Some(DateTime::<Utc>::from_utc(start_time, Utc)),
         );
         assert_eq!(
             job.next_run().unwrap().naive_utc(),
-            NaiveDate::from_ymd(2022, 1, 1).and_hms(0, 0, 1)
+            date(2022, 1, 1, 0, 0, 1, 0)
         );
     }
 }
