@@ -142,7 +142,7 @@ fn poll_exit_status(
             // If the result was an InvalidInput error, it is because the process already
             // terminated, so ignore that type of error
             match result {
-                Ok(_) => return Ok((None, "terminated".to_string())),
+                Ok(()) => return Ok((None, "terminated".to_string())),
                 Err(ref err) => {
                     // Propagate other errors
                     if !matches!(&err.kind(), std::io::ErrorKind::InvalidInput) {
