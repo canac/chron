@@ -74,6 +74,7 @@ pub struct Job {
     pub shell: String,
     pub log_path: PathBuf,
     pub process: Option<Child>,
+    #[allow(clippy::struct_field_names)]
     pub job_type: JobType,
 }
 

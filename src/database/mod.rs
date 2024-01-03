@@ -71,7 +71,7 @@ impl Database {
             .load::<Checkpoint>(&mut self.connection)
             .context("Error loading checkpoint time from the database")?;
         Ok(checkpoints
-            .get(0)
+            .first()
             .map(|checkpoint| Utc.from_utc_datetime(&checkpoint.timestamp)))
     }
 
