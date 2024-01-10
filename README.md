@@ -156,5 +156,5 @@ These are the currently available endpoints:
 - `GET /status` lists the defined jobs and whether they are running
 - `GET /status/job_name` shows more detailed information about the job `job_name`
 - `GET /log/job_name` displays the stdout and stderr logs of the job `job_name`
-- `DELETE /log/job_name` clears the lout output of the job `job_name`
+- `DELETE /log/job_name` clears the stdout and stderr logs output of the job `job_name`
 - `POST /terminate/job_name` stops the currently executing command of the job `job_name` if it is running
