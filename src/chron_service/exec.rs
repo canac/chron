@@ -1,7 +1,7 @@
+use super::sleep::sleep_duration;
 use super::terminate_controller::TerminateController;
 use super::RetryConfig;
 use crate::chron_service::{ChronServiceLock, JobLock};
-use crate::sleep::sleep_duration;
 use anyhow::{Context, Result};
 use lazy_static::lazy_static;
 use log::{debug, info, warn};

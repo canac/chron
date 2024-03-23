@@ -1,12 +1,13 @@
 mod exec;
 mod scheduled_job;
+mod sleep;
 mod terminate_controller;
 
 use self::exec::{exec_command, ExecStatus};
 use self::scheduled_job::ScheduledJob;
+use self::sleep::sleep_until;
 use self::terminate_controller::TerminateController;
 use crate::database::Database;
-use crate::sleep::sleep_until;
 use anyhow::{anyhow, bail, Context, Result};
 use chrono_humanize::{Accuracy, HumanTime, Tense};
 use cron::Schedule;
