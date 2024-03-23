@@ -225,82 +225,83 @@ impl ChronService {
                 }
 
                 let mut job_guard = job.write().unwrap();
-                if let JobType::Scheduled(scheduled_job) = &mut job_guard.job_type {
-                    // On the first tick, all of the runs are makeup runs, but
-                    // on subsequent ticks, the last run is a regular run and
-                    // the rest are makeup runs
-                    let has_regular_run = iteration != 0;
-                    let num_regular_runs = usize::from(has_regular_run);
-                    let max_runs = match options.make_up_missed_runs {
-                        MakeUpMissedRuns::Unlimited => None,
-                        MakeUpMissedRuns::Limited(limit) => Some(limit + num_regular_runs),
-                    };
+                let JobType::Scheduled(scheduled_job) = &mut job_guard.job_type else {
+                    continue;
+                };
+                // On the first tick, all of the runs are makeup runs, but
+                // on subsequent ticks, the last run is a regular run and
+                // the rest are makeup runs
+                let has_regular_run = iteration != 0;
+                let num_regular_runs = usize::from(has_regular_run);
+                let max_runs = match options.make_up_missed_runs {
+                    MakeUpMissedRuns::Unlimited => None,
+                    MakeUpMissedRuns::Limited(limit) => Some(limit + num_regular_runs),
+                };
 
-                    // Get the elapsed runs
-                    let runs = scheduled_job.tick(max_runs);
+                // Get the elapsed runs
+                let runs = scheduled_job.tick(max_runs);
 
-                    // Retry delay defaults to one sixth of the job's period
-                    let retry_delay = options
-                        .retry
-                        .delay
-                        .unwrap_or_else(|| scheduled_job.get_current_period().unwrap() / 6);
+                // Retry delay defaults to one sixth of the job's period
+                let retry_delay = options
+                    .retry
+                    .delay
+                    .unwrap_or_else(|| scheduled_job.get_current_period().unwrap() / 6);
 
-                    let next_run = scheduled_job.next_run();
-                    drop(job_guard);
+                let next_run = scheduled_job.next_run();
+                drop(job_guard);
 
-                    // Execute the most recent runs
-                    let run_count = runs.len();
-                    for (run, scheduled_timestamp) in runs.into_iter().enumerate() {
-                        // Stop executing if a terminate was requested
-                        if terminate_controller.is_terminated() {
-                            break;
-                        }
-
-                        let is_makeup_run = if has_regular_run {
-                            // The last run is a regular run, not a makeup run
-                            run != run_count - 1
-                        } else {
-                            true
-                        };
-                        if is_makeup_run {
-                            debug!(
-                                "{name}: making up missed run {} of {}",
-                                run + 1,
-                                run_count - num_regular_runs
-                            );
-                        }
-
-                        let late = HumanTime::from(scheduled_timestamp)
-                            .to_text_en(Accuracy::Precise, Tense::Present);
-                        debug!("{name}: scheduled for {scheduled_timestamp} ({late} late)");
-
-                        let completed = exec_command(
-                            &me,
-                            &job,
-                            &terminate_controller,
-                            &RetryConfig {
-                                delay: Some(retry_delay),
-                                ..options.retry
-                            },
-                        )
-                        .unwrap();
-                        if completed {
-                            me.read()
-                                .unwrap()
-                                .db
-                                .lock()
-                                .unwrap()
-                                .set_checkpoint(name.as_str(), scheduled_timestamp)
-                                .unwrap();
-                        }
+                // Execute the most recent runs
+                let run_count = runs.len();
+                for (run, scheduled_timestamp) in runs.into_iter().enumerate() {
+                    // Stop executing if a terminate was requested
+                    if terminate_controller.is_terminated() {
+                        break;
                     }
 
-                    // Wait until the next run before ticking again
-                    match next_run {
-                        Some(next_run) => sleep_until(next_run),
-                        None => break,
+                    let is_makeup_run = if has_regular_run {
+                        // The last run is a regular run, not a makeup run
+                        run != run_count - 1
+                    } else {
+                        true
                     };
+                    if is_makeup_run {
+                        debug!(
+                            "{name}: making up missed run {} of {}",
+                            run + 1,
+                            run_count - num_regular_runs
+                        );
+                    }
+
+                    let late = HumanTime::from(scheduled_timestamp)
+                        .to_text_en(Accuracy::Precise, Tense::Present);
+                    debug!("{name}: scheduled for {scheduled_timestamp} ({late} late)");
+
+                    let completed = exec_command(
+                        &me,
+                        &job,
+                        &terminate_controller,
+                        &RetryConfig {
+                            delay: Some(retry_delay),
+                            ..options.retry
+                        },
+                    )
+                    .unwrap();
+                    if completed {
+                        me.read()
+                            .unwrap()
+                            .db
+                            .lock()
+                            .unwrap()
+                            .set_checkpoint(name.as_str(), scheduled_timestamp)
+                            .unwrap();
+                    }
                 }
+
+                // Wait until the next run before ticking again
+                match next_run {
+                    Some(next_run) => sleep_until(next_run),
+                    None => break,
+                };
             }
         });
 
