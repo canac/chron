@@ -328,9 +328,7 @@ impl ChronService {
 
     // Helper to get the log file path for a command
     fn calculate_log_path(&self, name: &str) -> PathBuf {
-        let mut log_path = self.log_dir.join(name);
-        log_path.set_extension("log");
-        log_path
+        self.log_dir.join(format!("{name}.log"))
     }
 
     // Get the user's shell
