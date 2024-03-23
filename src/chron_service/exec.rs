@@ -1,13 +1,14 @@
 use super::sleep::sleep_duration;
 use super::terminate_controller::TerminateController;
-use super::RetryConfig;
-use crate::chron_service::{ChronServiceLock, JobLock};
+use super::{Job, RetryConfig};
+use crate::chron_service::ChronServiceLock;
 use anyhow::{Context, Result};
 use lazy_static::lazy_static;
 use log::{debug, info, warn};
 use std::fs;
 use std::io::Write;
 use std::process::{self, Command, Stdio};
+use std::sync::Arc;
 use std::time::Duration;
 
 #[derive(Clone, Copy)]
@@ -20,7 +21,7 @@ pub(crate) enum ExecStatus {
 // Helper to execute the specified command without retries
 fn exec_command_once(
     chron_lock: &ChronServiceLock,
-    job_lock: &JobLock,
+    job: &Arc<Job>,
     terminate_controller: &TerminateController,
 ) -> Result<ExecStatus> {
     // Don't run the job at all if it is supposed to be terminated
@@ -31,7 +32,6 @@ fn exec_command_once(
     let start_time = chrono::Local::now();
     let formatted_start_time = start_time.to_rfc3339();
 
-    let mut job = job_lock.write().unwrap();
     let name = job.name.clone();
     info!(
         "{name}: running \"{}\" with shell \"{}\"",
@@ -75,15 +75,16 @@ fn exec_command_once(
         .spawn()
         .with_context(|| format!("Failed to run command {}", job.command))?;
 
-    job.process = Some(process);
-    drop(job);
+    let mut process_guard = job.process.write().unwrap();
+    *process_guard = Some(process);
+    drop(process_guard);
 
     // Check the status periodically until it exits without holding onto the child process lock
-    let (status_code, status_code_str) = poll_exit_status(job_lock, terminate_controller)?;
+    let (status_code, status_code_str) = poll_exit_status(job, terminate_controller)?;
 
-    let mut job = job_lock.write().unwrap();
-    job.process = None;
-    drop(job);
+    let mut process_guard = job.process.write().unwrap();
+    process_guard.take();
+    drop(process_guard);
 
     // Write the log file footer that contains the execution status
     log_file.write_all(format!("{}\nStatus: {status_code_str}\n\n", *DIVIDER).as_bytes())?;
@@ -127,17 +128,17 @@ fn exec_command_once(
 // The first element in the tuple is the exit status if available and the second element is
 // a human-readable representation of the exit status
 fn poll_exit_status(
-    job_lock: &JobLock,
+    job: &Arc<Job>,
     terminate_controller: &TerminateController,
 ) -> Result<(Option<i32>, String)> {
     // Check the status periodically until it exits without holding onto the child process lock
     let mut poll_interval = Duration::from_millis(1);
     loop {
-        let mut job = job_lock.write().unwrap();
+        let mut process_guard = job.process.write().unwrap();
 
         // Attempt to terminate the process if we got a terminate signal from the terminate controller
         if terminate_controller.is_terminated() {
-            let result = job.process.as_mut().unwrap().kill();
+            let result = process_guard.as_mut().unwrap().kill();
 
             // If the result was an InvalidInput error, it is because the process already
             // terminated, so ignore that type of error
@@ -155,11 +156,11 @@ fn poll_exit_status(
         }
 
         // Try to read the process' exit status without blocking
-        let process = job.process.as_mut().unwrap();
+        let process = process_guard.as_mut().unwrap();
         let maybe_status = process
             .try_wait()
             .with_context(|| format!("Failed to get command status for command {}", job.command))?;
-        drop(job);
+        drop(process_guard);
         match maybe_status {
             // Wait briefly then loop again
             None => {
@@ -181,11 +182,11 @@ fn poll_exit_status(
 // Return a boolean indicating whether the command completed
 pub(crate) fn exec_command(
     chron_lock: &ChronServiceLock,
-    job_lock: &JobLock,
+    job: &Arc<Job>,
     terminate_controller: &TerminateController,
     retry_config: &RetryConfig,
 ) -> Result<bool> {
-    let name = job_lock.read().unwrap().name.clone();
+    let name = job.name.clone();
     let num_attempts = match retry_config.limit {
         Some(limit) => limit.to_string(),
         None => "unlimited".to_string(),
@@ -201,7 +202,7 @@ pub(crate) fn exec_command(
             debug!("{name}: retry attempt {attempt} of {num_attempts}");
         }
 
-        let status = exec_command_once(chron_lock, job_lock, terminate_controller)?;
+        let status = exec_command_once(chron_lock, job, terminate_controller)?;
         if !retry_config.should_retry(status, attempt) {
             break;
         }

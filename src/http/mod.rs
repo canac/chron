@@ -18,8 +18,7 @@ async fn status_overview(data: Data<ThreadData>) -> Result<impl Responder> {
     let data_guard = data.read().unwrap();
     let response = data_guard
         .get_jobs_iter()
-        .map(|(name, job_lock)| {
-            let job = job_lock.read().unwrap();
+        .map(|(name, job)| {
             (
                 name.clone(),
                 json!({
@@ -27,7 +26,7 @@ async fn status_overview(data: Data<ThreadData>) -> Result<impl Responder> {
                         JobType::Startup => "startup",
                         JobType::Scheduled(_) => "scheduled",
                     },
-                    "running": job.process.is_some(),
+                    "running": job.process.read().unwrap().is_some(),
                 }),
             )
         })
@@ -42,7 +41,7 @@ async fn status(name: Path<String>, data: Data<ThreadData>) -> Result<impl Respo
 
     // Make sure that this job exists before proceeding
     let data_guard = data.read().unwrap();
-    let job_lock = data_guard
+    let job = data_guard
         .get_job(&name)
         .ok_or_else(|| HttpError::from_status_code(StatusCode::NOT_FOUND))?;
 
@@ -63,26 +62,24 @@ async fn status(name: Path<String>, data: Data<ThreadData>) -> Result<impl Respo
         .collect::<Vec<_>>();
     drop(db);
 
-    let job = job_lock.read().unwrap();
     Ok(Json(json!({
         "name": name,
         "runs": runs,
         "next_run": match &job.job_type {
             JobType::Startup => None,
-            JobType::Scheduled(scheduled_job) => scheduled_job.next_run(),
+            JobType::Scheduled(scheduled_job) => scheduled_job.read().unwrap().next_run(),
         },
-        "pid": job.process.as_ref().map(std::process::Child::id),
+        "pid": job.process.read().unwrap().as_ref().map(std::process::Child::id),
     })))
 }
 
 #[get("/log/{name}")]
 async fn get_log(name: Path<String>, data: Data<ThreadData>) -> Result<impl Responder> {
     let data_guard = data.read().unwrap();
-    let job_lock = data_guard
+    let job = data_guard
         .get_job(&name)
         .ok_or_else(|| HttpError::from_status_code(StatusCode::NOT_FOUND))?;
-    let log_path = job_lock.read().unwrap().log_path.clone();
-    let log_contents = read_to_string(log_path)?;
+    let log_contents = read_to_string(job.log_path.clone())?;
     Ok(log_contents)
 }
 
@@ -90,10 +87,10 @@ async fn get_log(name: Path<String>, data: Data<ThreadData>) -> Result<impl Resp
 async fn delete_log(name: Path<String>, data: Data<ThreadData>) -> Result<impl Responder> {
     let name = name.into_inner();
     let data_guard = data.read().unwrap();
-    let job_lock = data_guard
+    let job = data_guard
         .get_job(&name)
         .ok_or_else(|| HttpError::from_status_code(StatusCode::NOT_FOUND))?;
-    let log_path = job_lock.read().unwrap().log_path.clone();
+    let log_path = job.log_path.clone();
     drop(data_guard);
     write(log_path, "")?;
     Ok(format!("Erased log file for {name}"))
@@ -103,11 +100,10 @@ async fn delete_log(name: Path<String>, data: Data<ThreadData>) -> Result<impl R
 async fn terminate(name: Path<String>, data: Data<ThreadData>) -> Result<impl Responder> {
     let name = name.into_inner();
     let data_guard = data.read().unwrap();
-    let job_lock = data_guard
+    let job = data_guard
         .get_job(&name)
         .ok_or_else(|| HttpError::from_status_code(StatusCode::NOT_FOUND))?;
-    let mut job = job_lock.write().unwrap();
-    let message = if let Some(process) = job.process.as_mut() {
+    let message = if let Some(process) = job.process.write().unwrap().as_mut() {
         process.kill()?;
         format!("Terminated job {name}")
     } else {

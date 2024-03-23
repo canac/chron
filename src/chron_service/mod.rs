@@ -23,12 +23,11 @@ use std::thread;
 use std::time::Duration;
 
 pub type ChronServiceLock = Arc<RwLock<ChronService>>;
-pub type JobLock = Arc<RwLock<Job>>;
 pub type DatabaseLock = Arc<Mutex<Database>>;
 
 pub enum JobType {
     Startup,
-    Scheduled(Box<ScheduledJob>),
+    Scheduled(RwLock<Box<ScheduledJob>>),
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -74,7 +73,7 @@ pub struct Job {
     pub command: String,
     pub shell: String,
     pub log_path: PathBuf,
-    pub process: Option<Child>,
+    pub process: RwLock<Option<Child>>,
     #[allow(clippy::struct_field_names)]
     pub job_type: JobType,
 }
@@ -82,7 +81,7 @@ pub struct Job {
 pub struct ChronService {
     log_dir: PathBuf,
     db: DatabaseLock,
-    jobs: HashMap<String, JobLock>,
+    jobs: HashMap<String, Arc<Job>>,
     default_shell: String,
     shell: Option<String>,
     terminate_controller: TerminateController,
@@ -115,12 +114,12 @@ impl ChronService {
     }
 
     // Lookup a job by name
-    pub fn get_job(&self, name: &String) -> Option<&JobLock> {
+    pub fn get_job(&self, name: &String) -> Option<&Arc<Job>> {
         self.jobs.get(name)
     }
 
     // Return an iterator of the jobs
-    pub fn get_jobs_iter(&self) -> impl Iterator<Item = (&String, &JobLock)> {
+    pub fn get_jobs_iter(&self) -> impl Iterator<Item = (&String, &Arc<Job>)> {
         self.jobs.iter()
     }
 
@@ -148,14 +147,14 @@ impl ChronService {
             bail!("A job with the name {name} already exists")
         }
 
-        let job = Arc::new(RwLock::new(Job {
+        let job = Arc::new(Job {
             name: name.to_string(),
             command: command.to_string(),
             shell: self.get_shell(),
             log_path: self.calculate_log_path(name),
-            process: None,
+            process: RwLock::new(None),
             job_type: JobType::Startup,
-        }));
+        });
         self.jobs.insert(name.to_string(), job.clone());
 
         let me = self.get_me()?;
@@ -204,14 +203,14 @@ impl ChronService {
                 .ok_or_else(|| anyhow!("Failed to calculate start time"))?;
             self.db.lock().unwrap().set_checkpoint(name, start_time)?;
         }
-        let job = Arc::new(RwLock::new(Job {
+        let job = Arc::new(Job {
             name: name.to_string(),
             command: command.to_string(),
             shell: self.get_shell(),
             log_path: self.calculate_log_path(name),
-            process: None,
-            job_type: JobType::Scheduled(Box::new(scheduled_job)),
-        }));
+            process: RwLock::new(None),
+            job_type: JobType::Scheduled(RwLock::new(Box::new(scheduled_job))),
+        });
         self.jobs.insert(name.to_string(), job.clone());
 
         let me = self.get_me()?;
@@ -224,8 +223,7 @@ impl ChronService {
                     break;
                 }
 
-                let mut job_guard = job.write().unwrap();
-                let JobType::Scheduled(scheduled_job) = &mut job_guard.job_type else {
+                let JobType::Scheduled(ref scheduled_job) = job.job_type else {
                     continue;
                 };
                 // On the first tick, all of the runs are makeup runs, but
@@ -239,15 +237,16 @@ impl ChronService {
                 };
 
                 // Get the elapsed runs
-                let runs = scheduled_job.tick(max_runs);
+                let mut job_guard = scheduled_job.write().unwrap();
+                let runs = job_guard.tick(max_runs);
 
                 // Retry delay defaults to one sixth of the job's period
                 let retry_delay = options
                     .retry
                     .delay
-                    .unwrap_or_else(|| scheduled_job.get_current_period().unwrap() / 6);
+                    .unwrap_or_else(|| job_guard.get_current_period().unwrap() / 6);
 
-                let next_run = scheduled_job.next_run();
+                let next_run = job_guard.next_run();
                 drop(job_guard);
 
                 // Execute the most recent runs
