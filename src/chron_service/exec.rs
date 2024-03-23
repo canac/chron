@@ -135,10 +135,11 @@ fn poll_exit_status(
     let mut poll_interval = Duration::from_millis(1);
     loop {
         let mut process_guard = job.process.write().unwrap();
+        let process = process_guard.as_mut().expect("process should not be None");
 
         // Attempt to terminate the process if we got a terminate signal from the terminate controller
         if terminate_controller.is_terminated() {
-            let result = process_guard.as_mut().unwrap().kill();
+            let result = process.kill();
 
             // If the result was an InvalidInput error, it is because the process already
             // terminated, so ignore that type of error
@@ -156,7 +157,6 @@ fn poll_exit_status(
         }
 
         // Try to read the process' exit status without blocking
-        let process = process_guard.as_mut().unwrap();
         let maybe_status = process
             .try_wait()
             .with_context(|| format!("Failed to get command status for command {}", job.command))?;
