@@ -49,10 +49,10 @@ fn deserialize_keep_alive<'de, D: Deserializer<'de>>(
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub(super) struct StartupJob {
-    pub(super) command: String,
+pub struct StartupJob {
+    pub command: String,
     #[serde(default)]
-    pub(super) disabled: bool,
+    pub disabled: bool,
     #[serde(default, deserialize_with = "deserialize_keep_alive")]
     keep_alive: KeepAliveConfig,
 }

@@ -7,6 +7,7 @@ use self::exec::{exec_command, ExecStatus};
 use self::scheduled_job::ScheduledJob;
 use self::sleep::sleep_until;
 use self::terminate_controller::TerminateController;
+use crate::chronfile::Chronfile;
 use crate::database::Database;
 use anyhow::{anyhow, bail, Context, Result};
 use chrono_humanize::{Accuracy, HumanTime, Tense};
@@ -26,8 +27,13 @@ pub type ChronServiceLock = Arc<RwLock<ChronService>>;
 pub type DatabaseLock = Arc<Mutex<Database>>;
 
 pub enum JobType {
-    Startup,
-    Scheduled(RwLock<Box<ScheduledJob>>),
+    Startup {
+        options: Arc<StartupJobOptions>,
+    },
+    Scheduled {
+        options: Arc<ScheduledJobOptions>,
+        scheduled_job: RwLock<Box<ScheduledJob>>,
+    },
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -52,6 +58,7 @@ impl RetryConfig {
     }
 }
 
+#[derive(PartialEq)]
 pub struct StartupJobOptions {
     pub keep_alive: RetryConfig,
 }
@@ -62,6 +69,7 @@ pub enum MakeUpMissedRuns {
     Unlimited,
 }
 
+#[derive(PartialEq)]
 pub struct ScheduledJobOptions {
     // Maximum number of missed runs to make up
     pub make_up_missed_runs: MakeUpMissedRuns,
@@ -74,6 +82,7 @@ pub struct Job {
     pub shell: String,
     pub log_path: PathBuf,
     pub process: RwLock<Option<Child>>,
+    pub terminate_controller: TerminateController,
     #[allow(clippy::struct_field_names)]
     pub job_type: JobType,
 }
@@ -84,7 +93,6 @@ pub struct ChronService {
     jobs: HashMap<String, Arc<Job>>,
     default_shell: String,
     shell: Option<String>,
-    terminate_controller: TerminateController,
     me: Weak<RwLock<ChronService>>,
 }
 
@@ -102,7 +110,6 @@ impl ChronService {
                 jobs: HashMap::new(),
                 default_shell: Self::get_user_shell().unwrap(),
                 shell: None,
-                terminate_controller: TerminateController::new(),
                 me: me.clone(),
             })
         }))
@@ -123,44 +130,90 @@ impl ChronService {
         self.jobs.iter()
     }
 
-    // Get the shell to execute commands with
-    pub fn get_shell(&self) -> String {
-        self.shell.as_ref().unwrap_or(&self.default_shell).clone()
-    }
+    // Start or start the chron service using the jobs defined in the provided chronfile
+    pub fn start(&mut self, chronfile: Chronfile) -> Result<()> {
+        let same_shell = self.shell == chronfile.config.shell;
+        self.shell = chronfile.config.shell;
 
-    // Set the shell to execute commands with, None means the default shell
-    pub fn set_shell(&mut self, shell: Option<String>) {
-        self.shell = shell;
-    }
+        let mut existing_jobs = std::mem::take(&mut self.jobs);
 
-    // Return the Arc<RwLock> of this ChronService
-    pub fn get_me(&self) -> Result<ChronServiceLock> {
-        self.me
-            .upgrade()
-            .ok_or_else(|| anyhow!("Self has been destructed"))
+        for (name, job) in chronfile.startup_jobs {
+            if job.disabled {
+                continue;
+            }
+
+            if let Some(existing_job) = existing_jobs.get(&name) {
+                // Reuse the job if the command, shell, and options are the same
+                if existing_job.command == job.command
+                    && same_shell
+                    && matches!(&existing_job.job_type, JobType::Startup { options } if **options == job.get_options())
+                {
+                    debug!("Reusing existing startup job {name}");
+                    self.jobs
+                        .insert(name.clone(), existing_jobs.remove(&name).unwrap());
+                    continue;
+                }
+            }
+
+            debug!("Registering new startup job {name}");
+            self.startup(&name, &job.command, job.get_options())?;
+        }
+
+        for (name, job) in chronfile.scheduled_jobs {
+            if job.disabled {
+                continue;
+            }
+
+            if let Some(existing_job) = existing_jobs.get(&name) {
+                // Reuse the job if the command, shell, options, and schedule are the same
+                if existing_job.command == job.command
+                    && same_shell
+                    && matches!(&existing_job.job_type, JobType::Scheduled { options, scheduled_job } if **options == job.get_options() && scheduled_job.read().unwrap().get_schedule() == job.schedule)
+                {
+                    debug!("Reusing existing scheduled job {name}");
+                    self.jobs
+                        .insert(name.clone(), existing_jobs.remove(&name).unwrap());
+                    continue;
+                }
+            }
+
+            debug!("Registering new scheduled job {name}");
+            self.schedule(&name, &job.schedule, &job.command, job.get_options())?;
+        }
+
+        // Terminate all existing jobs that weren't reused
+        for (name, existing_job) in existing_jobs {
+            debug!("Terminating job {name}");
+            existing_job.terminate_controller.terminate();
+        }
+
+        Ok(())
     }
 
     // Add a new job to be run on startup
-    pub fn startup(&mut self, name: &str, command: &str, options: StartupJobOptions) -> Result<()> {
+    fn startup(&mut self, name: &str, command: &str, options: StartupJobOptions) -> Result<()> {
         Self::validate_name(name)?;
         if self.jobs.contains_key(name) {
             bail!("A job with the name {name} already exists")
         }
 
+        let options = Arc::new(options);
         let job = Arc::new(Job {
             name: name.to_string(),
             command: command.to_string(),
             shell: self.get_shell(),
             log_path: self.calculate_log_path(name),
             process: RwLock::new(None),
-            job_type: JobType::Startup,
+            terminate_controller: TerminateController::new(),
+            job_type: JobType::Startup {
+                options: options.clone(),
+            },
         });
         self.jobs.insert(name.to_string(), job.clone());
 
         let me = self.get_me()?;
-        let terminate_controller = self.terminate_controller.clone();
         thread::spawn(move || {
-            exec_command(&me, &job, &terminate_controller, &options.keep_alive).unwrap();
+            exec_command(&me, &job, &options.keep_alive).unwrap();
         });
 
         Ok(())
@@ -168,7 +221,8 @@ impl ChronService {
 
     // Add a new job to be run on the given schedule
     #[allow(clippy::needless_pass_by_value)]
-    pub fn schedule(
+    #[allow(clippy::too_many_lines)]
+    fn schedule(
         &mut self,
         name: &str,
         schedule_expression: &str,
@@ -209,21 +263,28 @@ impl ChronService {
             shell: self.get_shell(),
             log_path: self.calculate_log_path(name),
             process: RwLock::new(None),
-            job_type: JobType::Scheduled(RwLock::new(Box::new(scheduled_job))),
+            terminate_controller: TerminateController::new(),
+            job_type: JobType::Scheduled {
+                options: Arc::new(options),
+                scheduled_job: RwLock::new(Box::new(scheduled_job)),
+            },
         });
         self.jobs.insert(name.to_string(), job.clone());
 
         let me = self.get_me()?;
-        let terminate_controller = self.terminate_controller.clone();
         let name = name.to_string();
         thread::spawn(move || {
             for iteration in 0.. {
                 // Stop executing if a terminate was requested
-                if terminate_controller.is_terminated() {
+                if job.terminate_controller.is_terminated() {
                     break;
                 }
 
-                let JobType::Scheduled(ref scheduled_job) = job.job_type else {
+                let JobType::Scheduled {
+                    ref options,
+                    ref scheduled_job,
+                } = job.job_type
+                else {
                     continue;
                 };
                 // On the first tick, all of the runs are makeup runs, but
@@ -253,7 +314,7 @@ impl ChronService {
                 let run_count = runs.len();
                 for (run, scheduled_timestamp) in runs.into_iter().enumerate() {
                     // Stop executing if a terminate was requested
-                    if terminate_controller.is_terminated() {
+                    if job.terminate_controller.is_terminated() {
                         break;
                     }
 
@@ -278,7 +339,6 @@ impl ChronService {
                     let completed = exec_command(
                         &me,
                         &job,
-                        &terminate_controller,
                         &RetryConfig {
                             delay: Some(retry_delay),
                             ..options.retry
@@ -307,11 +367,16 @@ impl ChronService {
         Ok(())
     }
 
-    // Delete and stop all previously registered jobs
-    pub fn reset(&mut self) {
-        self.jobs.clear();
-        self.terminate_controller.terminate();
-        self.terminate_controller = TerminateController::new();
+    // Get the shell to execute commands with
+    fn get_shell(&self) -> String {
+        self.shell.as_ref().unwrap_or(&self.default_shell).clone()
+    }
+
+    // Return the Arc<RwLock> of this ChronService
+    fn get_me(&self) -> Result<ChronServiceLock> {
+        self.me
+            .upgrade()
+            .ok_or_else(|| anyhow!("Self has been destructed"))
     }
 
     // Helper to validate the job name

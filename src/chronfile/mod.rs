@@ -3,7 +3,6 @@ mod startup_job;
 
 use self::scheduled_job::ScheduledJob;
 use self::startup_job::StartupJob;
-use crate::chron_service::ChronService;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::{collections::HashMap, path::PathBuf};
@@ -11,18 +10,18 @@ use std::{collections::HashMap, path::PathBuf};
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
-    shell: Option<String>,
+    pub shell: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Chronfile {
     #[serde(default)]
-    config: Config,
+    pub config: Config,
     #[serde(rename = "startup", default)]
-    startup_jobs: HashMap<String, StartupJob>,
+    pub startup_jobs: HashMap<String, StartupJob>,
     #[serde(rename = "scheduled", default)]
-    scheduled_jobs: HashMap<String, ScheduledJob>,
+    pub scheduled_jobs: HashMap<String, ScheduledJob>,
 }
 
 impl Chronfile {
@@ -32,27 +31,6 @@ impl Chronfile {
             .with_context(|| format!("Error reading chronfile {path:?}"))?;
         toml::from_str(&toml_str)
             .with_context(|| format!("Error deserializing TOML chronfile {path:?}"))
-    }
-
-    // Register the chronfile's jobs with a ChronService instance and start it
-    pub fn run(self, chron: &mut ChronService) -> Result<()> {
-        chron.reset();
-
-        chron.set_shell(self.config.shell);
-
-        self.startup_jobs
-            .into_iter()
-            .filter(|(_, job)| !job.disabled)
-            .try_for_each(|(name, job)| chron.startup(&name, &job.command, job.get_options()))?;
-
-        self.scheduled_jobs
-            .into_iter()
-            .filter(|(_, job)| !job.disabled)
-            .try_for_each(|(name, job)| {
-                chron.schedule(&name, &job.schedule, &job.command, job.get_options())
-            })?;
-
-        Ok(())
     }
 }
 

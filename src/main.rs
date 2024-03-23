@@ -43,7 +43,7 @@ async fn main() -> Result<()> {
     let project_dirs = directories::ProjectDirs::from("com", "canac", "chron")
         .context("Failed to determine application directories")?;
     let chron_lock = ChronService::new(project_dirs.data_local_dir())?;
-    chronfile.run(&mut chron_lock.write().unwrap())?;
+    chron_lock.write().unwrap().start(chronfile)?;
 
     let chron = chron_lock.clone();
     thread::spawn(move || -> Result<()> {
@@ -62,7 +62,7 @@ async fn main() -> Result<()> {
                 match Chronfile::load(&chronfile_path) {
                     Ok(chronfile) => {
                         debug!("Reloaded chronfile {}", chronfile_path.to_string_lossy());
-                        chronfile.run(&mut chron.write().unwrap())?;
+                        chron.write().unwrap().start(chronfile)?;
                     }
                     Err(err) => error!(
                         "Error reloading chronfile {}\n{err:?}",

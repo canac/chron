@@ -1,5 +1,4 @@
 use super::sleep::sleep_duration;
-use super::terminate_controller::TerminateController;
 use super::{Job, RetryConfig};
 use crate::chron_service::ChronServiceLock;
 use anyhow::{Context, Result};
@@ -19,13 +18,9 @@ pub(crate) enum ExecStatus {
 }
 
 // Helper to execute the specified command without retries
-fn exec_command_once(
-    chron_lock: &ChronServiceLock,
-    job: &Arc<Job>,
-    terminate_controller: &TerminateController,
-) -> Result<ExecStatus> {
+fn exec_command_once(chron_lock: &ChronServiceLock, job: &Arc<Job>) -> Result<ExecStatus> {
     // Don't run the job at all if it is supposed to be terminated
-    if terminate_controller.is_terminated() {
+    if job.terminate_controller.is_terminated() {
         return Ok(ExecStatus::Aborted);
     }
 
@@ -80,7 +75,7 @@ fn exec_command_once(
     drop(process_guard);
 
     // Check the status periodically until it exits without holding onto the child process lock
-    let (status_code, status_code_str) = poll_exit_status(job, terminate_controller)?;
+    let (status_code, status_code_str) = poll_exit_status(job)?;
 
     let mut process_guard = job.process.write().unwrap();
     process_guard.take();
@@ -127,10 +122,7 @@ fn exec_command_once(
 // Check the status of a job until it exits without holding onto the child process lock
 // The first element in the tuple is the exit status if available and the second element is
 // a human-readable representation of the exit status
-fn poll_exit_status(
-    job: &Arc<Job>,
-    terminate_controller: &TerminateController,
-) -> Result<(Option<i32>, String)> {
+fn poll_exit_status(job: &Arc<Job>) -> Result<(Option<i32>, String)> {
     // Check the status periodically until it exits without holding onto the child process lock
     let mut poll_interval = Duration::from_millis(1);
     loop {
@@ -138,7 +130,7 @@ fn poll_exit_status(
         let process = process_guard.as_mut().expect("process should not be None");
 
         // Attempt to terminate the process if we got a terminate signal from the terminate controller
-        if terminate_controller.is_terminated() {
+        if job.terminate_controller.is_terminated() {
             let result = process.kill();
 
             // If the result was an InvalidInput error, it is because the process already
@@ -183,7 +175,6 @@ fn poll_exit_status(
 pub(crate) fn exec_command(
     chron_lock: &ChronServiceLock,
     job: &Arc<Job>,
-    terminate_controller: &TerminateController,
     retry_config: &RetryConfig,
 ) -> Result<bool> {
     let name = job.name.clone();
@@ -193,7 +184,7 @@ pub(crate) fn exec_command(
     };
     for attempt in 0.. {
         // Stop executing if a terminate was requested
-        if terminate_controller.is_terminated() {
+        if job.terminate_controller.is_terminated() {
             // The command is only considered incomplete if it aborts
             return Ok(false);
         }
@@ -202,7 +193,7 @@ pub(crate) fn exec_command(
             debug!("{name}: retry attempt {attempt} of {num_attempts}");
         }
 
-        let status = exec_command_once(chron_lock, job, terminate_controller)?;
+        let status = exec_command_once(chron_lock, job)?;
         if !retry_config.should_retry(status, attempt) {
             break;
         }

@@ -61,11 +61,11 @@ struct RetryConfig {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub(super) struct ScheduledJob {
-    pub(super) schedule: String,
-    pub(super) command: String,
+pub struct ScheduledJob {
+    pub schedule: String,
+    pub command: String,
     #[serde(default)]
-    pub(super) disabled: bool,
+    pub disabled: bool,
     #[serde(
         default = "default_make_up_missed_runs",
         deserialize_with = "deserialize_make_up_missed_runs"

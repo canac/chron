@@ -23,8 +23,8 @@ async fn status_overview(data: Data<ThreadData>) -> Result<impl Responder> {
                 name.clone(),
                 json!({
                     "type": match job.job_type {
-                        JobType::Startup => "startup",
-                        JobType::Scheduled(_) => "scheduled",
+                        JobType::Startup { .. } => "startup",
+                        JobType::Scheduled { .. } => "scheduled",
                     },
                     "running": job.process.read().unwrap().is_some(),
                 }),
@@ -66,8 +66,8 @@ async fn status(name: Path<String>, data: Data<ThreadData>) -> Result<impl Respo
         "name": name,
         "runs": runs,
         "next_run": match &job.job_type {
-            JobType::Startup => None,
-            JobType::Scheduled(scheduled_job) => scheduled_job.read().unwrap().next_run(),
+            JobType::Startup {..} => None,
+            JobType::Scheduled { scheduled_job, .. } => scheduled_job.read().unwrap().next_run(),
         },
         "pid": job.process.read().unwrap().as_ref().map(std::process::Child::id),
     })))

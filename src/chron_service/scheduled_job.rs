@@ -20,6 +20,11 @@ impl ScheduledJob {
         }
     }
 
+    // Return the string representation of the job's schedule
+    pub fn get_schedule(&self) -> String {
+        self.schedule.to_string()
+    }
+
     // Return the date of the last time that this scheduled job ran
     pub fn prev_run(&self) -> Option<DateTime<Utc>> {
         let last_tick: DateTime<Local> = self.last_tick.into();
