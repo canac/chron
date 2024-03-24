@@ -1,5 +1,3 @@
-#![allow(clippy::unused_async)]
-
 mod http_error;
 
 use self::http_error::HttpError;

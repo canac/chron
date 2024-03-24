@@ -220,7 +220,6 @@ impl ChronService {
     }
 
     // Add a new job to be run on the given schedule
-    #[allow(clippy::needless_pass_by_value)]
     #[allow(clippy::too_many_lines)]
     fn schedule(
         &mut self,
