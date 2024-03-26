@@ -17,18 +17,25 @@ async fn status_overview(data: Data<ThreadData>) -> Result<impl Responder> {
     let response = data_guard
         .get_jobs_iter()
         .map(|(name, job)| {
-            (
+            let job_type = match job.job_type {
+                JobType::Startup { .. } => "startup",
+                JobType::Scheduled { .. } => "scheduled",
+            };
+            let mut process_guard = job.process.write().unwrap();
+            // The job is running if the process is set and try_wait returns None
+            let running = match process_guard.as_mut() {
+                Some(process) => process.try_wait()?.is_none(),
+                None => false,
+            };
+            Ok((
                 name.clone(),
                 json!({
-                    "type": match job.job_type {
-                        JobType::Startup { .. } => "startup",
-                        JobType::Scheduled { .. } => "scheduled",
-                    },
-                    "running": job.process.read().unwrap().is_some(),
+                    "type": job_type,
+                    "running": running
                 }),
-            )
+            ))
         })
-        .collect::<BTreeMap<_, _>>();
+        .collect::<Result<BTreeMap<_, _>>>()?;
 
     Ok(Json(response))
 }
