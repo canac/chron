@@ -113,23 +113,30 @@ schedule = "0 0 * * * *"
 retry = { limit = 3, delay = "5m" }
 ```
 
-### `makeUpMissedRuns`
+### `makeUpMissedRun`
 
-Scheduled jobs can set `makeUpMissedRuns` to configure whether to make up for runs that were missed between runs of `chron` and/or delays like the computer being off or asleep. For example, suppose that you have your online backup configured to run every hour. If you shutdown or hibernate your computer at 11:55am and then turn it back on or wake it up at 12:05pm, it will miss the 12pm run unless you have `makeUpMissedRuns` configured.
+By default, `chron` only executes jobs that were scheduled to run while `chron` itself was running. However, if `chron` is stopped or your computer is powered off, this can cause `chron` to miss scheduled runs. For example, suppose that you have your online backup configured to run every hour. If you shutdown your computer at 11:55am and then turn it back on at 12:05pm, `chron` would miss the 12pm execution.
 
-`makeUpMissedRuns` can be a positive integer or a boolean. If omitted, `makeUpMissedRuns` defaults to `false`.
+To change this, scheduled jobs can set `makeUpMissedRun = true`. With this configuration, on startup `chron` will check whether any jobs were scheduled to run since `chron` stopped running and run any that it finds.
 
-#### `makeUpMissedRuns = <integer>`
+`makeUpMissedRun` defaults to `false`.
 
-Set `makeUpMissedRuns` to a positive integer to impose an upper limit on the number of times that missed runs will be made up. For example, if `makeUpMissedRuns = 5` and you shutdown your computer at 11:55am on Monday and turn it back on at 12:05pm on Tuesday, your job will have missed 25 runs but only 5 of them will be made up.
+#### `makeUpMissedRun = true`
 
-#### `makeUpMissedRuns = false`
+Set `makeUpMissedRun` to `true` to enable making up a run that was scheduled to run when `chron` was not running.
 
-Set `makeUpMissedRuns` to `false` to disable making up missed runs. This is equivalent to `makeUpMissedRuns = 0`.
+#### `makeUpMissedRun = false`
 
-#### `makeUpMissedRuns = true`
+Set `makeUpMissedRun` to `false` to disable making up missed runs. `chron` will only execute jobs that were scheduled to run while `chron` was running.
 
-Set `makeUpMissedRuns` to `true` to enable making up an infinite number of missed runs. Be careful when combining this with frequently-run jobs. For example, if a job is configured to run every 5 seconds and `chron` hasn't run for 3 months, `chron` will run the job over 1.5 million times.
+#### Example
+
+```toml
+[scheduled.online-backup]
+command = "./backup.sh"
+schedule = "0 0 * * * *"
+makeUpMissedRun = true
+```
 
 ### `config`
 

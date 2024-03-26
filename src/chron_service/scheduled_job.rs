@@ -13,10 +13,10 @@ pub struct ScheduledJob {
 
 impl ScheduledJob {
     // Create a new scheduled job
-    pub fn new(schedule: Schedule, last_run: Option<DateTime<Utc>>) -> Self {
+    pub fn new(schedule: Schedule, last_tick: Option<DateTime<Utc>>) -> Self {
         ScheduledJob {
             schedule,
-            last_tick: last_run.unwrap_or_else(Utc::now),
+            last_tick: last_tick.unwrap_or_else(Utc::now),
         }
     }
 
@@ -50,15 +50,13 @@ impl ScheduledJob {
             .map(std::convert::Into::into)
     }
 
-    // Tick and return a list of the elapsed runs since the last tick. The
-    // vector contain the `max` most recent items, arranged from oldest to newest
-    pub fn tick(&mut self, max: Option<usize>) -> Vec<DateTime<Utc>> {
+    // Tick and return the oldest elapsed run since last tick, if any
+    pub fn tick(&mut self) -> Option<DateTime<Utc>> {
         let now = Utc::now();
         let last_tick = self.last_tick;
         self.last_tick = now;
 
-        let mut runs = self
-            .schedule
+        self.schedule
             // Get the runs from now
             // There is a bug in cron where reverse iterators starts counting
             // from the second rounded down, so add a second to compensate
@@ -70,16 +68,12 @@ impl ScheduledJob {
             )
             // Iterating backwards in time (from newest to oldest)
             .rev()
-            // Capped at `max`
-            .take(max.unwrap_or(usize::MAX))
             // Until the last tick
             .take_while(|run| run > &last_tick)
+            // Get the oldest run
+            .last()
             // Convert from local time to UTC
             .map(std::convert::Into::into)
-            .collect::<Vec<_>>();
-        // Sort by oldest to newest
-        runs.reverse();
-        runs
     }
 
     // Calculate the estimated duration between the last run and the next run

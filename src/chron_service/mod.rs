@@ -63,16 +63,9 @@ pub struct StartupJobOptions {
     pub keep_alive: RetryConfig,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum MakeUpMissedRuns {
-    Limited(usize),
-    Unlimited,
-}
-
 #[derive(PartialEq)]
 pub struct ScheduledJobOptions {
-    // Maximum number of missed runs to make up
-    pub make_up_missed_runs: MakeUpMissedRuns,
+    pub make_up_missed_run: bool,
     pub retry: RetryConfig,
 }
 
@@ -220,7 +213,6 @@ impl ChronService {
     }
 
     // Add a new job to be run on the given schedule
-    #[allow(clippy::too_many_lines)]
     fn schedule(
         &mut self,
         name: &str,
@@ -235,7 +227,12 @@ impl ChronService {
 
         // Resume the job scheduler from the checkpoint time, which is the
         // scheduled time of the last successful (i.e. not retried) run
-        let resume_time = self.db.lock().unwrap().get_checkpoint(name)?;
+        // However, jobs that don't make up missed runs resume now, not in the past
+        let resume_time = if options.make_up_missed_run {
+            self.db.lock().unwrap().get_checkpoint(name)?
+        } else {
+            None
+        };
 
         let schedule = Schedule::from_str(schedule_expression).with_context(|| {
             format!("Failed to parse schedule expression {schedule_expression}")
@@ -254,6 +251,7 @@ impl ChronService {
             let start_time = scheduled_job
                 .prev_run()
                 .ok_or_else(|| anyhow!("Failed to calculate start time"))?;
+            debug!("{name}: saving synthetic checkpoint {start_time}");
             self.db.lock().unwrap().set_checkpoint(name, start_time)?;
         }
         let job = Arc::new(Job {
@@ -273,7 +271,7 @@ impl ChronService {
         let me = self.get_me()?;
         let name = name.to_string();
         thread::spawn(move || {
-            for iteration in 0.. {
+            loop {
                 // Stop executing if a terminate was requested
                 if job.terminate_controller.is_terminated() {
                     break;
@@ -286,19 +284,10 @@ impl ChronService {
                 else {
                     continue;
                 };
-                // On the first tick, all of the runs are makeup runs, but
-                // on subsequent ticks, the last run is a regular run and
-                // the rest are makeup runs
-                let has_regular_run = iteration != 0;
-                let num_regular_runs = usize::from(has_regular_run);
-                let max_runs = match options.make_up_missed_runs {
-                    MakeUpMissedRuns::Unlimited => None,
-                    MakeUpMissedRuns::Limited(limit) => Some(limit + num_regular_runs),
-                };
 
-                // Get the elapsed runs
+                // Get the elapsed run since the last tick, if any
                 let mut job_guard = scheduled_job.write().unwrap();
-                let runs = job_guard.tick(max_runs);
+                let run = job_guard.tick();
 
                 // Retry delay defaults to one sixth of the job's period
                 let retry_delay = options
@@ -309,31 +298,10 @@ impl ChronService {
                 let next_run = job_guard.next_run();
                 drop(job_guard);
 
-                // Execute the most recent runs
-                let run_count = runs.len();
-                for (run, scheduled_timestamp) in runs.into_iter().enumerate() {
-                    // Stop executing if a terminate was requested
-                    if job.terminate_controller.is_terminated() {
-                        break;
-                    }
-
-                    let is_makeup_run = if has_regular_run {
-                        // The last run is a regular run, not a makeup run
-                        run != run_count - 1
-                    } else {
-                        true
-                    };
-                    if is_makeup_run {
-                        debug!(
-                            "{name}: making up missed run {} of {}",
-                            run + 1,
-                            run_count - num_regular_runs
-                        );
-                    }
-
-                    let late = HumanTime::from(scheduled_timestamp)
+                if let Some(scheduled_time) = run {
+                    let late = HumanTime::from(scheduled_time)
                         .to_text_en(Accuracy::Precise, Tense::Present);
-                    debug!("{name}: scheduled for {scheduled_timestamp} ({late} late)");
+                    debug!("{name}: scheduled for {scheduled_time} ({late} late)");
 
                     let completed = exec_command(
                         &me,
@@ -345,15 +313,16 @@ impl ChronService {
                     )
                     .unwrap();
                     if completed {
+                        debug!("{name}: updating checkpoint {scheduled_time}");
                         me.read()
                             .unwrap()
                             .db
                             .lock()
                             .unwrap()
-                            .set_checkpoint(name.as_str(), scheduled_timestamp)
+                            .set_checkpoint(name.as_str(), scheduled_time)
                             .unwrap();
                     }
-                }
+                };
 
                 // Wait until the next run before ticking again
                 match next_run {
