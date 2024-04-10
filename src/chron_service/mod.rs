@@ -12,9 +12,7 @@ use crate::database::Database;
 use anyhow::{anyhow, bail, Context, Result};
 use chrono_humanize::{Accuracy, HumanTime, Tense};
 use cron::Schedule;
-use lazy_static::lazy_static;
 use log::debug;
-use regex::Regex;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Child;
@@ -349,14 +347,17 @@ impl ChronService {
 
     // Helper to validate the job name
     fn validate_name(name: &str) -> Result<()> {
-        lazy_static! {
-            static ref RE: Regex = Regex::new(r"^[a-zA-Z0-9]+(-[a-zA-Z0-9]+)*$").unwrap();
-        }
-        if RE.is_match(name) {
-            Ok(())
-        } else {
+        if name.starts_with('-')
+            || name.ends_with('-')
+            || name.contains("--")
+            || name
+                .chars()
+                .any(|char| !char.is_ascii_alphanumeric() && char != '-')
+        {
             bail!("Invalid job name {name}")
         }
+
+        Ok(())
     }
 
     // Helper to get the log file path for a command

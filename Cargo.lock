@@ -411,7 +411,6 @@ dependencies = [
  "log",
  "notify",
  "notify-debouncer-mini",
- "regex",
  "rusqlite",
  "serde",
  "serde_json",
