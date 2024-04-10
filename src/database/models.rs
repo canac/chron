@@ -1,4 +1,5 @@
 use chrono::NaiveDateTime;
+use rusqlite::Row;
 
 /*
  * The checkpoint table records the last time that a job completed. This
@@ -8,19 +9,36 @@ use chrono::NaiveDateTime;
  * is only updated after completed runs, which is defined as runs don't need to
  * be retried according to the retry config.
  */
-#[derive(Queryable)]
-#[diesel(table_name = checkpoint)]
 pub struct Checkpoint {
     pub id: i32,
     pub job: String,
     pub timestamp: NaiveDateTime,
 }
 
-#[derive(Queryable)]
-#[diesel(table_name = run)]
+impl Checkpoint {
+    pub fn from_row(row: &Row) -> rusqlite::Result<Checkpoint> {
+        Ok(Checkpoint {
+            id: row.get("id")?,
+            job: row.get("job")?,
+            timestamp: row.get("timestamp")?,
+        })
+    }
+}
+
 pub struct Run {
     pub id: i32,
     pub name: String,
     pub timestamp: NaiveDateTime,
     pub status_code: Option<i32>,
+}
+
+impl Run {
+    pub fn from_row(row: &Row) -> rusqlite::Result<Run> {
+        Ok(Run {
+            id: row.get("id")?,
+            name: row.get("name")?,
+            timestamp: row.get("timestamp")?,
+            status_code: row.get("status_code")?,
+        })
+    }
 }
