@@ -148,7 +148,7 @@ At the top level of the chronfile, you can define configuration for the entire `
 
 ## HTTP server
 
-`chron` can optionally start a basic HTTP server that lets you see the status of your commands and perform basic operations. To enable to HTTP server, provide `chron` with the port port through the `--port` flag or the `PORT` environment variable.
+`chron` can optionally start a basic HTTP server that lets you see the status of your commands. To enable to HTTP server, provide `chron` with the port port through the `--port` flag or the `PORT` environment variable.
 
 ```sh
 $ chron chronfile.toml --port=8000
@@ -156,12 +156,5 @@ $ chron chronfile.toml --port=8000
 # Or ...
 
 $ PORT=8000 chron chronfile.toml
+open http://localhost:8000
 ```
-
-These are the currently available endpoints:
-
-- `GET /status` lists the defined jobs and whether they are running
-- `GET /status/job_name` shows more detailed information about the job `job_name`
-- `GET /log/job_name` displays the stdout and stderr logs of the job `job_name`
-- `DELETE /log/job_name` clears the stdout and stderr logs output of the job `job_name`
-- `POST /terminate/job_name` stops the currently executing command of the job `job_name` if it is running

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>chron Jobs</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <h1>Jobs</h1>
+    <table class="primary">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Command</th>
+          <th>Next Run</th>
+          <th>PID</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for JobInfo { name, command, pid, schedule, next_run, log_path } in jobs %}
+        <tr>
+          <td class="name">
+            <a href="/job/{{ name }}">{{ name }}</a>
+          </td>
+          <td class="command">
+            <a href="/job/{{ name }}">{{ command }}</a>
+          </td>
+          <td class="next-run">
+            <a href="/job/{{ name }}">
+              {%- if let Some(next_run) = next_run -%}{{ next_run }}{%- endif -%}
+            </a>
+          </td>
+          <td class="status {% if pid.is_some() %}running{% endif %}">
+            <a href="/job/{{ name }}">
+              {%- if let Some(pid) = pid -%}{{ pid }}{%- else -%}not running{%- endif -%}
+            </a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </body>
+</html>

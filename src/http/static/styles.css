@@ -1,0 +1,90 @@
+@import "https://unpkg.com/open-props";
+
+body {
+  font-family: Arial, Helvetica, sans-serif;
+  max-width: 60rem;
+  margin-block: var(--size-6);
+  margin-inline: auto;
+
+  > * {
+    padding-inline: var(--size-3);
+  }
+
+  > table {
+    padding-inline: unset;
+  }
+}
+
+table.primary {
+  width: 100%;
+  border-collapse: collapse;
+
+  tr {
+    border-bottom: var(--border-size-1) solid var(--gray-3);
+
+    &:hover {
+      background-color: var(--gray-0);
+    }
+  }
+}
+
+thead {
+  text-align: left;
+
+  th {
+    font-weight: normal;
+    color: hsl(240 3.8% 46.1%);
+  }
+}
+
+th {
+  padding: var(--size-3);
+
+  &[scope=row] {
+    text-align: left;
+  }
+}
+
+td {
+  text-wrap: nowrap;
+}
+
+td:not(:has(a)) {
+  padding: var(--size-3);
+}
+
+td a {
+  display: block;
+  padding: var(--size-3);
+}
+
+a {
+  height: 1rem;
+  color: unset;
+  text-decoration: none;
+
+  tr:has(a:hover) & {
+    text-decoration: underline;
+  }
+}
+
+.name, .command, .schedule, .logfile {
+  font-family: "Courier New", Courier, monospace;
+}
+
+.status {
+  color: var(--red-7);
+  &.running {
+    color: var(--green-7);
+  }
+}
+
+.status-code {
+  &.success {
+    color: var(--green-7);
+  }
+
+  &.failure {
+    color: var(--red-7);
+  }
+}

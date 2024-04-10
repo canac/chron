@@ -1,120 +1,106 @@
 mod http_error;
+mod job_info;
 
 use self::http_error::HttpError;
-use crate::chron_service::JobType;
-use actix_web::web::{Data, Json, Path};
-use actix_web::{delete, get, http::StatusCode, post, App, HttpServer, Responder, Result};
+use self::job_info::JobInfo;
+use actix_web::web::{Data, Path};
+use actix_web::HttpResponse;
+use actix_web::{get, http::StatusCode, App, HttpServer, Responder, Result};
+use askama::Template;
+use chrono::{DateTime, Local, TimeZone};
 use log::info;
-use serde_json::json;
-use std::collections::BTreeMap;
-use std::fs::{read_to_string, write};
 
 type ThreadData = crate::chron_service::ChronServiceLock;
 
-#[get("/status")]
-async fn status_overview(data: Data<ThreadData>) -> Result<impl Responder> {
-    let data_guard = data.read().unwrap();
-    let response = data_guard
+#[derive(Template)]
+#[template(path = "index.html")]
+struct IndexTemplate {
+    jobs: Vec<JobInfo>,
+}
+
+#[get("/static/styles.css")]
+async fn styles() -> Result<impl Responder> {
+    Ok(HttpResponse::build(StatusCode::OK)
+        .content_type("text/css; charset=utf-8")
+        .body(include_str!("./static/styles.css")))
+}
+
+#[get("/")]
+async fn index_handler(data: Data<ThreadData>) -> Result<impl Responder> {
+    let data_guard = data
+        .read()
+        .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?;
+
+    let mut jobs = data_guard
         .get_jobs_iter()
-        .map(|(name, job)| {
-            let job_type = match job.job_type {
-                JobType::Startup { .. } => "startup",
-                JobType::Scheduled { .. } => "scheduled",
-            };
-            let mut process_guard = job.process.write().unwrap();
-            // The job is running if the process is set and try_wait returns None
-            let running = match process_guard.as_mut() {
-                Some(process) => process.try_wait()?.is_none(),
-                None => false,
-            };
-            Ok((
-                name.clone(),
-                json!({
-                    "type": job_type,
-                    "running": running
-                }),
-            ))
-        })
-        .collect::<Result<BTreeMap<_, _>>>()?;
+        .map(|(name, job)| JobInfo::from_job(name, job))
+        .collect::<Result<Vec<_>>>()?;
+    jobs.sort_by(|job1, job2| job1.name.cmp(&job2.name));
 
-    Ok(Json(response))
+    let template = IndexTemplate { jobs };
+    Ok(HttpResponse::build(StatusCode::OK)
+        .content_type("text/html; charset=utf-8")
+        .body(
+            template
+                .render()
+                .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?,
+        ))
 }
 
-#[get("/status/{name}")]
-async fn status(name: Path<String>, data: Data<ThreadData>) -> Result<impl Responder> {
-    let name = name.into_inner();
-
-    // Make sure that this job exists before proceeding
-    let data_guard = data.read().unwrap();
-    let job = data_guard
-        .get_job(&name)
-        .ok_or_else(|| HttpError::from_status_code(StatusCode::NOT_FOUND))?;
-
-    // Load the last few runs from the database
-    let db = data_guard.get_db();
-    let runs = db
-        .lock()
-        .unwrap()
-        .get_last_runs(&name, 5)
-        .unwrap()
-        .into_iter()
-        .map(|run| {
-            json!({
-                "timestamp": run.timestamp,
-                "status_code": run.status_code,
-            })
-        })
-        .collect::<Vec<_>>();
-    drop(db);
-
-    Ok(Json(json!({
-        "name": name,
-        "runs": runs,
-        "next_run": match &job.job_type {
-            JobType::Startup {..} => None,
-            JobType::Scheduled { scheduled_job, .. } => scheduled_job.read().unwrap().next_run(),
-        },
-        "pid": job.process.read().unwrap().as_ref().map(std::process::Child::id),
-    })))
+struct RunInfo {
+    timestamp: DateTime<Local>,
+    status_code: Option<i32>,
+    success: bool,
 }
 
-#[get("/log/{name}")]
-async fn get_log(name: Path<String>, data: Data<ThreadData>) -> Result<impl Responder> {
-    let data_guard = data.read().unwrap();
-    let job = data_guard
-        .get_job(&name)
-        .ok_or_else(|| HttpError::from_status_code(StatusCode::NOT_FOUND))?;
-    let log_contents = read_to_string(job.log_path.clone())?;
-    Ok(log_contents)
+#[derive(Template)]
+#[template(path = "job.html")]
+struct JobTemplate {
+    job: JobInfo,
+    runs: Vec<RunInfo>,
 }
 
-#[delete("/log/{name}")]
-async fn delete_log(name: Path<String>, data: Data<ThreadData>) -> Result<impl Responder> {
-    let name = name.into_inner();
-    let data_guard = data.read().unwrap();
-    let job = data_guard
-        .get_job(&name)
-        .ok_or_else(|| HttpError::from_status_code(StatusCode::NOT_FOUND))?;
-    let log_path = job.log_path.clone();
-    drop(data_guard);
-    write(log_path, "")?;
-    Ok(format!("Erased log file for {name}"))
-}
+#[get("/job/{job}")]
+async fn job_handler(name: Path<String>, data: Data<ThreadData>) -> Result<impl Responder> {
+    let data_guard = data
+        .read()
+        .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?;
 
-#[post("/terminate/{name}")]
-async fn terminate(name: Path<String>, data: Data<ThreadData>) -> Result<impl Responder> {
-    let name = name.into_inner();
-    let data_guard = data.read().unwrap();
-    let job = data_guard
-        .get_job(&name)
-        .ok_or_else(|| HttpError::from_status_code(StatusCode::NOT_FOUND))?;
-    let message = if let Some(process) = job.process.write().unwrap().as_mut() {
-        process.kill()?;
-        format!("Terminated job {name}")
-    } else {
-        format!("Job {name} isn't currently running")
+    let Some(job) = data_guard.get_job(&name) else {
+        return Err(HttpError::from_status_code(StatusCode::NOT_FOUND).into());
     };
-    Ok(message)
+    let job = JobInfo::from_job(&name, job)?;
+    let runs = data_guard
+        .get_db()
+        .lock()
+        .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?
+        .get_last_runs(&name, 20)
+        .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?
+        .into_iter()
+        .map(|run| RunInfo {
+            timestamp: Local.from_utc_datetime(&run.timestamp),
+            status_code: run.status_code,
+            success: run.status_code == Some(0),
+        })
+        .collect();
+    let template = JobTemplate { job, runs };
+    Ok(HttpResponse::build(StatusCode::OK)
+        .content_type("text/html; charset=utf-8")
+        .body(
+            template
+                .render()
+                .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?,
+        ))
+}
+
+#[get("/job/{job}/logs")]
+async fn job_logs_handler(name: Path<String>, data: Data<ThreadData>) -> Result<impl Responder> {
+    let data_guard = data.read().unwrap();
+    let job = data_guard
+        .get_job(&name)
+        .ok_or_else(|| HttpError::from_status_code(StatusCode::NOT_FOUND))?;
+    let log_contents = std::fs::read_to_string(job.log_path.clone())?;
+    Ok(log_contents)
 }
 
 pub async fn start_server(data: ThreadData, port: u16) -> Result<(), std::io::Error> {
@@ -123,13 +109,12 @@ pub async fn start_server(data: ThreadData, port: u16) -> Result<(), std::io::Er
         let app_data = Data::new(data.clone());
         App::new()
             .app_data(app_data)
-            .service(status_overview)
-            .service(status)
-            .service(get_log)
-            .service(delete_log)
-            .service(terminate)
+            .service(styles)
+            .service(index_handler)
+            .service(job_handler)
+            .service(job_logs_handler)
     })
-    .bind(("127.0.0.1", port))?
+    .bind(("localhost", port))?
     .run()
     .await
 }

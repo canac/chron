@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>chron | {{ job.name }}</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <h1 class="name">{{ job.name }}</h1>
+
+    <table class="overview">
+      <tr>
+        <th scope="row">command</th>
+        <td class="command">{{ job.command }}</td>
+      </tr>
+      {% if let Some(schedule) = job.schedule %}
+      <tr>
+        <th scope="row">schedule</th>
+        <td class="schedule">{{ schedule }}</td>
+      </tr>
+      {% endif %}
+      {% if let Some(next_run) = job.next_run %}
+      <tr>
+        <th scope="row">next run</th>
+        <td class="next-run">{{ next_run }}</td>
+      </tr>
+      {% endif %}
+      <tr>
+        <th scope="row">PID</th>
+        <td class="status {% if job.pid.is_some() %}running{% endif %}">
+          {% if let Some(pid) = job.pid %}{{ pid }}{% else %}not running{% endif %}
+        </td>
+      </tr>
+      <tr>
+        <th scope="row">logfile</th>
+        <td class="logfile">
+          <a href="/job/{{ job.name }}/logs">{{ job.log_path.to_string_lossy() }}</a>
+        </td>
+      </tr>
+    </table>
+
+    <h2>Runs</h2>
+    <table class="primary">
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Exit code</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for RunInfo { timestamp, status_code, success } in runs %}
+        <tr>
+          <td class="timestamp">
+            {{timestamp}}
+          </td>
+          <td class="status-code {% if success %}success{% else %}failure{% endif %}">
+            {% if let Some(status_code) = status_code %}{{ status_code }}{% else %}unknown{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </body>
+</html>
