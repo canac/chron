@@ -385,7 +385,6 @@ dependencies = [
  "chrono-humanize",
  "clap",
  "clap_complete",
- "clap_complete_fig",
  "clap_mangen",
  "cron",
  "diesel",
@@ -454,16 +453,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "clap_complete_fig"
-version = "4.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "63a06158a72dbb088f864887b4409fd22600ba379f3cee3040f842234cc5c2d0"
-dependencies = [
- "clap",
- "clap_complete",
-]
-
-[[package]]
 name = "clap_derive"
 version = "4.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -487,9 +476,9 @@ dependencies = [
 
 [[package]]
 name = "clap_mangen"
-version = "0.2.9"
+version = "0.2.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb0f09a0ca8f0dd8ac92c546b426f466ef19828185c6d504c80c48c9c2768ed9"
+checksum = "e1dd95b5ebb5c1c54581dd6346f3ed6a79a3eef95dd372fc2ac13d535535300e"
 dependencies = [
  "clap",
  "roff",
