@@ -10,16 +10,12 @@ use rusqlite::Row;
  * be retried according to the retry config.
  */
 pub struct Checkpoint {
-    pub id: i32,
-    pub job: String,
     pub timestamp: NaiveDateTime,
 }
 
 impl Checkpoint {
     pub fn from_row(row: &Row) -> rusqlite::Result<Checkpoint> {
         Ok(Checkpoint {
-            id: row.get("id")?,
-            job: row.get("job")?,
             timestamp: row.get("timestamp")?,
         })
     }
@@ -27,7 +23,6 @@ impl Checkpoint {
 
 pub struct Run {
     pub id: i32,
-    pub name: String,
     pub timestamp: NaiveDateTime,
     pub status_code: Option<i32>,
 }
@@ -36,7 +31,6 @@ impl Run {
     pub fn from_row(row: &Row) -> rusqlite::Result<Run> {
         Ok(Run {
             id: row.get("id")?,
-            name: row.get("name")?,
             timestamp: row.get("timestamp")?,
             status_code: row.get("status_code")?,
         })

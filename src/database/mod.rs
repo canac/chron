@@ -68,7 +68,7 @@ CREATE TABLE IF NOT EXISTS checkpoint (
     pub fn get_last_runs(&self, name: &str, count: u64) -> Result<Vec<Run>> {
         let mut statement = self
             .connection
-            .prepare("SELECT * FROM run WHERE name = ?1 ORDER BY timestamp DESC LIMIT ?2")?;
+            .prepare("SELECT id, timestamp, status_code FROM run WHERE name = ?1 ORDER BY timestamp DESC LIMIT ?2")?;
         let runs = statement
             .query_map((name, count), Run::from_row)
             .context("Error loading last runs from the database")?
@@ -80,7 +80,7 @@ CREATE TABLE IF NOT EXISTS checkpoint (
     pub fn get_checkpoint(&self, job: &str) -> Result<Option<DateTime<Utc>>> {
         let mut statement = self
             .connection
-            .prepare("SELECT * FROM checkpoint WHERE job = ?1")?;
+            .prepare("SELECT timestamp FROM checkpoint WHERE job = ?1")?;
         let checkpoint = statement
             .query_row([job], Checkpoint::from_row)
             .optional()
