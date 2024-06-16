@@ -31,7 +31,7 @@ jobs:
             target: aarch64-pc-windows-msvc
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Set artifact name
         shell: bash
@@ -44,21 +44,23 @@ jobs:
           echo "artifact: $name"
 
       - name: Install Rust
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
-          profile: minimal
-          override: true
           target: ${{ matrix.target }}
 
-      - name: Build binary
-        uses: actions-rs/cargo@v1
-        with:
-          command: build
-          args: --release --locked --target=${{ matrix.target }} --color=always --verbose
-          use-cross: ${{ runner.os == 'Linux' }}
+      - name: Install cross
+        if: matrix.os == 'ubuntu-latest'
+        uses: taiki-e/install-action@cross
 
-      - name: Package (*nix)
+      - name: Build binary [Cross]
+        if: matrix.os == 'ubuntu-latest'
+        run: cross build --release --locked --target ${{ matrix.target }} --color=always --verbose
+
+      - name: Build binary [Cargo]
+        if: matrix.os != 'ubuntu-latest'
+        run: cargo build --release --locked --target ${{ matrix.target }} --color=always --verbose
+
+      - name: Package [*nix]
         if: runner.os != 'Windows'
         run: >
           tar -cv
@@ -67,7 +69,8 @@ jobs:
           -C contrib/ completions/ -C ../
           -C target/${{ matrix.target }}/release/ chron
           | gzip --best > '${{ env.ARTIFACT_NAME }}.tar.gz'
-      - name: Package (Windows)
+
+      - name: Package [Windows]
         if: runner.os == 'Windows'
         run: >
           7z a ${{ env.ARTIFACT_NAME }}.zip
