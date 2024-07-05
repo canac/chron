@@ -101,14 +101,14 @@ impl ChronService {
                 jobs: HashMap::new(),
                 default_shell: Self::get_user_shell().unwrap(),
                 shell: None,
-                me: me.clone(),
+                me: Weak::clone(me),
             })
         }))
     }
 
     // Return the service's database connection
     pub fn get_db(&self) -> DatabaseLock {
-        self.db.clone()
+        Arc::clone(&self.db)
     }
 
     // Lookup a job by name
@@ -197,10 +197,10 @@ impl ChronService {
             process: RwLock::new(None),
             terminate_controller: TerminateController::new(),
             job_type: JobType::Startup {
-                options: options.clone(),
+                options: Arc::clone(&options),
             },
         });
-        self.jobs.insert(name.to_string(), job.clone());
+        self.jobs.insert(name.to_string(), Arc::clone(&job));
 
         let me = self.get_me()?;
         thread::spawn(move || {
@@ -264,7 +264,7 @@ impl ChronService {
                 scheduled_job: RwLock::new(Box::new(scheduled_job)),
             },
         });
-        self.jobs.insert(name.to_string(), job.clone());
+        self.jobs.insert(name.to_string(), Arc::clone(&job));
 
         let me = self.get_me()?;
         let name = name.to_string();

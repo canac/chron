@@ -1,4 +1,4 @@
-#![warn(clippy::pedantic)]
+#![warn(clippy::clone_on_ref_ptr, clippy::pedantic)]
 #![allow(clippy::module_name_repetitions)]
 
 mod chron_service;
@@ -15,6 +15,7 @@ use clap::Parser;
 use log::{debug, error, LevelFilter};
 use notify::RecursiveMode;
 use notify_debouncer_mini::new_debouncer;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -40,7 +41,7 @@ async fn main() -> Result<()> {
     let chron_lock = ChronService::new(project_dirs.data_local_dir())?;
     chron_lock.write().unwrap().start(chronfile)?;
 
-    let chron = chron_lock.clone();
+    let chron = Arc::clone(&chron_lock);
     thread::spawn(move || -> Result<()> {
         // Watch for changes to the chronfile
         let (tx, rx) = std::sync::mpsc::channel();

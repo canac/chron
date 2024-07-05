@@ -9,6 +9,7 @@ use actix_web::{get, http::StatusCode, App, HttpServer, Responder, Result};
 use askama::Template;
 use chrono::{DateTime, Local, TimeZone};
 use log::info;
+use std::sync::Arc;
 
 type ThreadData = crate::chron_service::ChronServiceLock;
 
@@ -106,7 +107,7 @@ async fn job_logs_handler(name: Path<String>, data: Data<ThreadData>) -> Result<
 pub async fn start_server(data: ThreadData, port: u16) -> Result<(), std::io::Error> {
     info!("Starting HTTP server on port {}", port);
     HttpServer::new(move || {
-        let app_data = Data::new(data.clone());
+        let app_data = Data::new(Arc::clone(&data));
         App::new()
             .app_data(app_data)
             .service(styles)
