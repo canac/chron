@@ -74,8 +74,7 @@ pub struct Job {
     pub log_path: PathBuf,
     pub process: RwLock<Option<Child>>,
     pub terminate_controller: TerminateController,
-    #[allow(clippy::struct_field_names)]
-    pub job_type: JobType,
+    pub r#type: JobType,
 }
 
 pub struct ChronService {
@@ -137,7 +136,7 @@ impl ChronService {
                 // Reuse the job if the command, shell, and options are the same
                 if existing_job.command == job.command
                     && same_shell
-                    && matches!(&existing_job.job_type, JobType::Startup { options } if **options == job.get_options())
+                    && matches!(&existing_job.r#type, JobType::Startup { options } if **options == job.get_options())
                 {
                     debug!("Reusing existing startup job {name}");
                     self.jobs
@@ -159,7 +158,7 @@ impl ChronService {
                 // Reuse the job if the command, shell, options, and schedule are the same
                 if existing_job.command == job.command
                     && same_shell
-                    && matches!(&existing_job.job_type, JobType::Scheduled { options, scheduled_job } if **options == job.get_options() && scheduled_job.read().unwrap().get_schedule() == job.schedule)
+                    && matches!(&existing_job.r#type, JobType::Scheduled { options, scheduled_job } if **options == job.get_options() && scheduled_job.read().unwrap().get_schedule() == job.schedule)
                 {
                     debug!("Reusing existing scheduled job {name}");
                     self.jobs
@@ -196,7 +195,7 @@ impl ChronService {
             log_path: self.calculate_log_path(name),
             process: RwLock::new(None),
             terminate_controller: TerminateController::new(),
-            job_type: JobType::Startup {
+            r#type: JobType::Startup {
                 options: Arc::clone(&options),
             },
         });
@@ -259,7 +258,7 @@ impl ChronService {
             log_path: self.calculate_log_path(name),
             process: RwLock::new(None),
             terminate_controller: TerminateController::new(),
-            job_type: JobType::Scheduled {
+            r#type: JobType::Scheduled {
                 options: Arc::new(options),
                 scheduled_job: RwLock::new(Box::new(scheduled_job)),
             },
@@ -278,7 +277,7 @@ impl ChronService {
                 let JobType::Scheduled {
                     ref options,
                     ref scheduled_job,
-                } = job.job_type
+                } = job.r#type
                 else {
                     continue;
                 };

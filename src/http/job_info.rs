@@ -23,7 +23,7 @@ impl JobInfo {
         };
         drop(process_guard);
 
-        let (schedule, next_run) = match job.job_type {
+        let (schedule, next_run) = match job.r#type {
             JobType::Scheduled {
                 ref scheduled_job, ..
             } => {
