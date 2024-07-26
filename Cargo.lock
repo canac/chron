@@ -407,7 +407,6 @@ dependencies = [
  "cron",
  "directories",
  "humantime-serde",
- "lazy_static",
  "log",
  "notify",
  "notify-debouncer-mini",

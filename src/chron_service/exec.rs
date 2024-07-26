@@ -2,12 +2,11 @@ use super::sleep::sleep_duration;
 use super::{Job, RetryConfig};
 use crate::chron_service::ChronServiceLock;
 use anyhow::{Context, Result};
-use lazy_static::lazy_static;
 use log::{debug, info, warn};
 use std::fs;
 use std::io::Write;
 use std::process::{self, Command, Stdio};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 #[derive(Clone, Copy)]
@@ -19,6 +18,8 @@ pub(crate) enum ExecStatus {
 
 // Helper to execute the specified command without retries
 fn exec_command_once(chron_lock: &ChronServiceLock, job: &Arc<Job>) -> Result<ExecStatus> {
+    static DIVIDER: LazyLock<String> = LazyLock::new(|| "-".repeat(80));
+
     // Don't run the job at all if it is supposed to be terminated
     if job.terminate_controller.is_terminated() {
         return Ok(ExecStatus::Aborted);
@@ -55,9 +56,6 @@ fn exec_command_once(chron_lock: &ChronServiceLock, job: &Arc<Job>) -> Result<Ex
         .with_context(|| format!("Failed to open log file {:?}", job.log_path))?;
 
     // Write the log file header for this execution
-    lazy_static! {
-        static ref DIVIDER: String = "-".repeat(80);
-    }
     log_file.write_all(format!("{formatted_start_time}\n{}\n", *DIVIDER).as_bytes())?;
 
     // Run the command
