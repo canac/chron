@@ -16,9 +16,16 @@ impl JobInfo {
     // Generate the job info for a job
     pub(crate) fn from_job(name: &str, job: &Job) -> Result<JobInfo> {
         let mut process_guard = job.process.write().unwrap();
-        // The job is running if the process is set and try_wait returns None
+        // If the job is not running, the pid should be None
         let pid = match process_guard.as_mut() {
-            Some(process) => process.try_wait()?.map(|_| process.id()),
+            Some(process) => {
+                if process.try_wait()?.is_some() {
+                    // If the process is still set but it has terminated because wait returned a status
+                    None
+                } else {
+                    Some(process.id())
+                }
+            }
             None => None,
         };
         drop(process_guard);
