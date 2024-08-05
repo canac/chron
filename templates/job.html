@@ -28,9 +28,12 @@
       {% endif %}
       <tr>
         <th scope="row">PID</th>
-        <td class="status {% if job.pid.is_some() %}running{% endif %}">
-          {% if let Some(pid) = job.pid %}{{ pid }}{% else %}not running{% endif %}
-        </td>
+        {% match job.status %}
+        {% when ProcessStatus::Running { pid } %}
+        <td class="status running">{{ pid }}</td>
+        {% else %}
+        <td class="status">not running</td>
+        {% endmatch %}
       </tr>
       <tr>
         <th scope="row">logfile</th>
@@ -49,14 +52,19 @@
         </tr>
       </thead>
       <tbody>
-        {% for RunInfo { timestamp, status_code, success } in runs %}
+        {% for RunInfo { timestamp, status } in runs %}
         <tr>
           <td class="timestamp">
             {{timestamp}}
           </td>
-          <td class="status-code {% if success %}success{% else %}failure{% endif %}">
-            {% if let Some(status_code) = status_code %}{{ status_code }}{% else %}unknown{% endif %}
-          </td>
+          {% match status %}
+          {% when RunStatus::Running %}
+          <td class="status-code running">running</td>
+          {% when RunStatus::Completed with { success, status_code } %}
+          <td class="status-code {% if success %}success{% else %}failure{% endif %}">{{ status_code }}</td>
+          {% when RunStatus::Terminated %}
+          <td class="status-code failure">unknown</td>
+          {% endmatch %}
         </tr>
         {% endfor %}
       </tbody>

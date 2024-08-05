@@ -1,6 +1,6 @@
 use super::sleep::sleep_duration;
 use super::{Job, RetryConfig};
-use crate::chron_service::ChronServiceLock;
+use crate::chron_service::{ChronServiceLock, Process};
 use anyhow::{Context, Result};
 use log::{debug, info, warn};
 use std::fs;
@@ -68,14 +68,17 @@ fn exec_command_once(chron_lock: &ChronServiceLock, job: &Arc<Job>) -> Result<Ex
         .spawn()
         .with_context(|| format!("Failed to run command {}", job.command))?;
 
-    let mut process_guard = job.process.write().unwrap();
-    *process_guard = Some(process);
+    let mut process_guard = job.running_process.write().unwrap();
+    *process_guard = Some(Process {
+        child_process: process,
+        run_id: run.id,
+    });
     drop(process_guard);
 
     // Check the status periodically until it exits without holding onto the child process lock
     let (status_code, status_code_str) = poll_exit_status(job)?;
 
-    let mut process_guard = job.process.write().unwrap();
+    let mut process_guard = job.running_process.write().unwrap();
     process_guard.take();
     drop(process_guard);
 
@@ -124,8 +127,11 @@ fn poll_exit_status(job: &Arc<Job>) -> Result<(Option<i32>, String)> {
     // Check the status periodically until it exits without holding onto the child process lock
     let mut poll_interval = Duration::from_millis(1);
     loop {
-        let mut process_guard = job.process.write().unwrap();
-        let process = process_guard.as_mut().expect("process should not be None");
+        let mut process_guard = job.running_process.write().unwrap();
+        let process = &mut process_guard
+            .as_mut()
+            .expect("process should not be None")
+            .child_process;
 
         // Attempt to terminate the process if we got a terminate signal from the terminate controller
         if job.terminate_controller.is_terminated() {

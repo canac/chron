@@ -80,6 +80,10 @@ a {
 }
 
 .status-code {
+  &.running {
+    color: var(--yellow-7);
+  }
+
   &.success {
     color: var(--green-7);
   }

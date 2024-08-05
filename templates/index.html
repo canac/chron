@@ -18,7 +18,7 @@
         </tr>
       </thead>
       <tbody>
-        {% for JobInfo { name, command, pid, schedule, next_run, log_path } in jobs %}
+        {% for JobInfo { name, command, status, run_id, schedule, next_run, log_path } in jobs %}
         <tr>
           <td class="name">
             <a href="/job/{{ name }}">{{ name }}</a>
@@ -31,11 +31,16 @@
               {%- if let Some(next_run) = next_run -%}{{ next_run }}{%- endif -%}
             </a>
           </td>
-          <td class="status {% if pid.is_some() %}running{% endif %}">
-            <a href="/job/{{ name }}">
-              {%- if let Some(pid) = pid -%}{{ pid }}{%- else -%}not running{%- endif -%}
-            </a>
+          {% match status %}
+          {% when ProcessStatus::Running { pid } %}
+          <td class="status running">
+            <a href="/job/{{ name }}">running</a>
           </td>
+          {% else %}
+          <td class="status">
+            <a href="/job/{{ name }}">not running</a>
+          </td>
+          {% endmatch %}
         </tr>
         {% endfor %}
       </tbody>

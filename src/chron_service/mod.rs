@@ -67,12 +67,40 @@ pub struct ScheduledJobOptions {
     pub retry: RetryConfig,
 }
 
+pub struct Process {
+    pub child_process: Child,
+    pub run_id: i32,
+}
+
+pub enum ProcessStatus {
+    Running { pid: u32 },
+    Completed { status_code: i32 },
+    Terminated,
+}
+
+impl Process {
+    // Return the process' current status without blocking
+    pub fn get_status(&mut self) -> std::io::Result<ProcessStatus> {
+        let status = if let Some(status) = self.child_process.try_wait()? {
+            match status.code() {
+                Some(status_code) => ProcessStatus::Completed { status_code },
+                None => ProcessStatus::Terminated,
+            }
+        } else {
+            ProcessStatus::Running {
+                pid: self.child_process.id(),
+            }
+        };
+        Ok(status)
+    }
+}
+
 pub struct Job {
     pub name: String,
     pub command: String,
     pub shell: String,
     pub log_path: PathBuf,
-    pub process: RwLock<Option<Child>>,
+    pub running_process: RwLock<Option<Process>>,
     pub terminate_controller: TerminateController,
     pub r#type: JobType,
 }
@@ -193,7 +221,7 @@ impl ChronService {
             command: command.to_string(),
             shell: self.get_shell(),
             log_path: self.calculate_log_path(name),
-            process: RwLock::new(None),
+            running_process: RwLock::new(None),
             terminate_controller: TerminateController::new(),
             r#type: JobType::Startup {
                 options: Arc::clone(&options),
@@ -256,7 +284,7 @@ impl ChronService {
             command: command.to_string(),
             shell: self.get_shell(),
             log_path: self.calculate_log_path(name),
-            process: RwLock::new(None),
+            running_process: RwLock::new(None),
             terminate_controller: TerminateController::new(),
             r#type: JobType::Scheduled {
                 options: Arc::new(options),

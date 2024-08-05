@@ -3,6 +3,7 @@ mod job_info;
 
 use self::http_error::HttpError;
 use self::job_info::JobInfo;
+use crate::chron_service::ProcessStatus;
 use actix_web::web::{Data, Path};
 use actix_web::HttpResponse;
 use actix_web::{get, http::StatusCode, App, HttpServer, Responder, Result};
@@ -48,10 +49,25 @@ async fn index_handler(data: Data<ThreadData>) -> Result<impl Responder> {
         ))
 }
 
+enum RunStatus {
+    Running,
+    Completed { success: bool, status_code: i32 },
+    Terminated,
+}
+
+impl RunStatus {
+    // Create a completed run status from a status code
+    fn from_status_code(status_code: i32) -> Self {
+        RunStatus::Completed {
+            success: status_code == 0,
+            status_code,
+        }
+    }
+}
+
 struct RunInfo {
     timestamp: DateTime<Local>,
-    status_code: Option<i32>,
-    success: bool,
+    status: RunStatus,
 }
 
 #[derive(Template)]
@@ -70,6 +86,7 @@ async fn job_handler(name: Path<String>, data: Data<ThreadData>) -> Result<impl 
     let Some(job) = data_guard.get_job(&name) else {
         return Err(HttpError::from_status_code(StatusCode::NOT_FOUND).into());
     };
+
     let job = JobInfo::from_job(&name, job)?;
     let runs = data_guard
         .get_db()
@@ -78,10 +95,28 @@ async fn job_handler(name: Path<String>, data: Data<ThreadData>) -> Result<impl 
         .get_last_runs(&name, 20)
         .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?
         .into_iter()
-        .map(|run| RunInfo {
-            timestamp: Local.from_utc_datetime(&run.timestamp),
-            status_code: run.status_code,
-            success: run.status_code == Some(0),
+        .map(|run| {
+            // If the job is currently running, the run in the database will have a status of None,
+            // which is indistinguishable from a run that terminated without a status code. To be
+            // able to show that the current run is running in the runs table, we need to use the
+            // status from the job's current process, if any, instead of from the database.
+            let status = if job.run_id == Some(run.id) {
+                match job.status {
+                    ProcessStatus::Running { .. } => RunStatus::Running,
+                    ProcessStatus::Completed { status_code } => {
+                        RunStatus::from_status_code(status_code)
+                    }
+                    ProcessStatus::Terminated => RunStatus::Terminated,
+                }
+            } else if let Some(status_code) = run.status_code {
+                RunStatus::from_status_code(status_code)
+            } else {
+                RunStatus::Terminated
+            };
+            RunInfo {
+                timestamp: Local.from_utc_datetime(&run.timestamp),
+                status,
+            }
         })
         .collect();
     let template = JobTemplate { job, runs };
