@@ -14,7 +14,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use log::{debug, error, LevelFilter};
 use notify::RecursiveMode;
-use notify_debouncer_mini::new_debouncer;
+use notify_debouncer_mini::{new_debouncer, DebounceEventResult};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -42,32 +42,30 @@ async fn main() -> Result<()> {
     chron_lock.write().unwrap().start(chronfile)?;
 
     let chron = Arc::clone(&chron_lock);
-    thread::spawn(move || -> Result<()> {
-        // Watch for changes to the chronfile
-        let (tx, rx) = std::sync::mpsc::channel();
-        let mut debouncer = new_debouncer(Duration::from_secs(1), None, tx)
-            .context("Failed to create watcher debouncer")?;
-        debouncer
-            .watcher()
-            .watch(&chronfile_path, RecursiveMode::NonRecursive)
-            .context("Failed to start chronfile watcher")?;
-        loop {
-            let events = rx.recv().context("Failed to read watcher receiver")?;
-            if events.is_ok() {
-                // Reload the chronfile
-                match Chronfile::load(&chronfile_path) {
-                    Ok(chronfile) => {
-                        debug!("Reloaded chronfile {}", chronfile_path.to_string_lossy());
-                        chron.write().unwrap().start(chronfile)?;
-                    }
-                    Err(err) => error!(
-                        "Error reloading chronfile {}\n{err:?}",
-                        chronfile_path.to_string_lossy()
-                    ),
-                };
-            };
+    let watch_path = chronfile_path.clone();
+    let mut debouncer = new_debouncer(Duration::from_secs(1), move |res: DebounceEventResult| {
+        if res.is_err() {
+            return;
         }
-    });
+
+        match Chronfile::load(&watch_path) {
+            Ok(chronfile) => {
+                debug!("Reloaded chronfile {}", watch_path.to_string_lossy());
+                if let Err(err) = chron.write().unwrap().start(chronfile) {
+                    error!("Error starting chron\n{err:?}");
+                }
+            }
+            Err(err) => error!(
+                "Error reloading chronfile {}\n{err:?}",
+                watch_path.to_string_lossy()
+            ),
+        }
+    })
+    .context("Failed to create watcher debouncer")?;
+    debouncer
+        .watcher()
+        .watch(&chronfile_path, RecursiveMode::NonRecursive)
+        .context("Failed to start chronfile watcher")?;
 
     match cli.port {
         // Start the server, which will wait indefinitely

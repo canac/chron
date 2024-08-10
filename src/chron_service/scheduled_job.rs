@@ -127,7 +127,7 @@ mod tests {
         let start_time = date(2022, 1, 1, 0, 0, 1, 0);
         let job = ScheduledJob::new(
             Schedule::from_str("* * * * * *").unwrap(),
-            Some(DateTime::<Utc>::from_utc(start_time, Utc)),
+            Some(DateTime::<Utc>::from_naive_utc_and_offset(start_time, Utc)),
         );
         assert_eq!(
             job.prev_run().unwrap().naive_utc(),
@@ -140,7 +140,7 @@ mod tests {
         let start_time = date(2022, 1, 1, 0, 0, 0, 1);
         let job = ScheduledJob::new(
             Schedule::from_str("* * * * * *").unwrap(),
-            Some(DateTime::<Utc>::from_utc(start_time, Utc)),
+            Some(DateTime::<Utc>::from_naive_utc_and_offset(start_time, Utc)),
         );
         assert_eq!(
             job.prev_run().unwrap().naive_utc(),
@@ -153,7 +153,7 @@ mod tests {
         let start_time = date(2022, 1, 1, 0, 0, 0, 0);
         let job = ScheduledJob::new(
             Schedule::from_str("* * * * * *").unwrap(),
-            Some(DateTime::<Utc>::from_utc(start_time, Utc)),
+            Some(DateTime::<Utc>::from_naive_utc_and_offset(start_time, Utc)),
         );
         assert_eq!(
             job.next_run().unwrap().naive_utc(),
@@ -166,7 +166,7 @@ mod tests {
         let start_time = date(2022, 1, 1, 0, 0, 0, 1);
         let job = ScheduledJob::new(
             Schedule::from_str("* * * * * *").unwrap(),
-            Some(DateTime::<Utc>::from_utc(start_time, Utc)),
+            Some(DateTime::<Utc>::from_naive_utc_and_offset(start_time, Utc)),
         );
         assert_eq!(
             job.next_run().unwrap().naive_utc(),
