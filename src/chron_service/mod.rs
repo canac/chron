@@ -260,7 +260,7 @@ impl ChronService {
         };
 
         let schedule = Schedule::from_str(schedule_expression).with_context(|| {
-            format!("Failed to parse schedule expression {schedule_expression}")
+            format!("Failed to parse schedule expression {schedule_expression} in job {name}")
         })?;
         let scheduled_job = ScheduledJob::new(schedule, resume_time);
         if resume_time.is_none() {
@@ -275,7 +275,7 @@ impl ChronService {
             // checkpoint prevents this problem.
             let start_time = scheduled_job
                 .prev_run()
-                .ok_or_else(|| anyhow!("Failed to calculate start time"))?;
+                .ok_or_else(|| anyhow!("Failed to calculate start time in job {name}"))?;
             debug!("{name}: saving synthetic checkpoint {start_time}");
             self.db.lock().unwrap().set_checkpoint(name, start_time)?;
         }
