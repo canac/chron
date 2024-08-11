@@ -11,6 +11,8 @@ use askama::Template;
 use chrono::{DateTime, Local, TimeZone};
 use log::info;
 use std::sync::Arc;
+use tokio::fs::File;
+use tokio_util::io::ReaderStream;
 
 type ThreadData = crate::chron_service::ChronServiceLock;
 
@@ -22,7 +24,7 @@ struct IndexTemplate {
 
 #[get("/static/styles.css")]
 async fn styles() -> Result<impl Responder> {
-    Ok(HttpResponse::build(StatusCode::OK)
+    Ok(HttpResponse::Ok()
         .content_type("text/css; charset=utf-8")
         .body(include_str!("./static/styles.css")))
 }
@@ -40,7 +42,7 @@ async fn index_handler(data: Data<ThreadData>) -> Result<impl Responder> {
     jobs.sort_by(|job1, job2| job1.name.cmp(&job2.name));
 
     let template = IndexTemplate { jobs };
-    Ok(HttpResponse::build(StatusCode::OK)
+    Ok(HttpResponse::Ok()
         .content_type("text/html; charset=utf-8")
         .body(
             template
@@ -120,7 +122,7 @@ async fn job_handler(name: Path<String>, data: Data<ThreadData>) -> Result<impl 
         })
         .collect();
     let template = JobTemplate { job, runs };
-    Ok(HttpResponse::build(StatusCode::OK)
+    Ok(HttpResponse::Ok()
         .content_type("text/html; charset=utf-8")
         .body(
             template
@@ -131,12 +133,20 @@ async fn job_handler(name: Path<String>, data: Data<ThreadData>) -> Result<impl 
 
 #[get("/job/{job}/logs")]
 async fn job_logs_handler(name: Path<String>, data: Data<ThreadData>) -> Result<impl Responder> {
-    let data_guard = data.read().unwrap();
-    let job = data_guard
-        .get_job(&name)
-        .ok_or_else(|| HttpError::from_status_code(StatusCode::NOT_FOUND))?;
-    let log_contents = std::fs::read_to_string(job.log_path.clone())?;
-    Ok(log_contents)
+    let log_path = {
+        let data_guard = data.read().unwrap();
+        let job = data_guard
+            .get_job(&name)
+            .ok_or_else(|| HttpError::from_status_code(StatusCode::NOT_FOUND))?;
+        job.log_path.clone()
+    };
+
+    let file = File::open(log_path)
+        .await
+        .map_err(|_| HttpError::from_status_code(StatusCode::NOT_FOUND))?;
+    Ok(HttpResponse::Ok()
+        .content_type("text/plain; charset=utf-8")
+        .streaming(ReaderStream::new(file)))
 }
 
 pub async fn start_server(data: ThreadData, port: u16) -> Result<(), std::io::Error> {
