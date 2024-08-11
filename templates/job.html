@@ -63,7 +63,7 @@
           {% when RunStatus::Completed with { success, status_code } %}
           <td class="status-code {% if success %}success{% else %}failure{% endif %}">{{ status_code }}</td>
           {% when RunStatus::Terminated %}
-          <td class="status-code failure">unknown</td>
+          <td class="status-code failure">terminated</td>
           {% endmatch %}
         </tr>
         {% endfor %}
