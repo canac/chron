@@ -40,6 +40,7 @@ async fn index_handler(data: Data<ThreadData>) -> Result<impl Responder> {
         .map(|(name, job)| JobInfo::from_job(name, job))
         .collect::<Result<Vec<_>>>()?;
     jobs.sort_by(|job1, job2| job1.name.cmp(&job2.name));
+    drop(data_guard);
 
     let template = IndexTemplate { jobs };
     Ok(HttpResponse::Ok()
@@ -85,10 +86,9 @@ async fn job_handler(name: Path<String>, data: Data<ThreadData>) -> Result<impl 
         .read()
         .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?;
 
-    let Some(job) = data_guard.get_job(&name) else {
-        return Err(HttpError::from_status_code(StatusCode::NOT_FOUND).into());
-    };
-
+    let job = data_guard
+        .get_job(&name)
+        .ok_or_else(|| HttpError::from_status_code(StatusCode::NOT_FOUND))?;
     let job = JobInfo::from_job(&name, job)?;
     let runs = data_guard
         .get_db()
@@ -121,6 +121,8 @@ async fn job_handler(name: Path<String>, data: Data<ThreadData>) -> Result<impl 
             }
         })
         .collect();
+    drop(data_guard);
+
     let template = JobTemplate { job, runs };
     Ok(HttpResponse::Ok()
         .content_type("text/html; charset=utf-8")
