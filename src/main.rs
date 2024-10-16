@@ -1,5 +1,10 @@
-#![warn(clippy::clone_on_ref_ptr, clippy::pedantic)]
-#![allow(clippy::module_name_repetitions)]
+#![warn(clippy::clone_on_ref_ptr, clippy::pedantic, clippy::nursery)]
+#![allow(
+    clippy::future_not_send,
+    clippy::missing_const_for_fn,
+    clippy::module_name_repetitions,
+    clippy::significant_drop_tightening // produces false positives
+)]
 
 mod chron_service;
 mod chronfile;
@@ -51,6 +56,7 @@ async fn main() -> Result<()> {
         match Chronfile::load(&watch_path) {
             Ok(chronfile) => {
                 debug!("Reloaded chronfile {}", watch_path.to_string_lossy());
+                #[allow(clippy::significant_drop_in_scrutinee)]
                 if let Err(err) = chron.write().unwrap().start(chronfile) {
                     error!("Error starting chron\n{err:?}");
                 }

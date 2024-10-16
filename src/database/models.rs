@@ -14,8 +14,8 @@ pub struct Checkpoint {
 }
 
 impl Checkpoint {
-    pub fn from_row(row: &Row) -> rusqlite::Result<Checkpoint> {
-        Ok(Checkpoint {
+    pub fn from_row(row: &Row) -> rusqlite::Result<Self> {
+        Ok(Self {
             timestamp: row.get("timestamp")?,
         })
     }
@@ -28,8 +28,8 @@ pub struct Run {
 }
 
 impl Run {
-    pub fn from_row(row: &Row) -> rusqlite::Result<Run> {
-        Ok(Run {
+    pub fn from_row(row: &Row) -> rusqlite::Result<Self> {
+        Ok(Self {
             id: row.get("id")?,
             timestamp: row.get("timestamp")?,
             status_code: row.get("status_code")?,

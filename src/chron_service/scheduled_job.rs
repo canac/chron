@@ -14,7 +14,7 @@ pub struct ScheduledJob {
 impl ScheduledJob {
     // Create a new scheduled job
     pub fn new(schedule: Schedule, last_tick: Option<DateTime<Utc>>) -> Self {
-        ScheduledJob {
+        Self {
             schedule,
             last_tick: last_tick.unwrap_or_else(Utc::now),
         }

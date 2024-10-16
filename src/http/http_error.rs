@@ -9,13 +9,13 @@ pub enum HttpError {
 
 // HttpError essentially wraps a StatusCode
 impl HttpError {
-    pub fn from_status_code(status_code: StatusCode) -> HttpError {
-        HttpError::GenericError(status_code)
+    pub fn from_status_code(status_code: StatusCode) -> Self {
+        Self::GenericError(status_code)
     }
 
     fn reason(&self) -> String {
         match self {
-            HttpError::GenericError(status_code) => status_code
+            Self::GenericError(status_code) => status_code
                 .canonical_reason()
                 .unwrap_or("unknown")
                 .to_string(),
@@ -26,7 +26,7 @@ impl HttpError {
 impl fmt::Display for HttpError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            HttpError::GenericError(status_code) => {
+            Self::GenericError(status_code) => {
                 write!(f, "{}: {}", status_code.as_str(), self.reason())
             }
         }
@@ -42,7 +42,7 @@ impl ResponseError for HttpError {
 
     fn status_code(&self) -> StatusCode {
         match self {
-            HttpError::GenericError(status_code) => *status_code,
+            Self::GenericError(status_code) => *status_code,
         }
     }
 }

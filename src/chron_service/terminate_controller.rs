@@ -9,7 +9,7 @@ pub struct TerminateController {
 impl TerminateController {
     // Create a new TerminateController instance
     pub fn new() -> Self {
-        TerminateController {
+        Self {
             terminated: Arc::new(RwLock::new(false)),
         }
     }

@@ -49,19 +49,16 @@ impl RetryConfig {
         (match exec_status {
             ExecStatus::Aborted | ExecStatus::Failure => self.failures,
             ExecStatus::Success => self.successes,
-        } && match self.limit {
-            None => true,
-            Some(limit) => attempt < limit,
-        })
+        } && self.limit.map_or(true, |limit| attempt < limit))
     }
 }
 
-#[derive(PartialEq)]
+#[derive(Eq, PartialEq)]
 pub struct StartupJobOptions {
     pub keep_alive: RetryConfig,
 }
 
-#[derive(PartialEq)]
+#[derive(Eq, PartialEq)]
 pub struct ScheduledJobOptions {
     pub make_up_missed_run: bool,
     pub retry: RetryConfig,
@@ -82,10 +79,11 @@ impl Process {
     // Return the process' current status without blocking
     pub fn get_status(&mut self) -> std::io::Result<ProcessStatus> {
         let status = if let Some(status) = self.child_process.try_wait()? {
-            match status.code() {
-                Some(status_code) => ProcessStatus::Completed { status_code },
-                None => ProcessStatus::Terminated,
-            }
+            status
+                .code()
+                .map_or(ProcessStatus::Terminated, |status_code| {
+                    ProcessStatus::Completed { status_code }
+                })
         } else {
             ProcessStatus::Running {
                 pid: self.child_process.id(),
@@ -122,7 +120,7 @@ impl ChronService {
 
         let db = Database::new(chron_dir)?;
         Ok(Arc::new_cyclic(|me| {
-            RwLock::new(ChronService {
+            RwLock::new(Self {
                 log_dir: chron_dir.join("logs"),
                 db: Arc::new(Mutex::new(db)),
                 jobs: HashMap::new(),

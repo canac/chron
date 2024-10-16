@@ -61,7 +61,7 @@ enum RunStatus {
 impl RunStatus {
     // Create a completed run status from a status code
     fn from_status_code(status_code: i32) -> Self {
-        RunStatus::Completed {
+        Self::Completed {
             success: status_code == 0,
             status_code,
         }

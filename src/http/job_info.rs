@@ -4,7 +4,7 @@ use actix_web::{http::StatusCode, Result};
 use chrono::{DateTime, Local};
 use std::path::PathBuf;
 
-pub(crate) struct JobInfo {
+pub struct JobInfo {
     pub(crate) name: String,
     pub(crate) command: String,
     pub(crate) schedule: Option<String>,
@@ -16,7 +16,7 @@ pub(crate) struct JobInfo {
 
 impl JobInfo {
     // Generate the job info for a job
-    pub(crate) fn from_job(name: &str, job: &Job) -> Result<JobInfo> {
+    pub(crate) fn from_job(name: &str, job: &Job) -> Result<Self> {
         let mut process_guard = job
             .running_process
             .write()
@@ -38,7 +38,7 @@ impl JobInfo {
             }
             JobType::Startup { .. } => (None, None),
         };
-        Ok(JobInfo {
+        Ok(Self {
             name: name.to_string(),
             command: job.command.clone(),
             schedule,

@@ -10,7 +10,7 @@ use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 #[derive(Clone, Copy)]
-pub(crate) enum ExecStatus {
+pub enum ExecStatus {
     Success,
     Failure,
     Aborted,
@@ -165,10 +165,10 @@ fn poll_exit_status(job: &Arc<Job>) -> Result<(Option<i32>, String)> {
                 std::thread::sleep(poll_interval);
             }
             Some(status) => {
-                return Ok(match status.code() {
-                    Some(code) => (Some(code), code.to_string()),
-                    None => (None, "unknown".to_string()),
-                });
+                return Ok(status.code().map_or_else(
+                    || (None, "unknown".to_string()),
+                    |code| (Some(code), code.to_string()),
+                ));
             }
         }
     }
@@ -176,16 +176,15 @@ fn poll_exit_status(job: &Arc<Job>) -> Result<(Option<i32>, String)> {
 
 // Execute the job's command, handling retries
 // Return a boolean indicating whether the command completed
-pub(crate) fn exec_command(
+pub fn exec_command(
     chron_lock: &ChronServiceLock,
     job: &Arc<Job>,
     retry_config: &RetryConfig,
 ) -> Result<bool> {
     let name = job.name.clone();
-    let num_attempts = match retry_config.limit {
-        Some(limit) => limit.to_string(),
-        None => "unlimited".to_string(),
-    };
+    let num_attempts = retry_config
+        .limit
+        .map_or_else(|| "unlimited".to_string(), |limit| limit.to_string());
     for attempt in 0.. {
         // Stop executing if a terminate was requested
         if job.terminate_controller.is_terminated() {

@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS checkpoint (
         connection
             .execute_batch("PRAGMA busy_timeout = 1000")
             .context("Error setting busy timeout")?;
-        Ok(Database { connection })
+        Ok(Self { connection })
     }
 
     // Record a new run in the database and return the id of the new run
