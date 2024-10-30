@@ -33,3 +33,9 @@ clap_mangen = "0.2.9"
 
 [dev-dependencies]
 assert_matches = "1.5"
+
+[profile.release]
+codegen-units = 1
+lto = true
+panic = "abort"
+strip = true
