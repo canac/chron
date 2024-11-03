@@ -1,4 +1,9 @@
-#![warn(clippy::clone_on_ref_ptr, clippy::pedantic, clippy::nursery)]
+#![warn(
+    clippy::clone_on_ref_ptr,
+    clippy::str_to_string,
+    clippy::pedantic,
+    clippy::nursery
+)]
 #![allow(
     clippy::future_not_send,
     clippy::missing_const_for_fn,

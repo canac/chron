@@ -39,7 +39,7 @@ impl JobInfo {
             JobType::Startup { .. } => (None, None),
         };
         Ok(Self {
-            name: name.to_string(),
+            name: name.to_owned(),
             command: job.command.clone(),
             schedule,
             next_run: next_run.map(DateTime::from),

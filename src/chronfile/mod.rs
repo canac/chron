@@ -152,7 +152,7 @@ mod tests {
     #[test]
     fn test_config() -> Result<()> {
         let chronfile = load_chronfile("[config]\nshell = 'bash'")?;
-        assert_eq!(chronfile.config.shell, Some("bash".to_string()));
+        assert_eq!(chronfile.config.shell.as_deref(), Some("bash"));
 
         let chronfile = load_chronfile("[config]")?;
         assert_eq!(chronfile.config.shell, None);

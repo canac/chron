@@ -140,7 +140,7 @@ fn poll_exit_status(job: &Arc<Job>) -> Result<(Option<i32>, String)> {
             // If the result was an InvalidInput error, it is because the process already
             // terminated, so ignore that type of error
             match result {
-                Ok(()) => return Ok((None, "terminated".to_string())),
+                Ok(()) => return Ok((None, String::from("terminated"))),
                 Err(ref err) => {
                     // Propagate other errors
                     if !matches!(&err.kind(), std::io::ErrorKind::InvalidInput) {
@@ -166,7 +166,7 @@ fn poll_exit_status(job: &Arc<Job>) -> Result<(Option<i32>, String)> {
             }
             Some(status) => {
                 return Ok(status.code().map_or_else(
-                    || (None, "unknown".to_string()),
+                    || (None, String::from("unknown")),
                     |code| (Some(code), code.to_string()),
                 ));
             }
@@ -184,7 +184,7 @@ pub fn exec_command(
     let name = job.name.clone();
     let num_attempts = retry_config
         .limit
-        .map_or_else(|| "unlimited".to_string(), |limit| limit.to_string());
+        .map_or_else(|| String::from("unlimited"), |limit| limit.to_string());
     for attempt in 0.. {
         // Stop executing if a terminate was requested
         if job.terminate_controller.is_terminated() {

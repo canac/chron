@@ -215,8 +215,8 @@ impl ChronService {
 
         let options = Arc::new(options);
         let job = Arc::new(Job {
-            name: name.to_string(),
-            command: command.to_string(),
+            name: name.to_owned(),
+            command: command.to_owned(),
             shell: self.get_shell(),
             log_path: self.calculate_log_path(name),
             running_process: RwLock::new(None),
@@ -225,7 +225,7 @@ impl ChronService {
                 options: Arc::clone(&options),
             },
         });
-        self.jobs.insert(name.to_string(), Arc::clone(&job));
+        self.jobs.insert(name.to_owned(), Arc::clone(&job));
 
         let me = self.get_me()?;
         thread::spawn(move || {
@@ -278,8 +278,8 @@ impl ChronService {
             self.db.lock().unwrap().set_checkpoint(name, start_time)?;
         }
         let job = Arc::new(Job {
-            name: name.to_string(),
-            command: command.to_string(),
+            name: name.to_owned(),
+            command: command.to_owned(),
             shell: self.get_shell(),
             log_path: self.calculate_log_path(name),
             running_process: RwLock::new(None),
@@ -289,10 +289,10 @@ impl ChronService {
                 scheduled_job: RwLock::new(Box::new(scheduled_job)),
             },
         });
-        self.jobs.insert(name.to_string(), Arc::clone(&job));
+        self.jobs.insert(name.to_owned(), Arc::clone(&job));
 
         let me = self.get_me()?;
-        let name = name.to_string();
+        let name = name.to_owned();
         thread::spawn(move || {
             loop {
                 // Stop executing if a terminate was requested

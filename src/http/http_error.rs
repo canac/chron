@@ -18,7 +18,7 @@ impl HttpError {
             Self::GenericError(status_code) => status_code
                 .canonical_reason()
                 .unwrap_or("unknown")
-                .to_string(),
+                .to_owned(),
         }
     }
 }
