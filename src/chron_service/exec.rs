@@ -30,8 +30,13 @@ fn exec_command_once(chron_lock: &ChronServiceLock, job: &Arc<Job>) -> Result<Ex
 
     let name = job.name.clone();
     info!(
-        "{name}: running \"{}\" with shell \"{}\"",
-        job.command, job.shell
+        "{name}: running \"{}\" with shell \"{}\"{}",
+        job.command,
+        job.shell,
+        job.working_dir
+            .as_ref()
+            .map(|dir| format!(" in directory \"{}\"", dir.to_string_lossy()))
+            .unwrap_or_default()
     );
 
     // Record the run in the database
@@ -60,11 +65,16 @@ fn exec_command_once(chron_lock: &ChronServiceLock, job: &Arc<Job>) -> Result<Ex
 
     // Run the command
     let clone_log_file = || log_file.try_clone().context("Failed to clone log file");
-    let process = process::Command::new(&job.shell)
+    let mut command = process::Command::new(&job.shell);
+    command
         .args(["-c", &job.command])
         .stdin(process::Stdio::null())
         .stdout(clone_log_file()?)
-        .stderr(clone_log_file()?)
+        .stderr(clone_log_file()?);
+    if let Some(working_dir) = &job.working_dir {
+        command.current_dir(working_dir);
+    }
+    let process = command
         .spawn()
         .with_context(|| format!("Failed to run command {}", job.command))?;
 

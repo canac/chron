@@ -20,6 +20,12 @@
         <td class="schedule">{{ schedule }}</td>
       </tr>
       {% endif %}
+      {% if let Some(working_dir) = job.working_dir %}
+      <tr>
+        <th scope="row">working dir</th>
+        <td class="working-dir">{{ working_dir.to_string_lossy() }}</td>
+      </tr>
+      {% endif %}
       {% if let Some(next_run) = job.next_run %}
       <tr>
         <th scope="row">next run</th>

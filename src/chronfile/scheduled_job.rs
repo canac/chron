@@ -1,6 +1,6 @@
 use crate::chron_service::{self, ScheduledJobOptions};
 use serde::{Deserialize, Deserializer};
-use std::time::Duration;
+use std::{path::PathBuf, time::Duration};
 
 // Allow RetryConfig to be deserialized from a boolean or a full retry config
 fn deserialize_retry_config<'de, D: Deserializer<'de>>(
@@ -42,6 +42,7 @@ struct RetryConfig {
 pub struct ScheduledJob {
     pub schedule: String,
     pub command: String,
+    pub working_dir: Option<PathBuf>,
     #[serde(default)]
     pub disabled: bool,
     #[serde(default)]

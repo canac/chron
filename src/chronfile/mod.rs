@@ -1,8 +1,8 @@
 mod scheduled_job;
 mod startup_job;
 
-use self::scheduled_job::ScheduledJob;
-use self::startup_job::StartupJob;
+pub use self::scheduled_job::ScheduledJob;
+pub use self::startup_job::StartupJob;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::{collections::HashMap, path::PathBuf};
@@ -56,6 +56,7 @@ mod tests {
         let chronfile = load_chronfile(
             "[startup.startup]
             command = 'echo'
+            workingDir = '/directory'
 
             [scheduled.schedule]
             schedule = '* * * * * *'
@@ -69,14 +70,16 @@ mod tests {
                 ..
             } => {
                 assert_eq!(startup_jobs.len(), 1);
-                assert_matches!(startup_jobs.get("startup"), Some(StartupJob { command, disabled, .. }) => {
+                assert_matches!(startup_jobs.get("startup"), Some(StartupJob { command, working_dir, disabled, .. }) => {
                     assert_eq!(command, &"echo");
+                    assert_eq!(working_dir, &Some(PathBuf::from("/directory")));
                     assert_eq!(disabled, &false);
                 });
                 assert_eq!(scheduled_jobs.len(), 1);
-                assert_matches!(scheduled_jobs.get("schedule"), Some(ScheduledJob { schedule, command, disabled, .. }) => {
+                assert_matches!(scheduled_jobs.get("schedule"), Some(ScheduledJob { schedule, working_dir, command, disabled, .. }) => {
                     assert_eq!(schedule, &"* * * * * *");
                     assert_eq!(command, &"echo");
+                    assert_eq!(working_dir, &None);
                     assert_eq!(disabled, &false);
                 });
             }

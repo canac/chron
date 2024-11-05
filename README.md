@@ -18,6 +18,7 @@ Jobs are defined in a `chronfile` written in TOML. Here is a simple example:
 # Define a job named "webserver" that will run when chron starts
 [startup.webserver]
 command = "./start-server.sh"
+workingDir = "~/dev/server"
 
 # Define a job named "online-backup" that will run on a schedule
 [scheduled.online-backup]
@@ -25,7 +26,7 @@ command = "./backup.sh"
 schedule = "0 0 * * * *" # Run every hour
 ```
 
-The job name must only contain letters and numbers in kebab case, like "my-1st-job". The `command` value is the command that `chron` will execute when it is running the job. The `schedule` value is a cron expression that defines when the job should run. [crontab.guru](https://crontab.guru) is a helpful tool for creating and debugging expressions. Note that `chron` supports an additional sixth field for the year that crontab.guru does not.
+The job name must only contain letters and numbers in kebab case, like "my-1st-job". The `command` value is the command that `chron` will execute when it is running the job. The `workingDir` value optional and sets the current working directory when executing the job. "~" will be expanded to the current user's home directory. The `schedule` value is a cron expression that defines when the job should run. [crontab.guru](https://crontab.guru) is a helpful tool for creating and debugging expressions. Note that `chron` supports an additional sixth field for the year that crontab.guru does not.
 
 **Important note**: `chron` currently uses the [`cron` crate](https://github.com/zslayton/cron) for parsing schedules, and it uses Quartz-style expressions with 0 representing January and 1 representing Sunday, not 1 representing January and 0 representing Sunday like in Unix cron. Consider referring to days and weeks by their name instead of by their index to improve readability and avoid confusion.
 

@@ -2,12 +2,14 @@ mod exec;
 mod scheduled_job;
 mod sleep;
 mod terminate_controller;
+mod working_dir;
 
 use self::exec::{exec_command, ExecStatus};
 use self::scheduled_job::ScheduledJob;
 use self::sleep::sleep_until;
 use self::terminate_controller::TerminateController;
-use crate::chronfile::Chronfile;
+use self::working_dir::expand_working_dir;
+use crate::chronfile::{self, Chronfile};
 use crate::database::Database;
 use anyhow::{anyhow, bail, Context, Result};
 use chrono_humanize::{Accuracy, HumanTime, Tense};
@@ -97,6 +99,7 @@ pub struct Job {
     pub name: String,
     pub command: String,
     pub shell: String,
+    pub working_dir: Option<PathBuf>,
     pub log_path: PathBuf,
     pub running_process: RwLock<Option<Process>>,
     pub terminate_controller: TerminateController,
@@ -159,8 +162,9 @@ impl ChronService {
             }
 
             if let Some(existing_job) = existing_jobs.get(&name) {
-                // Reuse the job if the command, shell, and options are the same
+                // Reuse the job if the command, working dir, shell, and options are the same
                 if existing_job.command == job.command
+                    && existing_job.working_dir == job.working_dir
                     && same_shell
                     && matches!(&existing_job.r#type, JobType::Startup { options } if **options == job.get_options())
                 {
@@ -172,7 +176,7 @@ impl ChronService {
             }
 
             debug!("Registering new startup job {name}");
-            self.startup(&name, &job.command, job.get_options())?;
+            self.startup(&name, &job)?;
         }
 
         for (name, job) in chronfile.scheduled_jobs {
@@ -181,8 +185,9 @@ impl ChronService {
             }
 
             if let Some(existing_job) = existing_jobs.get(&name) {
-                // Reuse the job if the command, shell, options, and schedule are the same
+                // Reuse the job if the command, working dir, shell, options, and schedule are the same
                 if existing_job.command == job.command
+                    && existing_job.working_dir == job.working_dir
                     && same_shell
                     && matches!(&existing_job.r#type, JobType::Scheduled { options, scheduled_job } if **options == job.get_options() && scheduled_job.read().unwrap().get_schedule() == job.schedule)
                 {
@@ -194,7 +199,7 @@ impl ChronService {
             }
 
             debug!("Registering new scheduled job {name}");
-            self.schedule(&name, &job.schedule, &job.command, job.get_options())?;
+            self.schedule(&name, &job)?;
         }
 
         // Terminate all existing jobs that weren't reused
@@ -207,17 +212,18 @@ impl ChronService {
     }
 
     // Add a new job to be run on startup
-    fn startup(&mut self, name: &str, command: &str, options: StartupJobOptions) -> Result<()> {
+    fn startup(&mut self, name: &str, job: &chronfile::StartupJob) -> Result<()> {
         Self::validate_name(name)?;
         if self.jobs.contains_key(name) {
             bail!("A job with the name {name} already exists")
         }
 
-        let options = Arc::new(options);
+        let options = Arc::new(job.get_options());
         let job = Arc::new(Job {
             name: name.to_owned(),
-            command: command.to_owned(),
+            command: job.command.clone(),
             shell: self.get_shell(),
+            working_dir: job.working_dir.as_ref().map(expand_working_dir),
             log_path: self.calculate_log_path(name),
             running_process: RwLock::new(None),
             terminate_controller: TerminateController::new(),
@@ -236,13 +242,7 @@ impl ChronService {
     }
 
     // Add a new job to be run on the given schedule
-    fn schedule(
-        &mut self,
-        name: &str,
-        schedule_expression: &str,
-        command: &str,
-        options: ScheduledJobOptions,
-    ) -> Result<()> {
+    fn schedule(&mut self, name: &str, job: &chronfile::ScheduledJob) -> Result<()> {
         Self::validate_name(name)?;
         if self.jobs.contains_key(name) {
             bail!("A job with the name {name} already exists")
@@ -251,14 +251,18 @@ impl ChronService {
         // Resume the job scheduler from the checkpoint time, which is the
         // scheduled time of the last successful (i.e. not retried) run
         // However, jobs that don't make up missed runs resume now, not in the past
+        let options = job.get_options();
         let resume_time = if options.make_up_missed_run {
             self.db.lock().unwrap().get_checkpoint(name)?
         } else {
             None
         };
 
-        let schedule = Schedule::from_str(schedule_expression).with_context(|| {
-            format!("Failed to parse schedule expression {schedule_expression} in job {name}")
+        let schedule = Schedule::from_str(&job.schedule).with_context(|| {
+            format!(
+                "Failed to parse schedule expression {} in job {name}",
+                job.schedule
+            )
         })?;
         let scheduled_job = ScheduledJob::new(schedule, resume_time);
         if resume_time.is_none() {
@@ -279,8 +283,9 @@ impl ChronService {
         }
         let job = Arc::new(Job {
             name: name.to_owned(),
-            command: command.to_owned(),
+            command: job.command.clone(),
             shell: self.get_shell(),
+            working_dir: job.working_dir.as_ref().map(expand_working_dir),
             log_path: self.calculate_log_path(name),
             running_process: RwLock::new(None),
             terminate_controller: TerminateController::new(),

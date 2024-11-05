@@ -1,6 +1,6 @@
 use crate::chron_service::{RetryConfig, StartupJobOptions};
 use serde::{Deserialize, Deserializer};
-use std::time::Duration;
+use std::{path::PathBuf, time::Duration};
 
 #[derive(Debug, Default, Deserialize, Eq, PartialEq)]
 struct KeepAliveConfig {
@@ -51,6 +51,7 @@ fn deserialize_keep_alive<'de, D: Deserializer<'de>>(
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct StartupJob {
     pub command: String,
+    pub working_dir: Option<PathBuf>,
     #[serde(default)]
     pub disabled: bool,
     #[serde(default, deserialize_with = "deserialize_keep_alive")]
