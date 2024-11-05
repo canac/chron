@@ -54,14 +54,20 @@
       <thead>
         <tr>
           <th>Time</th>
+          <th>Execution time</th>
           <th>Exit code</th>
         </tr>
       </thead>
       <tbody>
-        {% for RunInfo { timestamp, status } in runs %}
+        {% for RunInfo { timestamp, execution_time, status } in runs %}
         <tr>
           <td class="timestamp">
-            {{timestamp}}
+            {{ timestamp }}
+          </td>
+          <td class="execution-time">
+            {% if let Some(execution_time) = execution_time %}
+              {{ execution_time|duration }}
+            {% endif %}
           </td>
           {% match status %}
           {% when RunStatus::Running %}

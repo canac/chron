@@ -21,7 +21,8 @@ impl Database {
                 r"CREATE TABLE IF NOT EXISTS run (
   id INTEGER PRIMARY KEY NOT NULL,
   name VARCHAR NOT NULL,
-  timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  ended_at DATETIME,
   status_code INTEGER
 );
 
@@ -54,9 +55,9 @@ CREATE TABLE IF NOT EXISTS checkpoint (
 
     // Set the status code of an existing run
     pub fn set_run_status_code(&self, run_id: i32, status_code: i32) -> Result<()> {
-        let mut statement = self
-            .connection
-            .prepare("UPDATE run SET status_code = ?1 WHERE id = ?2")?;
+        let mut statement = self.connection.prepare(
+            "UPDATE run SET ended_at = CURRENT_TIMESTAMP, status_code = ?1 WHERE id = ?2",
+        )?;
         statement
             .execute((status_code, run_id))
             .context("Error updating run status in the database")?;
@@ -68,7 +69,7 @@ CREATE TABLE IF NOT EXISTS checkpoint (
     pub fn get_last_runs(&self, name: &str, count: u64) -> Result<Vec<Run>> {
         let mut statement = self
             .connection
-            .prepare("SELECT id, timestamp, status_code FROM run WHERE name = ?1 ORDER BY timestamp DESC LIMIT ?2")?;
+            .prepare("SELECT id, started_at, ended_at, status_code FROM run WHERE name = ?1 ORDER BY started_at DESC LIMIT ?2")?;
         let runs = statement
             .query_map((name, count), Run::from_row)
             .context("Error loading last runs from the database")?

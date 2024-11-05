@@ -23,7 +23,8 @@ impl Checkpoint {
 
 pub struct Run {
     pub id: i32,
-    pub timestamp: NaiveDateTime,
+    pub started_at: NaiveDateTime,
+    pub ended_at: Option<NaiveDateTime>,
     pub status_code: Option<i32>,
 }
 
@@ -31,7 +32,8 @@ impl Run {
     pub fn from_row(row: &Row) -> rusqlite::Result<Self> {
         Ok(Self {
             id: row.get("id")?,
-            timestamp: row.get("timestamp")?,
+            started_at: row.get("started_at")?,
+            ended_at: row.get("ended_at")?,
             status_code: row.get("status_code")?,
         })
     }

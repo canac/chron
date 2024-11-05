@@ -1,3 +1,4 @@
+mod filters;
 mod http_error;
 mod job_info;
 
@@ -8,7 +9,7 @@ use actix_web::web::{Data, Path};
 use actix_web::HttpResponse;
 use actix_web::{get, http::StatusCode, App, HttpServer, Responder, Result};
 use askama::Template;
-use chrono::{DateTime, Local, TimeZone};
+use chrono::{DateTime, Duration, Local, TimeZone};
 use log::info;
 use std::sync::Arc;
 use tokio::fs::File;
@@ -70,6 +71,7 @@ impl RunStatus {
 
 struct RunInfo {
     timestamp: DateTime<Local>,
+    execution_time: Option<Duration>,
     status: RunStatus,
 }
 
@@ -115,8 +117,14 @@ async fn job_handler(name: Path<String>, data: Data<ThreadData>) -> Result<impl 
             } else {
                 RunStatus::Terminated
             };
+            let started_at = Local.from_utc_datetime(&run.started_at);
             RunInfo {
-                timestamp: Local.from_utc_datetime(&run.timestamp),
+                timestamp: started_at,
+                execution_time: run.ended_at.map(|timestamp| {
+                    Local
+                        .from_utc_datetime(&timestamp)
+                        .signed_duration_since(started_at)
+                }),
                 status,
             }
         })
