@@ -2,6 +2,7 @@ use super::sleep::sleep_duration;
 use super::{Job, RetryConfig};
 use crate::chron_service::{ChronServiceLock, Process};
 use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
 use log::{debug, info, warn};
 use std::fs;
 use std::io::Write;
@@ -17,7 +18,11 @@ pub enum ExecStatus {
 }
 
 // Helper to execute the specified command without retries
-fn exec_command_once(chron_lock: &ChronServiceLock, job: &Arc<Job>) -> Result<ExecStatus> {
+fn exec_command_once(
+    chron_lock: &ChronServiceLock,
+    job: &Arc<Job>,
+    scheduled_time: &DateTime<Utc>,
+) -> Result<ExecStatus> {
     static DIVIDER: LazyLock<String> = LazyLock::new(|| "-".repeat(80));
 
     // Don't run the job at all if it is supposed to be terminated
@@ -46,7 +51,7 @@ fn exec_command_once(chron_lock: &ChronServiceLock, job: &Arc<Job>) -> Result<Ex
         .get_db()
         .lock()
         .unwrap()
-        .insert_run(&name)?;
+        .insert_run(&name, &scheduled_time.naive_utc())?;
 
     // Open the log file, creating the directory if necessary
     let log_dir = job
@@ -194,6 +199,7 @@ pub fn exec_command(
     chron_lock: &ChronServiceLock,
     job: &Arc<Job>,
     retry_config: &RetryConfig,
+    scheduled_time: &DateTime<Utc>,
 ) -> Result<bool> {
     let name = job.name.clone();
     let num_attempts = retry_config
@@ -210,7 +216,7 @@ pub fn exec_command(
             debug!("{name}: retry attempt {attempt} of {num_attempts}");
         }
 
-        let status = exec_command_once(chron_lock, job)?;
+        let status = exec_command_once(chron_lock, job, scheduled_time)?;
         if !retry_config.should_retry(status, attempt) {
             break;
         }

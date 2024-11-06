@@ -59,10 +59,10 @@
         </tr>
       </thead>
       <tbody>
-        {% for RunInfo { timestamp, execution_time, status } in runs %}
+        {% for RunInfo { timestamp, late, execution_time, status } in runs %}
         <tr>
           <td class="timestamp">
-            {{ timestamp }}
+            {{ timestamp }} <span class="late">({{ late|duration }} late)</span>
           </td>
           <td class="execution-time">
             {% if let Some(execution_time) = execution_time %}

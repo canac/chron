@@ -2,7 +2,7 @@ mod models;
 
 use self::models::{Checkpoint, Run};
 use anyhow::{Context, Result};
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use rusqlite::{Connection, OptionalExtension};
 use std::path::Path;
 
@@ -21,6 +21,7 @@ impl Database {
                 r"CREATE TABLE IF NOT EXISTS run (
   id INTEGER PRIMARY KEY NOT NULL,
   name VARCHAR NOT NULL,
+  scheduled_at DATETIME NOT NULL,
   started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   ended_at DATETIME,
   status_code INTEGER
@@ -43,12 +44,12 @@ CREATE TABLE IF NOT EXISTS checkpoint (
     }
 
     // Record a new run in the database and return the id of the new run
-    pub fn insert_run(&self, name: &str) -> Result<Run> {
+    pub fn insert_run(&self, name: &str, scheduled_at: &NaiveDateTime) -> Result<Run> {
         let mut statement = self
             .connection
-            .prepare("INSERT INTO run (name) VALUES (?1) RETURNING *")?;
+            .prepare("INSERT INTO run (name, scheduled_at) VALUES (?1, ?2) RETURNING *")?;
         let run = statement
-            .query_row([name], Run::from_row)
+            .query_row((name, scheduled_at), Run::from_row)
             .context("Error saving run to database")?;
         Ok(run)
     }
@@ -69,7 +70,7 @@ CREATE TABLE IF NOT EXISTS checkpoint (
     pub fn get_last_runs(&self, name: &str, count: u64) -> Result<Vec<Run>> {
         let mut statement = self
             .connection
-            .prepare("SELECT id, started_at, ended_at, status_code FROM run WHERE name = ?1 ORDER BY started_at DESC LIMIT ?2")?;
+            .prepare("SELECT id, scheduled_at, started_at, ended_at, status_code FROM run WHERE name = ?1 ORDER BY started_at DESC LIMIT ?2")?;
         let runs = statement
             .query_map((name, count), Run::from_row)
             .context("Error loading last runs from the database")?

@@ -12,6 +12,7 @@ use self::working_dir::expand_working_dir;
 use crate::chronfile::{self, Chronfile};
 use crate::database::Database;
 use anyhow::{anyhow, bail, Context, Result};
+use chrono::Utc;
 use chrono_humanize::{Accuracy, HumanTime, Tense};
 use cron::Schedule;
 use log::debug;
@@ -216,7 +217,7 @@ impl ChronService {
 
         let me = self.get_me()?;
         thread::spawn(move || {
-            exec_command(&me, &job, &options.keep_alive).unwrap();
+            exec_command(&me, &job, &options.keep_alive, &Utc::now()).unwrap();
         });
 
         Ok(())
@@ -319,6 +320,7 @@ impl ChronService {
                             delay: Some(retry_delay),
                             ..options.retry
                         },
+                        &scheduled_time,
                     )
                     .unwrap();
                     if completed {

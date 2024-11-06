@@ -79,6 +79,17 @@ a {
   }
 }
 
+.timestamp {
+  display: flex;
+  gap: var(--size-1);
+  align-items: center;
+}
+
+.late {
+  color: var(--gray-7);
+  font-size: var(--font-size-0);
+}
+
 .status-code {
   &.running {
     color: var(--yellow-7);
