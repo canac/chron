@@ -27,6 +27,8 @@ pub struct Run {
     pub started_at: NaiveDateTime,
     pub ended_at: Option<NaiveDateTime>,
     pub status_code: Option<i32>,
+    pub attempt: usize,
+    pub max_attempts: Option<usize>,
 }
 
 impl Run {
@@ -37,6 +39,8 @@ impl Run {
             started_at: row.get("started_at")?,
             ended_at: row.get("ended_at")?,
             status_code: row.get("status_code")?,
+            attempt: row.get("attempt")?,
+            max_attempts: row.get("max_attempts")?,
         })
     }
 }

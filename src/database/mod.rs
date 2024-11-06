@@ -24,7 +24,9 @@ impl Database {
   scheduled_at DATETIME NOT NULL,
   started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   ended_at DATETIME,
-  status_code INTEGER
+  status_code INTEGER,
+  attempt INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS checkpoint (
@@ -44,12 +46,18 @@ CREATE TABLE IF NOT EXISTS checkpoint (
     }
 
     // Record a new run in the database and return the id of the new run
-    pub fn insert_run(&self, name: &str, scheduled_at: &NaiveDateTime) -> Result<Run> {
+    pub fn insert_run(
+        &self,
+        name: &str,
+        scheduled_at: &NaiveDateTime,
+        attempt: usize,
+        max_attempts: Option<usize>,
+    ) -> Result<Run> {
         let mut statement = self
             .connection
-            .prepare("INSERT INTO run (name, scheduled_at) VALUES (?1, ?2) RETURNING *")?;
+            .prepare("INSERT INTO run (name, scheduled_at, attempt, max_attempts) VALUES (?1, ?2, ?3, ?4) RETURNING *")?;
         let run = statement
-            .query_row((name, scheduled_at), Run::from_row)
+            .query_row((name, scheduled_at, attempt, max_attempts), Run::from_row)
             .context("Error saving run to database")?;
         Ok(run)
     }
@@ -70,7 +78,7 @@ CREATE TABLE IF NOT EXISTS checkpoint (
     pub fn get_last_runs(&self, name: &str, count: u64) -> Result<Vec<Run>> {
         let mut statement = self
             .connection
-            .prepare("SELECT id, scheduled_at, started_at, ended_at, status_code FROM run WHERE name = ?1 ORDER BY started_at DESC LIMIT ?2")?;
+            .prepare("SELECT id, scheduled_at, started_at, ended_at, status_code, attempt, max_attempts FROM run WHERE name = ?1 ORDER BY started_at DESC LIMIT ?2")?;
         let runs = statement
             .query_map((name, count), Run::from_row)
             .context("Error loading last runs from the database")?

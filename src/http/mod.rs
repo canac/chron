@@ -64,6 +64,7 @@ struct RunInfo {
     late: Duration,
     execution_time: Option<Duration>,
     status: RunStatus,
+    attempt: String,
 }
 
 #[derive(Template)]
@@ -115,6 +116,15 @@ async fn job_handler(name: Path<String>, data: Data<ThreadData>) -> Result<impl 
                         .signed_duration_since(started_at)
                 }),
                 status,
+                attempt: format!(
+                    "{}{}",
+                    run.attempt + 1,
+                    run.max_attempts
+                        .map_or_else(String::new, |max_attempts| format!(
+                            " of {}",
+                            max_attempts + 1
+                        ))
+                ),
             }
         })
         .collect();

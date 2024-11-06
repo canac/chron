@@ -56,10 +56,11 @@
           <th>Time</th>
           <th>Execution time</th>
           <th>Exit code</th>
+          <th>Attempt</th>
         </tr>
       </thead>
       <tbody>
-        {% for RunInfo { timestamp, late, execution_time, status } in runs %}
+        {% for RunInfo { timestamp, late, execution_time, status, attempt } in runs %}
         <tr>
           <td class="timestamp">
             {{ timestamp }} <span class="late">({{ late|duration }} late)</span>
@@ -77,6 +78,9 @@
           {% when RunStatus::Terminated %}
           <td class="status-code failure">terminated</td>
           {% endmatch %}
+          <td class="attempt">
+            {{ attempt }}
+          </td>
         </tr>
         {% endfor %}
       </tbody>

@@ -10,6 +10,12 @@ use std::process::{self, Command, Stdio};
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
+pub struct Metadata<'t> {
+    pub scheduled_time: &'t DateTime<Utc>,
+    pub attempt: usize,
+    pub max_attempts: Option<usize>,
+}
+
 #[derive(Clone, Copy)]
 pub enum ExecStatus {
     Success,
@@ -21,7 +27,7 @@ pub enum ExecStatus {
 fn exec_command_once(
     chron_lock: &ChronServiceLock,
     job: &Arc<Job>,
-    scheduled_time: &DateTime<Utc>,
+    metadata: &Metadata,
 ) -> Result<ExecStatus> {
     static DIVIDER: LazyLock<String> = LazyLock::new(|| "-".repeat(80));
 
@@ -51,7 +57,12 @@ fn exec_command_once(
         .get_db()
         .lock()
         .unwrap()
-        .insert_run(&name, &scheduled_time.naive_utc())?;
+        .insert_run(
+            &name,
+            &metadata.scheduled_time.naive_utc(),
+            metadata.attempt,
+            metadata.max_attempts,
+        )?;
 
     // Open the log file, creating the directory if necessary
     let log_dir = job
@@ -216,7 +227,12 @@ pub fn exec_command(
             debug!("{name}: retry attempt {attempt} of {num_attempts}");
         }
 
-        let status = exec_command_once(chron_lock, job, scheduled_time)?;
+        let metadata = Metadata {
+            scheduled_time,
+            attempt,
+            max_attempts: retry_config.limit,
+        };
+        let status = exec_command_once(chron_lock, job, &metadata)?;
         if !retry_config.should_retry(status, attempt) {
             break;
         }
