@@ -1,7 +1,7 @@
 use super::http_error::HttpError;
 use crate::chron_service::{Job, JobType, ProcessStatus};
 use actix_web::{http::StatusCode, Result};
-use chrono::{DateTime, Local};
+use chrono::{DateTime, Local, Timelike};
 use std::path::PathBuf;
 
 pub struct JobInfo {
@@ -49,7 +49,15 @@ impl JobInfo {
             command: job.command.clone(),
             schedule,
             working_dir: job.working_dir.clone(),
-            next_run: next_run.map(DateTime::from),
+            // Use the next retry attempt if it is set, falling back to the next scheduled run
+            next_run: job
+                .next_attempt
+                .read()
+                .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?
+                // Clear any fractional seconds
+                .and_then(|timestamp| timestamp.with_nanosecond(0))
+                .or(next_run)
+                .map(DateTime::from),
             status,
             run_id,
             log_path: job.log_path.clone(),

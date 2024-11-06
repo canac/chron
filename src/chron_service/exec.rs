@@ -1,4 +1,4 @@
-use super::sleep::sleep_duration;
+use super::sleep::sleep_until;
 use super::{Job, RetryConfig};
 use crate::chron_service::{ChronServiceLock, Process};
 use anyhow::{Context, Result};
@@ -234,13 +234,22 @@ pub fn exec_command(
         };
         let status = exec_command_once(chron_lock, job, &metadata)?;
         if !retry_config.should_retry(status, attempt) {
+            // We are done retrying so clear the next attempt
+            job.next_attempt.write().unwrap().take();
             break;
         }
 
-        // Re-run the job after the configured delay if it is set
-        if let Some(delay) = retry_config.delay {
-            sleep_duration(delay)?;
-        }
+        // Record the timestamp of the next attempt and wait until then to re-run the job
+        let next_attempt = Utc::now()
+            + retry_config
+                .delay
+                .and_then(|delay| chrono::Duration::from_std(delay).ok())
+                .unwrap_or_default();
+        let mut attempt_guard = job.next_attempt.write().unwrap();
+        *attempt_guard = Some(next_attempt);
+        drop(attempt_guard);
+
+        sleep_until(next_attempt);
     }
 
     Ok(true)

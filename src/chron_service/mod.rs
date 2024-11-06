@@ -12,7 +12,7 @@ use self::working_dir::expand_working_dir;
 use crate::chronfile::{self, Chronfile};
 use crate::database::Database;
 use anyhow::{anyhow, bail, Context, Result};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use chrono_humanize::{Accuracy, HumanTime, Tense};
 use cron::Schedule;
 use log::debug;
@@ -86,6 +86,7 @@ pub struct Job {
     pub running_process: RwLock<Option<Process>>,
     pub terminate_controller: TerminateController,
     pub r#type: JobType,
+    pub next_attempt: RwLock<Option<DateTime<Utc>>>,
 }
 
 pub struct ChronService {
@@ -212,6 +213,7 @@ impl ChronService {
             r#type: JobType::Startup {
                 options: Arc::clone(&options),
             },
+            next_attempt: RwLock::new(None),
         });
         self.jobs.insert(name.to_owned(), Arc::clone(&job));
 
@@ -275,6 +277,7 @@ impl ChronService {
                 options: Arc::new(options),
                 scheduled_job: RwLock::new(Box::new(scheduled_job)),
             },
+            next_attempt: RwLock::new(None),
         });
         self.jobs.insert(name.to_owned(), Arc::clone(&job));
 

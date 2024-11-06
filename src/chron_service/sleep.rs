@@ -1,12 +1,5 @@
-use anyhow::Result;
 use chrono::{DateTime, Utc};
 use std::time::Duration;
-
-// Sleep for the specified duration, preventing oversleeping during hibernation
-pub fn sleep_duration(duration: Duration) -> Result<()> {
-    sleep_until(Utc::now() + chrono::Duration::from_std(duration)?);
-    Ok(())
-}
 
 // Sleep until the specified timestamp, preventing oversleeping during hibernation
 pub fn sleep_until(timestamp: DateTime<Utc>) {
