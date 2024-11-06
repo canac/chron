@@ -1,5 +1,5 @@
 use crate::chron_service::{self, ScheduledJobOptions};
-use serde::{Deserialize, Deserializer};
+use serde::{de::Error, Deserialize, Deserializer};
 use std::{path::PathBuf, time::Duration};
 
 // Allow RetryConfig to be deserialized from a boolean or a full retry config
@@ -17,17 +17,23 @@ fn deserialize_retry_config<'de, D: Deserializer<'de>>(
         },
     }
 
-    Ok(match RetryConfigVariant::deserialize(deserializer)? {
-        RetryConfigVariant::Simple(retry) => RetryConfig {
+    match RetryConfigVariant::deserialize(deserializer)? {
+        RetryConfigVariant::Simple(retry) => Ok(RetryConfig {
             retry,
             ..Default::default()
-        },
-        RetryConfigVariant::Complex { limit, delay } => RetryConfig {
-            retry: true,
-            limit,
-            delay,
-        },
-    })
+        }),
+        RetryConfigVariant::Complex { limit, delay } => {
+            if limit == Some(0) {
+                return Err(D::Error::custom("limit cannot be 0"));
+            }
+
+            Ok(RetryConfig {
+                retry: true,
+                limit,
+                delay,
+            })
+        }
+    }
 }
 
 #[derive(Debug, Default, Deserialize, Eq, PartialEq)]
@@ -117,12 +123,25 @@ mod tests {
             }
         );
 
-        assert!(
+        assert_eq!(
             toml::from_str::<ScheduledJob>(
                 "command = 'echo'\nschedule = '* * * * * *'\nretry = { failures = true, delay = '10m' }"
-            ).is_err()
+            ).unwrap_err().message(),
+            "data did not match any variant of untagged enum RetryConfigVariant"
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_retry_limit_zero() {
+        assert_eq!(
+            toml::from_str::<ScheduledJob>(
+                "command = 'echo'\nschedule = '* * * * * *'\nretry = { limit = 0 }",
+            )
+            .unwrap_err()
+            .message(),
+            "limit cannot be 0"
+        );
     }
 }
