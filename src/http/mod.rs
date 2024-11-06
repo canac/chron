@@ -59,16 +59,6 @@ enum RunStatus {
     Terminated,
 }
 
-impl RunStatus {
-    // Create a completed run status from a status code
-    fn from_status_code(status_code: i32) -> Self {
-        Self::Completed {
-            success: status_code == 0,
-            status_code,
-        }
-    }
-}
-
 struct RunInfo {
     timestamp: DateTime<Local>,
     execution_time: Option<Duration>,
@@ -102,18 +92,15 @@ async fn job_handler(name: Path<String>, data: Data<ThreadData>) -> Result<impl 
         .map(|run| {
             // If the job is currently running, the run in the database will have a status of None,
             // which is indistinguishable from a run that terminated without a status code. To be
-            // able to show that the current run is running in the runs table, we need to use the
-            // status from the job's current process, if any, instead of from the database.
+            // able to show that the current run is running in the runs table, we need to look for a
+            // run matching the jobs run_id. If one is found, it is considered to be running.
             let status = if job.run_id == Some(run.id) {
-                match job.status {
-                    ProcessStatus::Running { .. } => RunStatus::Running,
-                    ProcessStatus::Completed { status_code } => {
-                        RunStatus::from_status_code(status_code)
-                    }
-                    ProcessStatus::Terminated => RunStatus::Terminated,
-                }
+                RunStatus::Running
             } else if let Some(status_code) = run.status_code {
-                RunStatus::from_status_code(status_code)
+                RunStatus::Completed {
+                    success: status_code == 0,
+                    status_code,
+                }
             } else {
                 RunStatus::Terminated
             };

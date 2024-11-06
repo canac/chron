@@ -23,7 +23,12 @@ impl JobInfo {
             .write()
             .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?;
         let (status, run_id) = match process_guard.as_mut() {
-            Some(process) => (process.get_status()?, Some(process.run_id)),
+            Some(process) => (
+                ProcessStatus::Running {
+                    pid: process.child_process.id(),
+                },
+                Some(process.run_id),
+            ),
             None => (ProcessStatus::Terminated, None),
         };
         drop(process_guard);

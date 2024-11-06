@@ -73,26 +73,7 @@ pub struct Process {
 
 pub enum ProcessStatus {
     Running { pid: u32 },
-    Completed { status_code: i32 },
     Terminated,
-}
-
-impl Process {
-    // Return the process' current status without blocking
-    pub fn get_status(&mut self) -> std::io::Result<ProcessStatus> {
-        let status = if let Some(status) = self.child_process.try_wait()? {
-            status
-                .code()
-                .map_or(ProcessStatus::Terminated, |status_code| {
-                    ProcessStatus::Completed { status_code }
-                })
-        } else {
-            ProcessStatus::Running {
-                pid: self.child_process.id(),
-            }
-        };
-        Ok(status)
-    }
 }
 
 pub struct Job {

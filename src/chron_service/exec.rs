@@ -88,10 +88,6 @@ fn exec_command_once(chron_lock: &ChronServiceLock, job: &Arc<Job>) -> Result<Ex
     // Check the status periodically until it exits without holding onto the child process lock
     let (status_code, status_code_str) = poll_exit_status(job)?;
 
-    let mut process_guard = job.running_process.write().unwrap();
-    process_guard.take();
-    drop(process_guard);
-
     // Write the log file footer that contains the execution status
     log_file.write_all(format!("{}\nStatus: {status_code_str}\n\n", *DIVIDER).as_bytes())?;
 
@@ -123,6 +119,13 @@ fn exec_command_once(chron_lock: &ChronServiceLock, job: &Arc<Job>) -> Result<Ex
             }
         }
     }
+
+    // Wait to clear the process until after saving the run status to the database to avoid a race
+    // condition where running_process is None because the job terminated, but the most recent run
+    // in the database still has a status of None.
+    let mut process_guard = job.running_process.write().unwrap();
+    process_guard.take();
+    drop(process_guard);
 
     Ok(match status_code {
         Some(code) if code != 0 => ExecStatus::Failure,
@@ -171,7 +174,8 @@ fn poll_exit_status(job: &Arc<Job>) -> Result<(Option<i32>, String)> {
             // Wait briefly then loop again
             None => {
                 // Wait even longer the next time with a maximum poll delay
-                poll_interval = std::cmp::min(poll_interval * 2, Duration::from_secs(5));
+                const MAX_POLL_DELAY: Duration = Duration::from_millis(500);
+                poll_interval = std::cmp::min(poll_interval * 2, MAX_POLL_DELAY);
                 std::thread::sleep(poll_interval);
             }
             Some(status) => {
