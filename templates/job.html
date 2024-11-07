@@ -26,21 +26,22 @@
         <td class="working-dir">{{ working_dir.to_string_lossy() }}</td>
       </tr>
       {% endif %}
-      {% if let Some(next_run) = job.next_run %}
       <tr>
-        <th scope="row">next run</th>
-        <td class="next-run">{{ next_run }}</td>
+        <th scope="row">status</th>
+        <td>
+          {% match job.status %}
+          {% when ProcessStatus::Running { pid } %}
+          <span class="status-text running">running</span>
+          <span class="secondary">(pid {{ pid }})</td></span>
+          {% else %}
+          <span class="status-text">not running</span>
+          {% if let Some(next_run) = job.next_run %}
+          <span class="secondary">(next run {{ next_run }})</span>
+          {% endif %}
+          {% endmatch %}
+        </td>
       </tr>
-      {% endif %}
-      <tr>
-        <th scope="row">PID</th>
-        {% match job.status %}
-        {% when ProcessStatus::Running { pid } %}
-        <td class="status running">{{ pid }}</td>
-        {% else %}
-        <td class="status">not running</td>
-        {% endmatch %}
-      </tr>
+
       <tr>
         <th scope="row">logfile</th>
         <td class="logfile">

@@ -72,11 +72,15 @@ a {
   font-family: "Courier New", Courier, monospace;
 }
 
-.status {
+.status-text {
   color: var(--red-7);
   &.running {
     color: var(--green-7);
   }
+}
+
+.secondary {
+  color: var(--gray-7);
 }
 
 .timestamp {

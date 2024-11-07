@@ -44,20 +44,27 @@ impl JobInfo {
             }
             JobType::Startup { .. } => (None, None),
         };
-        Ok(Self {
-            name: name.to_owned(),
-            command: job.command.clone(),
-            schedule,
-            working_dir: job.working_dir.clone(),
+
+        // Wait to calculate the next run until current run finishes
+        let next_run = if run_id.is_none() {
             // Use the next retry attempt if it is set, falling back to the next scheduled run
-            next_run: job
-                .next_attempt
+            job.next_attempt
                 .read()
                 .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?
                 // Clear any fractional seconds
                 .and_then(|timestamp| timestamp.with_nanosecond(0))
                 .or(next_run)
-                .map(DateTime::from),
+                .map(DateTime::from)
+        } else {
+            None
+        };
+
+        Ok(Self {
+            name: name.to_owned(),
+            command: job.command.clone(),
+            schedule,
+            working_dir: job.working_dir.clone(),
+            next_run,
             status,
             run_id,
             log_path: job.log_path.clone(),
