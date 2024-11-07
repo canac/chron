@@ -22,7 +22,7 @@ impl Database {
   id INTEGER PRIMARY KEY NOT NULL,
   name VARCHAR NOT NULL,
   scheduled_at DATETIME NOT NULL,
-  started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  started_at DATETIME NOT NULL DEFAULT (STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW')),
   ended_at DATETIME,
   status_code INTEGER,
   attempt INTEGER NOT NULL DEFAULT 0,
@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS checkpoint (
     // Set the status code of an existing run
     pub fn set_run_status_code(&self, run_id: i32, status_code: i32) -> Result<()> {
         let mut statement = self.connection.prepare(
-            "UPDATE run SET ended_at = CURRENT_TIMESTAMP, status_code = ?1 WHERE id = ?2",
+            "UPDATE run SET ended_at = STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW'), status_code = ?1 WHERE id = ?2",
         )?;
         statement
             .execute((status_code, run_id))
