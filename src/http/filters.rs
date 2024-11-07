@@ -13,7 +13,7 @@ const MS_WEEK: u64 = MS_DAY * 7;
 const MS_MONTH: u64 = MS_DAY * 30;
 const MS_YEAR: u64 = MS_DAY * 365;
 
-// Convert a duration into a human-readable string
+// Format a duration as a human-readable string
 // Inspired by chrono-humanize (https://github.com/imp/chrono-humanize-rs)
 pub fn duration(duration: &&Duration) -> Result<String> {
     Ok(match duration.num_milliseconds().unsigned_abs() {
@@ -34,6 +34,11 @@ pub fn duration(duration: &&Duration) -> Result<String> {
         1 => String::from("1 millisecond"),
         n => format!("{n} milliseconds"),
     })
+}
+
+// Format a date as text
+pub fn date(date: &&DateTime<Local>) -> Result<String> {
+    Ok(date.format("%a %h %d, %Y %r").to_string())
 }
 
 // Format a date relative to now
