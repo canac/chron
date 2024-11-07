@@ -1,4 +1,7 @@
-use chrono::Duration;
+#![allow(clippy::trivially_copy_pass_by_ref, clippy::unnecessary_wraps)]
+
+use askama::Result;
+use chrono::{DateTime, Duration, Local};
 use std::cmp::max;
 
 // Number of milliseconds in various time periods
@@ -12,8 +15,7 @@ const MS_YEAR: u64 = MS_DAY * 365;
 
 // Convert a duration into a human-readable string
 // Inspired by chrono-humanize (https://github.com/imp/chrono-humanize-rs)
-#[allow(clippy::trivially_copy_pass_by_ref, clippy::unnecessary_wraps)]
-pub fn duration(duration: &&Duration) -> askama::Result<String> {
+pub fn duration(duration: &&Duration) -> Result<String> {
     Ok(match duration.num_milliseconds().unsigned_abs() {
         n if n > MS_YEAR * 3 / 2 => format!("{} years", max(n / MS_YEAR, 2)),
         n if n > MS_YEAR => String::from("1 year"),
@@ -32,4 +34,19 @@ pub fn duration(duration: &&Duration) -> askama::Result<String> {
         1 => String::from("1 millisecond"),
         n => format!("{n} milliseconds"),
     })
+}
+
+// Format a date relative to now
+pub fn relative_date(date: &&DateTime<Local>) -> Result<String> {
+    let ago = Local::now().signed_duration_since(*date);
+    if ago.is_zero() {
+        return Ok(String::from("just now"));
+    }
+
+    let duration_text = self::duration(&&ago)?;
+    if ago > Duration::zero() {
+        Ok(format!("{duration_text} ago"))
+    } else {
+        Ok(format!("in {duration_text}"))
+    }
 }

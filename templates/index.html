@@ -33,7 +33,7 @@
               <span class="secondary">(pid {{ pid }})</span>
               {% else %}
               <span class="status-text">not running</span>
-              <span class="secondary">(next run {% if let Some(next_run) = next_run %}{{ next_run }}{% endif %})</span>
+              <span class="secondary">(next run {% if let Some(next_run) = next_run %}{{ next_run|relative_date }}{% endif %})</span>
               {% endmatch %}
             </a>
           </td>

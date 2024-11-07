@@ -36,7 +36,7 @@
           {% else %}
           <span class="status-text">not running</span>
           {% if let Some(next_run) = job.next_run %}
-          <span class="secondary">(next run {{ next_run }})</span>
+          <span class="secondary">(next run {{ next_run|relative_date }})</span>
           {% endif %}
           {% endmatch %}
         </td>
@@ -64,7 +64,7 @@
         {% for RunInfo { timestamp, late, execution_time, status, attempt } in runs %}
         <tr>
           <td class="timestamp">
-            {{ timestamp }} <span class="late">({{ late|duration }} late)</span>
+            {{ timestamp|relative_date }} <span class="late">({{ late|duration }} late)</span>
           </td>
           <td class="execution-time">
             {% if let Some(execution_time) = execution_time %}
