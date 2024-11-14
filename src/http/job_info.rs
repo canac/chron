@@ -12,7 +12,7 @@ pub struct JobInfo {
     pub(crate) next_run: Option<DateTime<Local>>,
     pub(crate) status: ProcessStatus,
     pub(crate) run_id: Option<u32>,
-    pub(crate) log_path: PathBuf,
+    pub(crate) log_dir: PathBuf,
 }
 
 impl JobInfo {
@@ -67,7 +67,7 @@ impl JobInfo {
             next_run,
             status,
             run_id,
-            log_path: job.log_path.clone(),
+            log_dir: job.log_dir.clone(),
         })
     }
 }

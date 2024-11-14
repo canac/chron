@@ -5,9 +5,8 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use log::{debug, info, warn};
 use std::fs;
-use std::io::Write;
 use std::process::{self, Command, Stdio};
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 pub struct Metadata<'t> {
@@ -29,15 +28,10 @@ fn exec_command_once(
     job: &Arc<Job>,
     metadata: &Metadata,
 ) -> Result<ExecStatus> {
-    static DIVIDER: LazyLock<String> = LazyLock::new(|| "-".repeat(80));
-
     // Don't run the job at all if it is supposed to be terminated
     if job.terminate_controller.is_terminated() {
         return Ok(ExecStatus::Aborted);
     }
-
-    let start_time = chrono::Local::now();
-    let formatted_start_time = start_time.to_rfc3339();
 
     let name = job.name.clone();
     info!(
@@ -65,19 +59,14 @@ fn exec_command_once(
         )?;
 
     // Open the log file, creating the directory if necessary
-    let log_dir = job
-        .log_path
-        .parent()
-        .with_context(|| format!("Failed to get parent dir of log file {:?}", job.log_path))?;
-    fs::create_dir_all(log_dir).with_context(|| format!("Failed to create log dir {log_dir:?}"))?;
-    let mut log_file = fs::OpenOptions::new()
+    fs::create_dir_all(&job.log_dir)
+        .with_context(|| format!("Failed to create log dir {:?}", job.log_dir))?;
+    let log_path = job.log_dir.join(format!("{}.log", run.id));
+    let log_file = fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(job.log_path.clone())
-        .with_context(|| format!("Failed to open log file {:?}", job.log_path))?;
-
-    // Write the log file header for this execution
-    log_file.write_all(format!("{formatted_start_time}\n{}\n", *DIVIDER).as_bytes())?;
+        .open(&log_path)
+        .with_context(|| format!("Failed to open log file {log_path:?}"))?;
 
     // Run the command
     let clone_log_file = || log_file.try_clone().context("Failed to clone log file");
@@ -102,10 +91,7 @@ fn exec_command_once(
     drop(process_guard);
 
     // Check the status periodically until it exits without holding onto the child process lock
-    let (status_code, status_code_str) = poll_exit_status(job)?;
-
-    // Write the log file footer that contains the execution status
-    log_file.write_all(format!("{}\nStatus: {status_code_str}\n\n", *DIVIDER).as_bytes())?;
+    let status_code = poll_exit_status(job)?;
 
     if let Some(code) = status_code {
         // Update the run status code in the database
@@ -150,9 +136,9 @@ fn exec_command_once(
 }
 
 // Check the status of a job until it exits without holding onto the child process lock
-// The first element in the tuple is the exit status if available and the second element is
-// a human-readable representation of the exit status
-fn poll_exit_status(job: &Arc<Job>) -> Result<(Option<i32>, String)> {
+fn poll_exit_status(job: &Arc<Job>) -> Result<Option<i32>> {
+    const MAX_POLL_DELAY: Duration = Duration::from_millis(500);
+
     // Check the status periodically until it exits without holding onto the child process lock
     let mut poll_interval = Duration::from_millis(1);
     loop {
@@ -169,7 +155,7 @@ fn poll_exit_status(job: &Arc<Job>) -> Result<(Option<i32>, String)> {
             // If the result was an InvalidInput error, it is because the process already
             // terminated, so ignore that type of error
             match result {
-                Ok(()) => return Ok((None, String::from("terminated"))),
+                Ok(()) => return Ok(None),
                 Err(ref err) => {
                     // Propagate other errors
                     if !matches!(&err.kind(), std::io::ErrorKind::InvalidInput) {
@@ -182,25 +168,17 @@ fn poll_exit_status(job: &Arc<Job>) -> Result<(Option<i32>, String)> {
         }
 
         // Try to read the process' exit status without blocking
-        let maybe_status = process
+        let exit_status = process
             .try_wait()
             .with_context(|| format!("Failed to get command status for command {}", job.command))?;
         drop(process_guard);
-        match maybe_status {
-            // Wait briefly then loop again
-            None => {
-                // Wait even longer the next time with a maximum poll delay
-                const MAX_POLL_DELAY: Duration = Duration::from_millis(500);
-                poll_interval = std::cmp::min(poll_interval * 2, MAX_POLL_DELAY);
-                std::thread::sleep(poll_interval);
-            }
-            Some(status) => {
-                return Ok(status.code().map_or_else(
-                    || (None, String::from("unknown")),
-                    |code| (Some(code), code.to_string()),
-                ));
-            }
+        if let Some(status) = exit_status {
+            return Ok(status.code());
         }
+
+        // Wait briefly with capped exponential backoff before looping again
+        poll_interval = std::cmp::min(poll_interval * 2, MAX_POLL_DELAY);
+        std::thread::sleep(poll_interval);
     }
 }
 

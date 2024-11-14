@@ -41,11 +41,10 @@
           {% endmatch %}
         </td>
       </tr>
-
       <tr>
-        <th scope="row">logfile</th>
-        <td class="logfile">
-          <a href="/job/{{ job.name }}/logs">{{ job.log_path.to_string_lossy() }}</a>
+        <th scope="row">log directory</th>
+        <td class="log-dir">
+          {{ job.log_dir.to_string_lossy() }}
         </td>
       </tr>
     </table>
@@ -57,11 +56,12 @@
           <th>Time</th>
           <th>Execution time</th>
           <th>Exit code</th>
+          <th>Logs</th>
           <th>Attempt</th>
         </tr>
       </thead>
       <tbody>
-        {% for RunInfo { timestamp, late, execution_time, status, attempt } in runs %}
+        {% for RunInfo { run_id, timestamp, late, execution_time, status, log_file, attempt } in runs %}
         <tr>
           <td class="timestamp">
             <span aria-label="{{ timestamp|date }}" data-balloon-pos="down-left">{{ timestamp|relative_date }}</span>
@@ -80,6 +80,9 @@
           {% when RunStatus::Terminated %}
           <td class="status-code failure">terminated</td>
           {% endmatch %}
+          <td class="log-file">
+            <a href="/job/{{ job.name }}/logs/{{ run_id }}" aria-label="{{ log_file.to_string_lossy() }}" data-balloon-pos="down-left">logs</a>
+          </td>
           <td class="attempt">
             {{ attempt }}
           </td>

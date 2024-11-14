@@ -82,7 +82,7 @@ pub struct Job {
     pub command: String,
     pub shell: String,
     pub working_dir: Option<PathBuf>,
-    pub log_path: PathBuf,
+    pub log_dir: PathBuf,
     pub running_process: RwLock<Option<Process>>,
     pub terminate_controller: TerminateController,
     pub r#type: JobType,
@@ -207,7 +207,7 @@ impl ChronService {
             command: job.command.clone(),
             shell: self.get_shell(),
             working_dir: job.working_dir.as_ref().map(expand_working_dir),
-            log_path: self.calculate_log_path(name),
+            log_dir: self.calculate_log_dir(name),
             running_process: RwLock::new(None),
             terminate_controller: TerminateController::new(),
             r#type: JobType::Startup {
@@ -270,7 +270,7 @@ impl ChronService {
             command: job.command.clone(),
             shell: self.get_shell(),
             working_dir: job.working_dir.as_ref().map(expand_working_dir),
-            log_path: self.calculate_log_path(name),
+            log_dir: self.calculate_log_dir(name),
             running_process: RwLock::new(None),
             terminate_controller: TerminateController::new(),
             r#type: JobType::Scheduled {
@@ -376,9 +376,9 @@ impl ChronService {
         Ok(())
     }
 
-    // Helper to get the log file path for a command
-    fn calculate_log_path(&self, name: &str) -> PathBuf {
-        self.log_dir.join(format!("{name}.log"))
+    // Helper to get the log file dir for a command
+    fn calculate_log_dir(&self, name: &str) -> PathBuf {
+        self.log_dir.join(name)
     }
 
     // Get the user's shell

@@ -11,6 +11,7 @@ use actix_web::{get, http::StatusCode, App, HttpServer, Responder, Result};
 use askama::Template;
 use chrono::{DateTime, Duration, Local, TimeZone};
 use log::info;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs::File;
 use tokio_util::io::ReaderStream;
@@ -60,10 +61,12 @@ enum RunStatus {
 }
 
 struct RunInfo {
+    run_id: u32,
     timestamp: DateTime<Local>,
     late: Duration,
     execution_time: Option<Duration>,
     status: RunStatus,
+    log_file: PathBuf,
     attempt: String,
 }
 
@@ -74,7 +77,7 @@ struct JobTemplate {
     runs: Vec<RunInfo>,
 }
 
-#[get("/job/{job}")]
+#[get("/job/{name}")]
 async fn job_handler(name: Path<String>, data: Data<ThreadData>) -> Result<impl Responder> {
     let data_guard = data
         .read()
@@ -108,6 +111,7 @@ async fn job_handler(name: Path<String>, data: Data<ThreadData>) -> Result<impl 
             };
             let started_at = Local.from_utc_datetime(&run.started_at);
             RunInfo {
+                run_id: run.id,
                 timestamp: started_at,
                 late: started_at.signed_duration_since(Local.from_utc_datetime(&run.scheduled_at)),
                 execution_time: run.ended_at.map(|timestamp| {
@@ -116,6 +120,7 @@ async fn job_handler(name: Path<String>, data: Data<ThreadData>) -> Result<impl 
                         .signed_duration_since(started_at)
                 }),
                 status,
+                log_file: job.log_dir.join(format!("{}.log", run.id)),
                 attempt: format!(
                     "{}{}",
                     run.attempt + 1,
@@ -140,14 +145,18 @@ async fn job_handler(name: Path<String>, data: Data<ThreadData>) -> Result<impl 
         ))
 }
 
-#[get("/job/{job}/logs")]
-async fn job_logs_handler(name: Path<String>, data: Data<ThreadData>) -> Result<impl Responder> {
+#[get("/job/{name}/logs/{run_id}")]
+async fn job_logs_handler(
+    path: Path<(String, u32)>,
+    data: Data<ThreadData>,
+) -> Result<impl Responder> {
+    let (name, run_id) = path.into_inner();
     let log_path = {
         let data_guard = data.read().unwrap();
         let job = data_guard
             .get_job(&name)
             .ok_or_else(|| HttpError::from_status_code(StatusCode::NOT_FOUND))?;
-        job.log_path.clone()
+        job.log_dir.join(format!("{run_id}.log"))
     };
 
     let file = File::open(log_path)
