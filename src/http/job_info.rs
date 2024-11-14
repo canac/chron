@@ -11,7 +11,7 @@ pub struct JobInfo {
     pub(crate) working_dir: Option<PathBuf>,
     pub(crate) next_run: Option<DateTime<Local>>,
     pub(crate) status: ProcessStatus,
-    pub(crate) run_id: Option<i32>,
+    pub(crate) run_id: Option<u32>,
     pub(crate) log_path: PathBuf,
 }
 

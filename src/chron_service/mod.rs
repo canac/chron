@@ -69,7 +69,7 @@ pub struct ScheduledJobOptions {
 
 pub struct Process {
     pub child_process: Child,
-    pub run_id: i32,
+    pub run_id: u32,
 }
 
 pub enum ProcessStatus {

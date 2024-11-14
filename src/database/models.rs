@@ -22,7 +22,7 @@ impl Checkpoint {
 }
 
 pub struct Run {
-    pub id: i32,
+    pub id: u32,
     pub scheduled_at: NaiveDateTime,
     pub started_at: NaiveDateTime,
     pub ended_at: Option<NaiveDateTime>,
@@ -34,7 +34,7 @@ pub struct Run {
 impl Run {
     pub fn from_row(row: &Row) -> rusqlite::Result<Self> {
         Ok(Self {
-            id: row.get("id")?,
+            id: row.get::<_, i32>("id")?.unsigned_abs(),
             scheduled_at: row.get("scheduled_at")?,
             started_at: row.get("started_at")?,
             ended_at: row.get("ended_at")?,
