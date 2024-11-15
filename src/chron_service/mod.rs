@@ -259,11 +259,12 @@ impl ChronService {
             // there isn't a checkpoint, it won't be able to resume and will
             // schedule the backup for the next Sunday. Eagerly saving a
             // checkpoint prevents this problem.
-            let start_time = scheduled_job
-                .prev_run()
-                .ok_or_else(|| anyhow!("Failed to calculate start time in job {name}"))?;
-            debug!("{name}: saving synthetic checkpoint {start_time}");
-            self.db.lock().unwrap().set_checkpoint(name, start_time)?;
+            if let Some(start_time) = scheduled_job.prev_run() {
+                debug!("{name}: saving synthetic checkpoint {start_time}");
+                self.db.lock().unwrap().set_checkpoint(name, start_time)?;
+            } else {
+                debug!("{name}: cannot save synthetic checkpoint because schedule has no previous runs");
+            }
         }
         let job = Arc::new(Job {
             name: name.to_owned(),
@@ -306,7 +307,7 @@ impl ChronService {
                 let retry_delay = options
                     .retry
                     .delay
-                    .unwrap_or_else(|| job_guard.get_current_period().unwrap() / 6);
+                    .unwrap_or_else(|| job_guard.get_current_period().unwrap_or_default() / 6);
 
                 let next_run = job_guard.next_run();
                 drop(job_guard);
