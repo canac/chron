@@ -248,7 +248,7 @@ impl ChronService {
                 job.schedule
             )
         })?;
-        let scheduled_job = ScheduledJob::new(schedule, resume_time);
+        let scheduled_job = ScheduledJob::new(schedule, resume_time.unwrap_or_else(Utc::now));
         if resume_time.is_none() {
             // If the job doesn't have a checkpoint, estimate one based on the
             // schedule extrapolated backwards in time. This is to prevent jobs
@@ -301,13 +301,16 @@ impl ChronService {
 
                 // Get the elapsed run since the last tick, if any
                 let mut job_guard = scheduled_job.write().unwrap();
-                let run = job_guard.tick();
+                let now = Utc::now();
+                let run = job_guard.tick(now);
 
                 // Retry delay defaults to one sixth of the job's period
-                let retry_delay = options
-                    .retry
-                    .delay
-                    .unwrap_or_else(|| job_guard.get_current_period().unwrap_or_default() / 6);
+                let retry_delay = options.retry.delay.unwrap_or_else(|| {
+                    job_guard
+                        .get_current_period(&now.into())
+                        .unwrap_or_default()
+                        / 6
+                });
 
                 let next_run = job_guard.next_run();
                 drop(job_guard);
