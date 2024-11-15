@@ -339,11 +339,13 @@ impl ChronService {
                     }
                 };
 
-                // Wait until the next run before ticking again
-                match next_run {
-                    Some(next_run) => sleep_until(next_run),
-                    None => break,
+                let Some(next_run) = next_run else {
+                    debug!("{name}: schedule contains no more future runs");
+                    break;
                 };
+
+                // Wait until the next run before ticking again
+                sleep_until(next_run);
             }
         });
 
