@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Context, Result};
-use chrono::{DateTime, Local, Timelike, Utc};
+use chrono::{DateTime, Local, Utc};
 use cron::Schedule;
 use std::time::Duration;
 
@@ -28,16 +28,8 @@ impl ScheduledJob {
     // Return the date of the last time that this scheduled job ran
     pub fn prev_run(&self) -> Option<DateTime<Utc>> {
         let last_tick: DateTime<Local> = self.last_tick.into();
-        // Schedule::after ignores fractional seconds, so compensate by
-        // rounding fractional seconds up
-        // https://github.com/zslayton/cron/issues/108
-        let after = if last_tick.timestamp_subsec_nanos() == 0 {
-            last_tick
-        } else {
-            last_tick.with_nanosecond(0).unwrap() + chrono::Duration::seconds(1)
-        };
         self.schedule
-            .after(&after)
+            .after(&last_tick)
             .next_back()
             .map(std::convert::Into::into)
     }
@@ -57,14 +49,7 @@ impl ScheduledJob {
 
         self.schedule
             // Get the runs from now
-            // There is a bug in cron where reverse iterators starts counting
-            // from the second rounded down, so add a second to compensate
-            // https://github.com/zslayton/cron/issues/108
-            .after::<Local>(
-                &now.checked_add_signed(chrono::Duration::seconds(1))
-                    .unwrap()
-                    .into(),
-            )
+            .after::<Local>(&now.into())
             // Iterating backwards in time (from newest to oldest)
             .rev()
             // Until the last tick
@@ -93,7 +78,7 @@ impl ScheduledJob {
 #[cfg(test)]
 mod tests {
     use anyhow::Result;
-    use chrono::NaiveDate;
+    use chrono::{NaiveDate, Timelike};
     use cron::Schedule;
     use std::str::FromStr;
 
