@@ -147,12 +147,30 @@ async fn job_handler(name: Path<String>, data: Data<ThreadData>) -> Result<impl 
 
 #[get("/job/{name}/logs/{run_id}")]
 async fn job_logs_handler(
-    path: Path<(String, u32)>,
+    path: Path<(String, String)>,
     data: Data<ThreadData>,
 ) -> Result<impl Responder> {
     let (name, run_id) = path.into_inner();
     let log_path = {
-        let data_guard = data.read().unwrap();
+        let data_guard = data
+            .read()
+            .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?;
+        let run_id = if run_id == "latest" {
+            // Look up the most recent run id
+            data_guard
+                .get_db()
+                .lock()
+                .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?
+                .get_last_runs(&name, 1)
+                .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?
+                .first()
+                .ok_or_else(|| HttpError::from_status_code(StatusCode::NOT_FOUND))?
+                .id
+        } else {
+            run_id
+                .parse::<u32>()
+                .map_err(|_| HttpError::from_status_code(StatusCode::NOT_FOUND))?
+        };
         let job = data_guard
             .get_job(&name)
             .ok_or_else(|| HttpError::from_status_code(StatusCode::NOT_FOUND))?;

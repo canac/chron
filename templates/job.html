@@ -42,6 +42,11 @@
         </td>
       </tr>
       <tr>
+        <th scope="row">
+          <a href="/job/{{ job.name }}/logs/latest">latest logs</a>
+        </th>
+      </tr>
+      <tr>
         <th scope="row">log directory</th>
         <td class="log-dir">
           {{ job.log_dir.to_string_lossy() }}
