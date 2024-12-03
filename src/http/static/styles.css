@@ -16,6 +16,10 @@ body {
   }
 }
 
+table {
+  white-space: nowrap;
+}
+
 table.primary {
   width: 100%;
   border-collapse: collapse;
