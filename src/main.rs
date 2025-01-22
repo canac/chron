@@ -7,7 +7,6 @@
 #![allow(
     clippy::future_not_send,
     clippy::missing_const_for_fn,
-    clippy::module_name_repetitions,
     clippy::significant_drop_tightening // produces false positives
 )]
 
