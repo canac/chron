@@ -4,11 +4,7 @@
     clippy::pedantic,
     clippy::nursery
 )]
-#![allow(
-    clippy::future_not_send,
-    clippy::missing_const_for_fn,
-    clippy::significant_drop_tightening // produces false positives
-)]
+#![allow(clippy::future_not_send, clippy::missing_const_for_fn)]
 
 mod chron_service;
 mod chronfile;

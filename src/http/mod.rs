@@ -146,6 +146,7 @@ async fn job_handler(name: Path<String>, data: Data<ThreadData>) -> Result<impl 
 }
 
 #[get("/job/{name}/logs/{run_id}")]
+#[allow(clippy::significant_drop_tightening)] // produces false positives
 async fn job_logs_handler(
     path: Path<(String, String)>,
     data: Data<ThreadData>,
