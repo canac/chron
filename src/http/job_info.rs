@@ -1,6 +1,6 @@
 use super::http_error::HttpError;
 use crate::chron_service::{Job, JobType, ProcessStatus};
-use actix_web::{http::StatusCode, Result};
+use actix_web::{Result, http::StatusCode};
 use chrono::{DateTime, Local, Timelike};
 use std::path::PathBuf;
 

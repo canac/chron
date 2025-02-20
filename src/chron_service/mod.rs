@@ -4,14 +4,14 @@ mod sleep;
 mod terminate_controller;
 mod working_dir;
 
-use self::exec::{exec_command, ExecStatus};
+use self::exec::{ExecStatus, exec_command};
 use self::scheduled_job::ScheduledJob;
 use self::sleep::sleep_until;
 use self::terminate_controller::TerminateController;
 use self::working_dir::expand_working_dir;
 use crate::chronfile::{self, Chronfile};
 use crate::database::Database;
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Utc};
 use chrono_humanize::{Accuracy, HumanTime, Tense};
 use cron::Schedule;
@@ -263,7 +263,9 @@ impl ChronService {
                 debug!("{name}: saving synthetic checkpoint {start_time}");
                 self.db.lock().unwrap().set_checkpoint(name, start_time)?;
             } else {
-                debug!("{name}: cannot save synthetic checkpoint because schedule has no previous runs");
+                debug!(
+                    "{name}: cannot save synthetic checkpoint because schedule has no previous runs"
+                );
             }
         }
         let job = Arc::new(Job {

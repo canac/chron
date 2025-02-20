@@ -1,5 +1,5 @@
 use crate::chron_service::{self, ScheduledJobOptions};
-use serde::{de::Error, Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, de::Error};
 use std::{path::PathBuf, time::Duration};
 
 // Allow RetryConfig to be deserialized from a boolean or a full retry config

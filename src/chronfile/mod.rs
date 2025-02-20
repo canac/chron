@@ -121,35 +121,43 @@ mod tests {
     fn test_extra_fields() {
         assert!(load_chronfile("foo = 'bar'").is_err());
 
-        assert!(load_chronfile(
-            "[startup.startup]
+        assert!(
+            load_chronfile(
+                "[startup.startup]
             command = 'echo'
             foo = 'bar'"
-        )
-        .is_err());
+            )
+            .is_err()
+        );
 
-        assert!(load_chronfile(
-            "[scheduled.schedule]
+        assert!(
+            load_chronfile(
+                "[scheduled.schedule]
             schedule = '* * * * * *'
             command = 'echo'
             foo = 'bar'"
-        )
-        .is_err());
+            )
+            .is_err()
+        );
 
-        assert!(load_chronfile(
-            "[startup.startup]
+        assert!(
+            load_chronfile(
+                "[startup.startup]
             command = 'echo'
             keepAlive = { foo = 'bar' }"
-        )
-        .is_err());
+            )
+            .is_err()
+        );
 
-        assert!(load_chronfile(
-            "[scheduled.schedule]
+        assert!(
+            load_chronfile(
+                "[scheduled.schedule]
             schedule = '* * * * * *'
             command = 'echo'
             retry = { foo = 'bar' }"
-        )
-        .is_err());
+            )
+            .is_err()
+        );
     }
 
     #[test]
