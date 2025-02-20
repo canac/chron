@@ -52,7 +52,7 @@ impl RetryConfig {
         (match exec_status {
             ExecStatus::Aborted | ExecStatus::Failure => self.failures,
             ExecStatus::Success => self.successes,
-        } && self.limit.map_or(true, |limit| attempt < limit))
+        } && self.limit.is_none_or(|limit| attempt < limit))
     }
 }
 
