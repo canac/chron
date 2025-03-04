@@ -136,6 +136,20 @@ mod tests {
     }
 
     #[test]
+    fn test_keep_alive_empty() -> Result<()> {
+        assert_eq!(
+            parse_keep_alive("command = 'echo'\nkeepAlive = {}")?,
+            RetryConfig {
+                failures: false,
+                successes: false,
+                limit: None,
+                delay: None,
+            },
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_keep_alive_limit() -> Result<()> {
         assert_eq!(
             parse_keep_alive("command = 'echo'\nkeepAlive = { successes = true, limit = 3 }")?,

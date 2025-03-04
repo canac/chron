@@ -129,6 +129,20 @@ mod tests {
     }
 
     #[test]
+    fn test_retry_empty() -> Result<()> {
+        assert_eq!(
+            parse_retry("command = 'echo'\nschedule = '* * * * * *'\nretry = {}")?,
+            RetryConfig {
+                failures: true,
+                successes: false,
+                limit: None,
+                delay: None,
+            },
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_retry_delay() -> Result<()> {
         assert_eq!(
             parse_retry("command = 'echo'\nschedule = '* * * * * *'\nretry = { delay = '10m' }")?,
