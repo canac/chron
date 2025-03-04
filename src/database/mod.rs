@@ -63,7 +63,7 @@ CREATE TABLE IF NOT EXISTS checkpoint (
     }
 
     // Set the status code of an existing run
-    pub fn set_run_status_code(&self, run_id: u32, status_code: i32) -> Result<()> {
+    pub fn set_run_status_code(&self, run_id: u32, status_code: Option<i32>) -> Result<()> {
         let mut statement = self.connection.prepare(
             "UPDATE run SET ended_at = STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW'), status_code = ?1 WHERE id = ?2",
         )?;

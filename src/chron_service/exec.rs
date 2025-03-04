@@ -93,16 +93,16 @@ fn exec_command_once(
     // Check the status periodically until it exits without holding onto the child process lock
     let status_code = poll_exit_status(job)?;
 
-    if let Some(code) = status_code {
-        // Update the run status code in the database
-        chron_lock
-            .read()
-            .unwrap()
-            .db
-            .lock()
-            .unwrap()
-            .set_run_status_code(run.id, code)?;
+    // Update the run status code in the database
+    chron_lock
+        .read()
+        .unwrap()
+        .db
+        .lock()
+        .unwrap()
+        .set_run_status_code(run.id, status_code)?;
 
+    if let Some(code) = status_code {
         if code != 0 {
             warn!("{name}: failed with exit code {code}");
 
