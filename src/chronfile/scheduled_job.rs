@@ -73,10 +73,17 @@ impl ScheduledJob {
 
 #[cfg(test)]
 mod tests {
+    use crate::chron_service::RetryConfig;
     use anyhow::Result;
     use std::time::Duration;
+    use toml::de::Error;
 
     use super::*;
+
+    // Parse a scheduled job and return its retry config
+    fn parse_retry(input: &'static str) -> std::result::Result<RetryConfig, Error> {
+        Ok(toml::from_str::<ScheduledJob>(input)?.get_options().retry)
+    }
 
     #[test]
     fn test_makeup_missed_run() -> Result<()> {
@@ -94,54 +101,64 @@ mod tests {
     }
 
     #[test]
-    fn test_retry() -> Result<()> {
-        assert!(
-            !toml::from_str::<ScheduledJob>(
-                "command = 'echo'\nschedule = '* * * * * *'\nretry = false"
-            )?
-            .retry
-            .retry
-        );
-
-        assert!(
-            toml::from_str::<ScheduledJob>(
-                "command = 'echo'\nschedule = '* * * * * *'\nretry = true"
-            )?
-            .retry
-            .retry
-        );
-
+    fn test_retry_false() -> Result<()> {
         assert_eq!(
-            toml::from_str::<ScheduledJob>(
-                "command = 'echo'\nschedule = '* * * * * *'\nretry = { delay = '10m' }"
-            )?
-            .retry,
+            parse_retry("command = 'echo'\nschedule = '* * * * * *'\nretry = false")?,
             RetryConfig {
-                retry: true,
+                failures: false,
+                successes: false,
+                limit: None,
+                delay: None,
+            },
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_retry_true() -> Result<()> {
+        assert_eq!(
+            parse_retry("command = 'echo'\nschedule = '* * * * * *'\nretry = true")?,
+            RetryConfig {
+                failures: true,
+                successes: false,
+                limit: None,
+                delay: None,
+            },
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_retry_delay() -> Result<()> {
+        assert_eq!(
+            parse_retry("command = 'echo'\nschedule = '* * * * * *'\nretry = { delay = '10m' }")?,
+            RetryConfig {
+                failures: true,
+                successes: false,
                 limit: None,
                 delay: Some(Duration::from_secs(600)),
             }
         );
-
-        assert_eq!(
-            toml::from_str::<ScheduledJob>(
-                "command = 'echo'\nschedule = '* * * * * *'\nretry = { failures = true, delay = '10m' }"
-            ).unwrap_err().message(),
-            "data did not match any variant of untagged enum RetryConfigVariant"
-        );
-
         Ok(())
     }
 
     #[test]
     fn test_retry_limit_zero() {
         assert_eq!(
-            toml::from_str::<ScheduledJob>(
-                "command = 'echo'\nschedule = '* * * * * *'\nretry = { limit = 0 }",
-            )
-            .unwrap_err()
-            .message(),
+            parse_retry("command = 'echo'\nschedule = '* * * * * *'\nretry = { limit = 0 }")
+                .unwrap_err()
+                .message(),
             "limit cannot be 0"
+        );
+    }
+
+    #[test]
+    fn test_retry_failures_invalid() {
+        assert_eq!(
+            parse_retry("command = 'echo'\nschedule = '* * * * * *'\nretry = { failures = true, delay = '10m' }")
+                .unwrap_err()
+                .message(),
+            "data did not match any variant of untagged enum RetryConfigVariant",
         );
     }
 }
