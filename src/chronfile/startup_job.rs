@@ -1,5 +1,5 @@
 use crate::chron_service::{RetryConfig, StartupJobOptions};
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, de::Error};
 use std::{path::PathBuf, time::Duration};
 
 #[derive(Debug, Default, Deserialize, Eq, PartialEq)]
@@ -27,24 +27,32 @@ fn deserialize_keep_alive<'de, D: Deserializer<'de>>(
         },
     }
 
-    Ok(match KeepAliveVariant::deserialize(deserializer)? {
-        KeepAliveVariant::Simple(value) => KeepAliveConfig {
+    match KeepAliveVariant::deserialize(deserializer)? {
+        KeepAliveVariant::Simple(value) => Ok(KeepAliveConfig {
             failures: Some(value),
             successes: Some(value),
             ..Default::default()
-        },
+        }),
         KeepAliveVariant::Complex {
             failures,
             successes,
             limit,
             delay,
-        } => KeepAliveConfig {
-            failures,
-            successes,
-            limit,
-            delay,
-        },
-    })
+        } => {
+            if failures.is_none() && successes.is_none() && (limit.is_some() || delay.is_some()) {
+                return Err(D::Error::custom(
+                    "limit or delay cannot be provided if failures or successes are omitted",
+                ));
+            }
+
+            Ok(KeepAliveConfig {
+                failures,
+                successes,
+                limit,
+                delay,
+            })
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -74,11 +82,12 @@ impl StartupJob {
 #[cfg(test)]
 mod tests {
     use anyhow::Result;
+    use toml::de::Error;
 
     use super::*;
 
     // Parse a startup job and return its keep alive config
-    fn parse_keep_alive(input: &'static str) -> Result<RetryConfig> {
+    fn parse_keep_alive(input: &'static str) -> std::result::Result<RetryConfig, Error> {
         Ok(toml::from_str::<StartupJob>(input)?
             .get_options()
             .keep_alive)
@@ -152,5 +161,15 @@ mod tests {
             }
         );
         Ok(())
+    }
+
+    #[test]
+    fn test_keep_alive_invalid() {
+        assert_eq!(
+            parse_keep_alive("command = 'echo'\nkeepAlive = { delay = '10m' }")
+                .unwrap_err()
+                .message(),
+            "limit or delay cannot be provided if failures or successes are omitted",
+        );
     }
 }
