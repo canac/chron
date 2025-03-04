@@ -157,7 +157,7 @@ mod tests {
         assert_eq!(
             job.tick(now().with_second(1).unwrap().with_nanosecond(1).unwrap())
                 .unwrap(),
-            now().with_second(1).unwrap()
+            now().with_second(1).unwrap(),
         );
     }
 
@@ -168,7 +168,7 @@ mod tests {
         assert_eq!(job.tick(now()), None);
         assert_eq!(
             job.tick(now().with_second(5).unwrap()).unwrap(),
-            now().with_second(1).unwrap()
+            now().with_second(1).unwrap(),
         );
     }
 }

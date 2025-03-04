@@ -127,7 +127,7 @@ mod tests {
             command = 'echo'
             foo = 'bar'"
             )
-            .is_err()
+            .is_err(),
         );
 
         assert!(
@@ -137,7 +137,7 @@ mod tests {
             command = 'echo'
             foo = 'bar'"
             )
-            .is_err()
+            .is_err(),
         );
 
         assert!(
@@ -146,7 +146,7 @@ mod tests {
             command = 'echo'
             keepAlive = { foo = 'bar' }"
             )
-            .is_err()
+            .is_err(),
         );
 
         assert!(
@@ -156,7 +156,7 @@ mod tests {
             command = 'echo'
             retry = { foo = 'bar' }"
             )
-            .is_err()
+            .is_err(),
         );
     }
 

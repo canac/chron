@@ -28,7 +28,7 @@ mod tests {
     fn test_initial_solitary_tilde() {
         assert_eq!(
             expand_working_dir(&PathBuf::from("~/project")),
-            dirs::home_dir().unwrap().join("project")
+            dirs::home_dir().unwrap().join("project"),
         );
     }
 
@@ -36,7 +36,7 @@ mod tests {
     fn test_non_solitary_tilde() {
         assert_eq!(
             expand_working_dir(&PathBuf::from("~a/project")),
-            PathBuf::from("~a/project")
+            PathBuf::from("~a/project"),
         );
     }
 
@@ -44,7 +44,7 @@ mod tests {
     fn test_non_initial_tilde() {
         assert_eq!(
             expand_working_dir(&PathBuf::from("/~/project")),
-            PathBuf::from("/~/project")
+            PathBuf::from("/~/project"),
         );
     }
 }

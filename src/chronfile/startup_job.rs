@@ -102,7 +102,7 @@ mod tests {
                 successes: false,
                 limit: None,
                 delay: None,
-            }
+            },
         );
         Ok(())
     }
@@ -116,7 +116,7 @@ mod tests {
                 successes: false,
                 limit: None,
                 delay: None,
-            }
+            },
         );
         Ok(())
     }
@@ -130,7 +130,7 @@ mod tests {
                 successes: true,
                 limit: None,
                 delay: None,
-            }
+            },
         );
         Ok(())
     }
@@ -158,7 +158,7 @@ mod tests {
                 successes: true,
                 limit: Some(3),
                 delay: None,
-            }
+            },
         );
         Ok(())
     }
@@ -172,7 +172,7 @@ mod tests {
                 successes: true,
                 limit: None,
                 delay: Some(Duration::from_secs(600)),
-            }
+            },
         );
         Ok(())
     }

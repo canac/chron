@@ -151,7 +151,7 @@ mod tests {
                 successes: false,
                 limit: None,
                 delay: Some(Duration::from_secs(600)),
-            }
+            },
         );
         Ok(())
     }
@@ -162,7 +162,7 @@ mod tests {
             parse_retry("command = 'echo'\nschedule = '* * * * * *'\nretry = { limit = 0 }")
                 .unwrap_err()
                 .message(),
-            "limit cannot be 0"
+            "limit cannot be 0",
         );
     }
 
