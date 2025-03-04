@@ -77,12 +77,17 @@ mod tests {
 
     use super::*;
 
+    // Parse a startup job and return its keep alive config
+    fn parse_keep_alive(input: &'static str) -> Result<RetryConfig> {
+        Ok(toml::from_str::<StartupJob>(input)?
+            .get_options()
+            .keep_alive)
+    }
+
     #[test]
-    fn test_keep_alive_default() -> Result<()> {
+    fn test_keep_alive_omitted() -> Result<()> {
         assert_eq!(
-            toml::from_str::<StartupJob>("command = 'echo'")?
-                .get_options()
-                .keep_alive,
+            parse_keep_alive("command = 'echo'")?,
             RetryConfig {
                 failures: false,
                 successes: false,
@@ -94,38 +99,58 @@ mod tests {
     }
 
     #[test]
-    fn test_keep_alive() -> Result<()> {
+    fn test_keep_alive_false() -> Result<()> {
         assert_eq!(
-            toml::from_str::<StartupJob>("command = 'echo'\nkeepAlive = false")?.keep_alive,
-            KeepAliveConfig {
-                failures: Some(false),
-                successes: Some(false),
-                ..Default::default()
+            parse_keep_alive("command = 'echo'\nkeepAlive = false")?,
+            RetryConfig {
+                failures: false,
+                successes: false,
+                limit: None,
+                delay: None,
             }
         );
+        Ok(())
+    }
 
+    #[test]
+    fn test_keep_alive_true() -> Result<()> {
         assert_eq!(
-            toml::from_str::<StartupJob>("command = 'echo'\nkeepAlive = true")?.keep_alive,
-            KeepAliveConfig {
-                failures: Some(true),
-                successes: Some(true),
-                ..Default::default()
+            parse_keep_alive("command = 'echo'\nkeepAlive = true")?,
+            RetryConfig {
+                failures: true,
+                successes: true,
+                limit: None,
+                delay: None,
             }
         );
+        Ok(())
+    }
 
+    #[test]
+    fn test_keep_alive_limit() -> Result<()> {
         assert_eq!(
-            toml::from_str::<StartupJob>(
-                "command = 'echo'\nkeepAlive = { successes = true, limit = 3 }"
-            )?
-            .keep_alive,
-            KeepAliveConfig {
-                failures: None,
-                successes: Some(true),
+            parse_keep_alive("command = 'echo'\nkeepAlive = { successes = true, limit = 3 }")?,
+            RetryConfig {
+                failures: false,
+                successes: true,
                 limit: Some(3),
                 delay: None,
             }
         );
+        Ok(())
+    }
 
+    #[test]
+    fn test_keep_alive_delay() -> Result<()> {
+        assert_eq!(
+            parse_keep_alive("command = 'echo'\nkeepAlive = { successes = true, delay = '10m' }")?,
+            RetryConfig {
+                failures: false,
+                successes: true,
+                limit: None,
+                delay: Some(Duration::from_secs(600)),
+            }
+        );
         Ok(())
     }
 }

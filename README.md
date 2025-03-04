@@ -61,11 +61,11 @@ Startup jobs can set `keepAlive` to configure whether and how the job will be re
 
 #### `keepAlive.successes`
 
-`successes` is a boolean and specifies whether the job should be re-run if it terminates successfully, i.e. exits with a status code of zero. If omitted `successes` defaults to `true`.
+`successes` is a boolean and specifies whether the job should be re-run if it terminates successfully, i.e. exits with a status code of zero. If omitted `successes` defaults to `false`.
 
 #### `keepAlive.failures`
 
-`failures` is a boolean and specifies whether the job should be re-run if it terminates unsuccessfully, i.e. exits with a non-zero status code. If omitted `failures` defaults to `true`.
+`failures` is a boolean and specifies whether the job should be re-run if it terminates unsuccessfully, i.e. exits with a non-zero status code. If omitted `failures` defaults to `false`.
 
 #### `keepAlive.limit`
 
