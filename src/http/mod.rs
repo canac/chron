@@ -110,15 +110,18 @@ async fn job_handler(name: Path<String>, data: Data<ThreadData>) -> Result<impl 
                 RunStatus::Terminated
             };
             let started_at = Local.from_utc_datetime(&run.started_at);
+            // If the job is currently running, ended_at will not be set
+            let ended_at = match status {
+                RunStatus::Running => Some(Local::now()),
+                _ => run
+                    .ended_at
+                    .map(|timestamp| Local.from_utc_datetime(&timestamp)),
+            };
             RunInfo {
                 run_id: run.id,
                 timestamp: started_at,
                 late: started_at.signed_duration_since(Local.from_utc_datetime(&run.scheduled_at)),
-                execution_time: run.ended_at.map(|timestamp| {
-                    Local
-                        .from_utc_datetime(&timestamp)
-                        .signed_duration_since(started_at)
-                }),
+                execution_time: ended_at.map(|ended_at| ended_at.signed_duration_since(started_at)),
                 status,
                 log_file: job.log_dir.join(format!("{}.log", run.id)),
                 attempt: format!(
