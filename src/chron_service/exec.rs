@@ -130,8 +130,8 @@ fn exec_command_once(
     drop(process_guard);
 
     Ok(match status_code {
-        Some(code) if code != 0 => ExecStatus::Failure,
-        _ => ExecStatus::Success,
+        Some(0) => ExecStatus::Success,
+        _ => ExecStatus::Failure,
     })
 }
 
