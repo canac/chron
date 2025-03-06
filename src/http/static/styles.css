@@ -39,16 +39,11 @@ nav {
 }
 
 main {
-  max-width: 60rem;
   margin-block: var(--size-6);
-  margin-inline: auto;
+  margin-inline: calc(max(100vw - 60rem, 0px) / 2);
 
-  > * {
+  > *:not(table) {
     padding-inline: var(--size-3);
-  }
-
-  > table {
-    padding-inline: unset;
   }
 }
 
@@ -73,15 +68,15 @@ thead {
   text-align: left;
 
   th {
+    color: hsl(240 0% 45%);
     font-weight: normal;
-    color: hsl(240 3.8% 46.1%);
   }
 }
 
 th {
   padding: var(--size-3);
 
-  &[scope=row] {
+  &[scope="row"] {
     text-align: left;
   }
 }
@@ -112,7 +107,11 @@ a {
   }
 }
 
-.name, .command, .schedule, .working-dir, .log-dir {
+.name,
+.command,
+.schedule,
+.working-dir,
+.log-dir {
   font-family: "Courier New", Courier, monospace;
 }
 
@@ -129,8 +128,8 @@ a {
 
 .timestamp {
   display: flex;
-  gap: var(--size-1);
   align-items: center;
+  gap: var(--size-1);
 }
 
 .late {
