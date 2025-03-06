@@ -7,93 +7,99 @@
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
-    <h1 class="name">{{ job.name }}</h1>
+    <nav>
+      <span>chron</span>
+      <a href="/">Jobs</a>
+    </nav>
+    <main>
+      <h1 class="name">{{ job.name }}</h1>
 
-    <table class="overview">
-      <tr>
-        <th scope="row">command</th>
-        <td class="command">{{ job.command }}</td>
-      </tr>
-      {% if let Some(schedule) = job.schedule %}
-      <tr>
-        <th scope="row">schedule</th>
-        <td class="schedule">{{ schedule }}</td>
-      </tr>
-      {% endif %}
-      {% if let Some(working_dir) = job.working_dir %}
-      <tr>
-        <th scope="row">working dir</th>
-        <td class="working-dir">{{ working_dir.to_string_lossy() }}</td>
-      </tr>
-      {% endif %}
-      <tr>
-        <th scope="row">status</th>
-        <td>
-          {% match job.status %}
-          {% when ProcessStatus::Running { pid } %}
-          <span class="status-text running">running</span>
-          <span class="secondary">(pid {{ pid }})</td></span>
-          {% else %}
-          <span class="status-text">not running</span>
-          {% if let Some(next_run) = job.next_run %}
-          <span class="secondary">(next run <span aria-label="{{ next_run|date }}" data-balloon-pos="down-left">{{ next_run|relative_date }}</span>)</span>
-          {% endif %}
-          {% endmatch %}
-        </td>
-      </tr>
-      <tr>
-        <th scope="row">
-          <a href="/job/{{ job.name }}/logs/latest">latest logs</a>
-        </th>
-      </tr>
-      <tr>
-        <th scope="row">log directory</th>
-        <td class="log-dir">
-          {{ job.log_dir.to_string_lossy() }}
-        </td>
-      </tr>
-    </table>
-
-    <h2>Runs</h2>
-    <table class="primary">
-      <thead>
+      <table class="overview">
         <tr>
-          <th>Time</th>
-          <th>Execution time</th>
-          <th>Exit code</th>
-          <th>Logs</th>
-          <th>Attempt</th>
+          <th scope="row">command</th>
+          <td class="command">{{ job.command }}</td>
         </tr>
-      </thead>
-      <tbody>
-        {% for RunInfo { run_id, timestamp, late, execution_time, status, log_file, attempt } in runs %}
+        {% if let Some(schedule) = job.schedule %}
         <tr>
-          <td class="timestamp">
-            <span aria-label="{{ timestamp|date }}" data-balloon-pos="down-left">{{ timestamp|relative_date }}</span>
-            <span class="late">({{ late|duration }} late)</span>
-          </td>
-          <td class="execution-time">
-            {% if let Some(execution_time) = execution_time %}
-              {{ execution_time|duration }}
+          <th scope="row">schedule</th>
+          <td class="schedule">{{ schedule }}</td>
+        </tr>
+        {% endif %}
+        {% if let Some(working_dir) = job.working_dir %}
+        <tr>
+          <th scope="row">working dir</th>
+          <td class="working-dir">{{ working_dir.to_string_lossy() }}</td>
+        </tr>
+        {% endif %}
+        <tr>
+          <th scope="row">status</th>
+          <td>
+            {% match job.status %}
+            {% when ProcessStatus::Running { pid } %}
+            <span class="status-text running">running</span>
+            <span class="secondary">(pid {{ pid }})</td></span>
+            {% else %}
+            <span class="status-text">not running</span>
+            {% if let Some(next_run) = job.next_run %}
+            <span class="secondary">(next run <span aria-label="{{ next_run|date }}" data-balloon-pos="down-left">{{ next_run|relative_date }}</span>)</span>
             {% endif %}
-          </td>
-          {% match status %}
-          {% when RunStatus::Running %}
-          <td class="status-code running">running</td>
-          {% when RunStatus::Completed with { success, status_code } %}
-          <td class="status-code {% if success %}success{% else %}failure{% endif %}">{{ status_code }}</td>
-          {% when RunStatus::Terminated %}
-          <td class="status-code failure">terminated</td>
-          {% endmatch %}
-          <td class="log-file">
-            <a href="/job/{{ job.name }}/logs/{{ run_id }}" aria-label="{{ log_file.to_string_lossy() }}" data-balloon-pos="down-left">logs</a>
-          </td>
-          <td class="attempt">
-            {{ attempt }}
+            {% endmatch %}
           </td>
         </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+        <tr>
+          <th scope="row">
+            <a href="/job/{{ job.name }}/logs/latest">latest logs</a>
+          </th>
+        </tr>
+        <tr>
+          <th scope="row">log directory</th>
+          <td class="log-dir">
+            {{ job.log_dir.to_string_lossy() }}
+          </td>
+        </tr>
+      </table>
+
+      <h2>Runs</h2>
+      <table class="primary">
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Execution time</th>
+            <th>Exit code</th>
+            <th>Logs</th>
+            <th>Attempt</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for RunInfo { run_id, timestamp, late, execution_time, status, log_file, attempt } in runs %}
+          <tr>
+            <td class="timestamp">
+              <span aria-label="{{ timestamp|date }}" data-balloon-pos="down-left">{{ timestamp|relative_date }}</span>
+              <span class="late">({{ late|duration }} late)</span>
+            </td>
+            <td class="execution-time">
+              {% if let Some(execution_time) = execution_time %}
+                {{ execution_time|duration }}
+              {% endif %}
+            </td>
+            {% match status %}
+            {% when RunStatus::Running %}
+            <td class="status-code running">running</td>
+            {% when RunStatus::Completed with { success, status_code } %}
+            <td class="status-code {% if success %}success{% else %}failure{% endif %}">{{ status_code }}</td>
+            {% when RunStatus::Terminated %}
+            <td class="status-code failure">terminated</td>
+            {% endmatch %}
+            <td class="log-file">
+              <a href="/job/{{ job.name }}/logs/{{ run_id }}" aria-label="{{ log_file.to_string_lossy() }}" data-balloon-pos="down-left">logs</a>
+            </td>
+            <td class="attempt">
+              {{ attempt }}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </main>
   </body>
 </html>

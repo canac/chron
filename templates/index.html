@@ -7,39 +7,45 @@
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
-    <h1>Jobs</h1>
-    <table class="primary">
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th>Command</th>
-          <th>Status</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for JobInfo { name, command, status, working_dir, run_id, schedule, next_run, log_dir } in jobs %}
-        <tr>
-          <td class="name">
-            <a href="/job/{{ name }}">{{ name }}</a>
-          </td>
-          <td class="command">
-            <a href="/job/{{ name }}">{{ command }}</a>
-          </td>
-          <td class="status">
-            <a href="/job/{{ name }}">
-              {% match status %}
-              {% when ProcessStatus::Running { pid } %}
-              <span class="status-text running">running</span>
-              <span class="secondary">(pid {{ pid }})</span>
-              {% else %}
-              <span class="status-text">not running</span>
-              <span class="secondary">(next run {% if let Some(next_run) = next_run %}<span aria-label="{{ next_run|date }}" data-balloon-pos="down-left">{{ next_run|relative_date }}</span>{% else %}never{% endif %})</span>
-              {% endmatch %}
-            </a>
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+    <nav>
+      <span>chron</span>
+      <a aria-current="true" href="/">Jobs</a>
+    </nav>
+    <main>
+      <h1>Jobs</h1>
+      <table class="primary">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Command</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for JobInfo { name, command, status, working_dir, run_id, schedule, next_run, log_dir } in jobs %}
+          <tr>
+            <td class="name">
+              <a href="/job/{{ name }}">{{ name }}</a>
+            </td>
+            <td class="command">
+              <a href="/job/{{ name }}">{{ command }}</a>
+            </td>
+            <td class="status">
+              <a href="/job/{{ name }}">
+                {% match status %}
+                {% when ProcessStatus::Running { pid } %}
+                <span class="status-text running">running</span>
+                <span class="secondary">(pid {{ pid }})</span>
+                {% else %}
+                <span class="status-text">not running</span>
+                <span class="secondary">(next run {% if let Some(next_run) = next_run %}<span aria-label="{{ next_run|date }}" data-balloon-pos="down-left">{{ next_run|relative_date }}</span>{% else %}never{% endif %})</span>
+                {% endmatch %}
+              </a>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </main>
   </body>
 </html>
