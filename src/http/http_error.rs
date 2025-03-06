@@ -27,7 +27,7 @@ impl fmt::Display for HttpError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::GenericError(status_code) => {
-                write!(f, "{}: {}", status_code.as_str(), self.reason())
+                write!(f, "{}: {}", &status_code, self.reason())
             }
         }
     }

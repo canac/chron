@@ -111,8 +111,8 @@ fn exec_command_once(
                 .stderr(Stdio::null())
                 .args([
                     "add",
-                    format!("chron/error/{name}").as_str(),
-                    format!("{name} failed with exit code {code}").as_str(),
+                    &format!("chron/error/{name}"),
+                    &format!("{name} failed with exit code {code}"),
                 ])
                 .spawn()
                 .is_err()

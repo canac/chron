@@ -339,7 +339,7 @@ impl ChronService {
                             .db
                             .lock()
                             .unwrap()
-                            .set_checkpoint(name.as_str(), scheduled_time)
+                            .set_checkpoint(&name, scheduled_time)
                             .unwrap();
                     }
                 };
