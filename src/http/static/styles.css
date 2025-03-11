@@ -40,7 +40,7 @@ nav {
 
 main {
   margin-block: var(--size-6);
-  margin-inline: calc(max(100vw - 60rem, 0px) / 2);
+  margin-inline: clamp(0px, (100vw - 50rem) / 2, 4rem);
 
   > *:not(table) {
     padding-inline: var(--size-3);
