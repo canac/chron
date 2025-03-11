@@ -14,7 +14,7 @@
     <main>
       <h1 class="name">{{ job.name }}</h1>
 
-      <table class="overview">
+      <table class="grid overview">
         <tr>
           <th scope="row">command</th>
           <td class="command">{{ job.command }}</td>
@@ -62,7 +62,7 @@
       </table>
 
       <h2>Runs</h2>
-      <table class="primary">
+      <table class="grid interactive runs">
         <thead>
           <tr>
             <th>Time</th>
@@ -93,7 +93,7 @@
             <td class="status-code failure">terminated</td>
             {% endmatch %}
             <td class="log-file">
-              <a href="/job/{{ job.name }}/logs/{{ run_id }}" aria-label="{{ log_file.to_string_lossy() }}" data-balloon-pos="down-left">logs</a>
+              <a href="/job/{{ job.name }}/logs/{{ run_id }}" aria-label="{{ log_file.to_string_lossy() }}" data-balloon-pos="down-right">logs</a>
             </td>
             <td class="attempt">
               {{ attempt }}

@@ -41,26 +41,42 @@ nav {
 main {
   margin-block: var(--size-6);
   margin-inline: clamp(0px, (100vw - 50rem) / 2, 4rem);
+  padding-inline: var(--size-3);
+}
 
-  > *:not(table) {
-    padding-inline: var(--size-3);
+table.grid {
+  display: grid;
+  column-gap: 2rem;
+
+  &.jobs {
+    grid-template-columns: auto 1fr auto;
+  }
+
+  &.overview {
+    grid-template-columns: auto 1fr;
+  }
+
+  &.runs {
+    grid-template-columns: 1fr 1fr 1fr auto auto;
+  }
+
+  thead, tbody, tr {
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: subgrid;
+  }
+
+  td {
+    word-break: break-all;
+    word-wrap: break-word;
   }
 }
 
-table {
-  white-space: nowrap;
-}
+table.interactive tr {
+  border-bottom: var(--border-size-1) solid var(--gray-3);
 
-table.primary {
-  width: 100%;
-  border-collapse: collapse;
-
-  tr {
-    border-bottom: var(--border-size-1) solid var(--gray-3);
-
-    &:hover {
-      background-color: var(--gray-0);
-    }
+  &:hover {
+    background-color: var(--gray-0);
   }
 }
 
@@ -74,28 +90,20 @@ thead {
 }
 
 th {
-  padding: var(--size-3);
+  padding-block: var(--size-3);
 
   &[scope="row"] {
     text-align: left;
   }
 }
 
-td {
-  text-wrap: nowrap;
-}
-
-tr a {
-  height: 1rem;
-}
-
 td:not(:has(a)) {
-  padding: var(--size-3);
+  padding-block: var(--size-3);
 }
 
 td a {
   display: block;
-  padding: var(--size-3);
+  padding-block: var(--size-3);
 }
 
 a {
