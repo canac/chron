@@ -144,7 +144,7 @@ impl ChronService {
                 continue;
             }
 
-            if let Some(existing_job) = existing_jobs.get(&name) {
+            if let Some((name, existing_job)) = existing_jobs.remove_entry(&name) {
                 // Reuse the job if the command, working dir, shell, and options are the same
                 if existing_job.command == job.command
                     && existing_job.working_dir == job.working_dir
@@ -152,10 +152,12 @@ impl ChronService {
                     && matches!(&existing_job.r#type, JobType::Startup { options } if **options == job.get_options())
                 {
                     debug!("Reusing existing startup job {name}");
-                    self.jobs
-                        .insert(name.clone(), existing_jobs.remove(&name).unwrap());
+                    self.jobs.insert(name, existing_job);
                     continue;
                 }
+
+                // Add back the job because it was not reused
+                existing_jobs.insert(name, existing_job);
             }
 
             debug!("Registering new startup job {name}");
@@ -167,7 +169,7 @@ impl ChronService {
                 continue;
             }
 
-            if let Some(existing_job) = existing_jobs.get(&name) {
+            if let Some((name, existing_job)) = existing_jobs.remove_entry(&name) {
                 // Reuse the job if the command, working dir, shell, options, and schedule are the same
                 if existing_job.command == job.command
                     && existing_job.working_dir == job.working_dir
@@ -175,10 +177,12 @@ impl ChronService {
                     && matches!(&existing_job.r#type, JobType::Scheduled { options, scheduled_job } if **options == job.get_options() && scheduled_job.read().unwrap().get_schedule() == job.schedule)
                 {
                     debug!("Reusing existing scheduled job {name}");
-                    self.jobs
-                        .insert(name.clone(), existing_jobs.remove(&name).unwrap());
+                    self.jobs.insert(name, existing_job);
                     continue;
                 }
+
+                // Add back the job because it was not reused
+                existing_jobs.insert(name, existing_job);
             }
 
             debug!("Registering new scheduled job {name}");
