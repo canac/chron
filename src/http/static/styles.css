@@ -44,7 +44,7 @@ main {
   padding-inline: var(--size-3);
 }
 
-table.grid {
+table {
   display: grid;
   column-gap: 2rem;
 
