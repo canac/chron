@@ -19,6 +19,10 @@
           <th scope="row">command</th>
           <td class="command">{{ job.command }}</td>
         </tr>
+        <tr>
+          <th scope="row">shell</th>
+          <td class="shell">{{ job.shell }}</td>
+        </tr>
         {% if let Some(schedule) = job.schedule %}
         <tr>
           <th scope="row">schedule</th>

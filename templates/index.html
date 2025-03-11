@@ -22,7 +22,7 @@
           </tr>
         </thead>
         <tbody>
-          {% for JobInfo { name, command, status, working_dir, run_id, schedule, next_run, log_dir } in jobs %}
+          {% for JobInfo { name, command, shell, status, working_dir, run_id, schedule, next_run, log_dir } in jobs %}
           <tr>
             <td class="name">
               <a href="/job/{{ name }}">{{ name }}</a>

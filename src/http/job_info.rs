@@ -7,6 +7,7 @@ use std::path::PathBuf;
 pub struct JobInfo {
     pub(crate) name: String,
     pub(crate) command: String,
+    pub(crate) shell: String,
     pub(crate) schedule: Option<String>,
     pub(crate) working_dir: Option<PathBuf>,
     pub(crate) next_run: Option<DateTime<Local>>,
@@ -62,6 +63,7 @@ impl JobInfo {
         Ok(Self {
             name: name.to_owned(),
             command: job.command.clone(),
+            shell: job.shell.clone(),
             schedule,
             working_dir: job.working_dir.clone(),
             next_run,

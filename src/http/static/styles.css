@@ -119,6 +119,7 @@ a {
 
 .name,
 .command,
+.shell,
 .schedule,
 .working-dir,
 .log-dir {
