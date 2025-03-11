@@ -57,18 +57,31 @@ table {
   }
 
   &.runs {
-    grid-template-columns: 1fr 1fr 1fr auto auto;
+    grid-template-columns: 2fr 1fr auto auto auto;
+  }
+}
+
+thead, tbody, tr {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+}
+
+th {
+  /* User agent overrides */
+  font-weight: normal;
+  text-align: left;
+}
+
+th {
+  padding-block: var(--size-3);
+
+  thead & {
+    color: hsl(240 0% 45%);
   }
 
-  thead, tbody, tr {
-    display: grid;
-    grid-column: 1 / -1;
-    grid-template-columns: subgrid;
-  }
-
-  td {
-    word-break: break-all;
-    word-wrap: break-word;
+  tbody &[scope="row"] {
+    font-weight: bold;
   }
 }
 
@@ -80,21 +93,9 @@ table.interactive tr {
   }
 }
 
-thead {
-  text-align: left;
-
-  th {
-    color: hsl(240 0% 45%);
-    font-weight: normal;
-  }
-}
-
-th {
-  padding-block: var(--size-3);
-
-  &[scope="row"] {
-    text-align: left;
-  }
+td {
+  word-break: break-all;
+  word-wrap: break-word;
 }
 
 td:not(:has(a)) {
@@ -107,6 +108,7 @@ td a {
 }
 
 a {
+  /* User agent overrides */
   color: unset;
   text-decoration: none;
 
