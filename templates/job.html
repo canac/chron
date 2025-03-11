@@ -76,8 +76,10 @@
           {% for RunInfo { run_id, timestamp, late, execution_time, status, log_file, attempt } in runs %}
           <tr>
             <td class="timestamp">
-              <span aria-label="{{ timestamp|date }}" data-balloon-pos="down-left">{{ timestamp|relative_date }}</span>
-              <span class="late">({{ late|duration }} late)</span>
+              <span aria-label="{{ timestamp|date }}" data-balloon-pos="down-left">
+                {{ timestamp|relative_date }}
+                <span class="late">({{ late|duration }} late)</span>
+              </span>
             </td>
             <td class="execution-time">
               {% if let Some(execution_time) = execution_time %}
