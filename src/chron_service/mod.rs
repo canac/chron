@@ -17,11 +17,12 @@ use chrono_humanize::{Accuracy, HumanTime, Tense};
 use cron::Schedule;
 use log::debug;
 use std::collections::HashMap;
+use std::mem::take;
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex, RwLock};
-use std::thread;
+use std::thread::{JoinHandle, spawn};
 use std::time::Duration;
 
 pub type ChronServiceLock = Arc<RwLock<ChronService>>;
@@ -89,10 +90,15 @@ pub struct Job {
     pub next_attempt: RwLock<Option<DateTime<Utc>>>,
 }
 
+struct Thread {
+    job: Arc<Job>,
+    handle: JoinHandle<()>,
+}
+
 pub struct ChronService {
     log_dir: PathBuf,
     db: DatabaseLock,
-    jobs: HashMap<String, Arc<Job>>,
+    jobs: HashMap<String, Thread>,
     default_shell: String,
     shell: Option<String>,
 }
@@ -120,12 +126,12 @@ impl ChronService {
 
     // Lookup a job by name
     pub fn get_job(&self, name: &String) -> Option<&Arc<Job>> {
-        self.jobs.get(name)
+        self.jobs.get(name).map(|thread| &thread.job)
     }
 
     // Return an iterator of the jobs
     pub fn get_jobs_iter(&self) -> impl Iterator<Item = (&String, &Arc<Job>)> {
-        self.jobs.iter()
+        self.jobs.iter().map(|(name, thread)| (name, &thread.job))
     }
 
     // Start or start the chron service using the jobs defined in the provided chronfile
@@ -140,20 +146,20 @@ impl ChronService {
                 continue;
             }
 
-            if let Some((name, existing_job)) = existing_jobs.remove_entry(&name) {
+            if let Some((name, thread)) = existing_jobs.remove_entry(&name) {
                 // Reuse the job if the command, working dir, shell, and options are the same
-                if existing_job.command == job.command
-                    && existing_job.working_dir == job.working_dir
+                if thread.job.command == job.command
+                    && thread.job.working_dir == job.working_dir
                     && same_shell
-                    && matches!(&existing_job.r#type, JobType::Startup { options } if **options == job.get_options())
+                    && matches!(&thread.job.r#type, JobType::Startup { options } if **options == job.get_options())
                 {
                     debug!("Reusing existing startup job {name}");
-                    self.jobs.insert(name, existing_job);
+                    self.jobs.insert(name, thread);
                     continue;
                 }
 
                 // Add back the job because it was not reused
-                existing_jobs.insert(name, existing_job);
+                existing_jobs.insert(name, thread);
             }
 
             debug!("Registering new startup job {name}");
@@ -165,20 +171,20 @@ impl ChronService {
                 continue;
             }
 
-            if let Some((name, existing_job)) = existing_jobs.remove_entry(&name) {
+            if let Some((name, thread)) = existing_jobs.remove_entry(&name) {
                 // Reuse the job if the command, working dir, shell, options, and schedule are the same
-                if existing_job.command == job.command
-                    && existing_job.working_dir == job.working_dir
+                if thread.job.command == job.command
+                    && thread.job.working_dir == job.working_dir
                     && same_shell
-                    && matches!(&existing_job.r#type, JobType::Scheduled { options, scheduled_job } if **options == job.get_options() && scheduled_job.read().unwrap().get_schedule() == job.schedule)
+                    && matches!(&thread.job.r#type, JobType::Scheduled { options, scheduled_job } if **options == job.get_options() && scheduled_job.read().unwrap().get_schedule() == job.schedule)
                 {
                     debug!("Reusing existing scheduled job {name}");
-                    self.jobs.insert(name, existing_job);
+                    self.jobs.insert(name, thread);
                     continue;
                 }
 
                 // Add back the job because it was not reused
-                existing_jobs.insert(name, existing_job);
+                existing_jobs.insert(name, thread);
             }
 
             debug!("Registering new scheduled job {name}");
@@ -186,12 +192,28 @@ impl ChronService {
         }
 
         // Terminate all existing jobs that weren't reused
-        for (name, existing_job) in existing_jobs {
+        let mut thread_handles = vec![];
+        for (name, thread) in existing_jobs {
             debug!("Terminating job {name}");
-            existing_job.terminate_controller.terminate();
+            thread.job.terminate_controller.terminate();
+            thread_handles.push(thread.handle);
+        }
+
+        // Wait for each of the threads to complete
+        for thread_handle in thread_handles {
+            thread_handle.join().unwrap();
         }
 
         Ok(())
+    }
+
+    // Start or start the chron service using the jobs defined in the provided chronfile
+    pub fn stop(&mut self) {
+        for (name, thread) in take(&mut self.jobs) {
+            debug!("Terminating job {name}");
+            thread.job.terminate_controller.terminate();
+            thread.handle.join().unwrap();
+        }
     }
 
     // Add a new job to be run on startup
@@ -215,17 +237,25 @@ impl ChronService {
             },
             next_attempt: RwLock::new(None),
         });
-        self.jobs.insert(name.to_owned(), Arc::clone(&job));
+        let job_copy = Arc::clone(&job);
 
         let db = self.get_db();
-        thread::spawn(move || {
+        let handle = spawn(move || {
             exec_command(&db, &job, &options.keep_alive, &Utc::now()).unwrap();
         });
+        self.jobs.insert(
+            job_copy.name.clone(),
+            Thread {
+                job: job_copy,
+                handle,
+            },
+        );
 
         Ok(())
     }
 
     // Add a new job to be run on the given schedule
+    #[allow(clippy::too_many_lines)]
     fn schedule(&mut self, name: &str, job: &chronfile::ScheduledJob) -> Result<()> {
         Self::validate_name(name)?;
         if self.jobs.contains_key(name) {
@@ -282,11 +312,11 @@ impl ChronService {
             },
             next_attempt: RwLock::new(None),
         });
-        self.jobs.insert(name.to_owned(), Arc::clone(&job));
+        let job_copy = Arc::clone(&job);
 
         let db = self.get_db();
         let name = name.to_owned();
-        thread::spawn(move || {
+        let handle = spawn(move || {
             loop {
                 // Stop executing if a terminate was requested
                 if job.terminate_controller.is_terminated() {
@@ -350,6 +380,14 @@ impl ChronService {
                 sleep_until(next_run);
             }
         });
+
+        self.jobs.insert(
+            job_copy.name.clone(),
+            Thread {
+                job: job_copy,
+                handle,
+            },
+        );
 
         Ok(())
     }
