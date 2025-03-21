@@ -13,7 +13,7 @@ use chrono::{DateTime, Duration, Local, TimeZone};
 use log::info;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::fs::File;
+use tokio::{fs::File, spawn, sync::oneshot::Receiver};
 use tokio_util::io::ReaderStream;
 
 type ThreadData = crate::chron_service::ChronServiceLock;
@@ -189,9 +189,14 @@ async fn job_logs_handler(
         .streaming(ReaderStream::new(file)))
 }
 
-pub async fn start_server(data: ThreadData, port: u16) -> Result<(), std::io::Error> {
+pub async fn create_server(
+    data: ThreadData,
+    port: u16,
+    rx_terminate: Receiver<()>,
+) -> Result<(), std::io::Error> {
     info!("Starting HTTP server on port {}", port);
-    HttpServer::new(move || {
+
+    let server = HttpServer::new(move || {
         let app_data = Data::new(Arc::clone(&data));
         App::new()
             .app_data(app_data)
@@ -200,7 +205,21 @@ pub async fn start_server(data: ThreadData, port: u16) -> Result<(), std::io::Er
             .service(job_handler)
             .service(job_logs_handler)
     })
+    .disable_signals()
     .bind(("localhost", port))?
-    .run()
-    .await
+    .run();
+    let handle = server.handle();
+    let terminator = spawn(async move {
+        rx_terminate.await.unwrap();
+        info!("Stopping HTTP server");
+        handle.stop(true).await;
+    });
+
+    // Start the server and the terminator task
+    tokio::select! {
+        _ = server => (),
+        _ = terminator => (),
+    }
+
+    Ok(())
 }

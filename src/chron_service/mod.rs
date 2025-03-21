@@ -135,11 +135,12 @@ impl ChronService {
     }
 
     // Start or start the chron service using the jobs defined in the provided chronfile
-    pub fn start(&mut self, chronfile: Chronfile) -> Result<()> {
-        let same_shell = self.shell == chronfile.config.shell;
-        self.shell = chronfile.config.shell;
+    pub fn start(chron_lock: &ChronServiceLock, chronfile: Chronfile) -> Result<()> {
+        let mut chron = chron_lock.write().unwrap();
+        let same_shell = chron.shell == chronfile.config.shell;
+        chron.shell = chronfile.config.shell;
 
-        let mut existing_jobs = std::mem::take(&mut self.jobs);
+        let mut existing_jobs = take(&mut chron.jobs);
 
         for (name, job) in chronfile.startup_jobs {
             if job.disabled {
@@ -154,7 +155,7 @@ impl ChronService {
                     && matches!(&thread.job.r#type, JobType::Startup { options } if **options == job.get_options())
                 {
                     debug!("Reusing existing startup job {name}");
-                    self.jobs.insert(name, thread);
+                    chron.jobs.insert(name, thread);
                     continue;
                 }
 
@@ -163,7 +164,7 @@ impl ChronService {
             }
 
             debug!("Registering new startup job {name}");
-            self.startup(&name, &job)?;
+            chron.startup(&name, &job)?;
         }
 
         for (name, job) in chronfile.scheduled_jobs {
@@ -179,7 +180,7 @@ impl ChronService {
                     && matches!(&thread.job.r#type, JobType::Scheduled { options, scheduled_job } if **options == job.get_options() && scheduled_job.read().unwrap().get_schedule() == job.schedule)
                 {
                     debug!("Reusing existing scheduled job {name}");
-                    self.jobs.insert(name, thread);
+                    chron.jobs.insert(name, thread);
                     continue;
                 }
 
@@ -188,31 +189,47 @@ impl ChronService {
             }
 
             debug!("Registering new scheduled job {name}");
-            self.schedule(&name, &job)?;
+            chron.schedule(&name, &job)?;
         }
+
+        // The lock should be released before terminating jobs to avoid holding it longer than necessary
+        drop(chron);
 
         // Terminate all existing jobs that weren't reused
-        let mut thread_handles = vec![];
-        for (name, thread) in existing_jobs {
-            debug!("Terminating job {name}");
-            thread.job.terminate_controller.terminate();
-            thread_handles.push(thread.handle);
-        }
-
-        // Wait for each of the threads to complete
-        for thread_handle in thread_handles {
-            thread_handle.join().unwrap();
-        }
+        Self::terminate_jobs_blocking(existing_jobs);
 
         Ok(())
     }
 
     // Start or start the chron service using the jobs defined in the provided chronfile
-    pub fn stop(&mut self) {
-        for (name, thread) in take(&mut self.jobs) {
+    pub fn stop(chron_lock: &ChronServiceLock) {
+        let mut chron = chron_lock.write().unwrap();
+        let jobs = take(&mut chron.jobs);
+
+        // The lock should be released before terminating jobs to avoid holding it longer than necessary
+        drop(chron);
+
+        Self::terminate_jobs_blocking(jobs);
+    }
+
+    // Terminate a collection of jobs and block until all of their threads complete
+    // It will block for no more than MAX_POLL_DELAY unless there is heavy contention waiting for the database mutex
+    fn terminate_jobs_blocking(jobs: HashMap<String, Thread>) {
+        for (name, thread) in &jobs {
             debug!("Terminating job {name}");
             thread.job.terminate_controller.terminate();
-            thread.handle.join().unwrap();
+        }
+
+        // Wait for each of the threads to complete
+        let has_jobs = !jobs.is_empty();
+        for (name, thread) in jobs {
+            debug!("Waiting for job {name} to terminate...");
+            if let Err(err) = thread.handle.join() {
+                debug!("Job {name} panicked {err:?}");
+            }
+        }
+        if has_jobs {
+            debug!("Finished waiting for all jobs to terminate");
         }
     }
 
