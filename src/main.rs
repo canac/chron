@@ -20,7 +20,7 @@ use clap::Parser;
 use log::{LevelFilter, debug, error};
 use notify::RecursiveMode;
 use notify_debouncer_mini::{DebounceEventResult, new_debouncer};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::Duration;
 
@@ -43,7 +43,9 @@ async fn main() -> Result<()> {
 
     let project_dirs = directories::ProjectDirs::from("com", "canac", "chron")
         .context("Failed to determine application directories")?;
-    let chron_lock = ChronService::new(project_dirs.data_local_dir())?;
+    let chron_lock = Arc::new(RwLock::new(ChronService::new(
+        project_dirs.data_local_dir(),
+    )?));
     chron_lock.write().unwrap().start(chronfile)?;
 
     let chron = Arc::clone(&chron_lock);

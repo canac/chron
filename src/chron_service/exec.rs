@@ -1,6 +1,6 @@
 use super::sleep::sleep_until;
-use super::{Job, RetryConfig};
-use crate::chron_service::{ChronServiceLock, Process};
+use super::{DatabaseLock, Job, RetryConfig};
+use crate::chron_service::Process;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use log::{debug, info, warn};
@@ -23,11 +23,7 @@ pub enum ExecStatus {
 }
 
 // Helper to execute the specified command without retries
-fn exec_command_once(
-    chron_lock: &ChronServiceLock,
-    job: &Arc<Job>,
-    metadata: &Metadata,
-) -> Result<ExecStatus> {
+fn exec_command_once(db: &DatabaseLock, job: &Arc<Job>, metadata: &Metadata) -> Result<ExecStatus> {
     // Don't run the job at all if it is supposed to be terminated
     if job.terminate_controller.is_terminated() {
         return Ok(ExecStatus::Aborted);
@@ -45,18 +41,12 @@ fn exec_command_once(
     );
 
     // Record the run in the database
-    let run = chron_lock
-        .read()
-        .unwrap()
-        .get_db()
-        .lock()
-        .unwrap()
-        .insert_run(
-            &name,
-            &metadata.scheduled_time.naive_utc(),
-            metadata.attempt,
-            metadata.max_attempts,
-        )?;
+    let run = db.lock().unwrap().insert_run(
+        &name,
+        &metadata.scheduled_time.naive_utc(),
+        metadata.attempt,
+        metadata.max_attempts,
+    )?;
 
     // Open the log file, creating the directory if necessary
     fs::create_dir_all(&job.log_dir)
@@ -94,11 +84,7 @@ fn exec_command_once(
     let status_code = poll_exit_status(job)?;
 
     // Update the run status code in the database
-    chron_lock
-        .read()
-        .unwrap()
-        .db
-        .lock()
+    db.lock()
         .unwrap()
         .set_run_status_code(run.id, status_code)?;
 
@@ -185,7 +171,7 @@ fn poll_exit_status(job: &Arc<Job>) -> Result<Option<i32>> {
 // Execute the job's command, handling retries
 // Return a boolean indicating whether the command completed
 pub fn exec_command(
-    chron_lock: &ChronServiceLock,
+    db: &DatabaseLock,
     job: &Arc<Job>,
     retry_config: &RetryConfig,
     scheduled_time: &DateTime<Utc>,
@@ -210,7 +196,7 @@ pub fn exec_command(
             attempt,
             max_attempts: retry_config.limit,
         };
-        let status = exec_command_once(chron_lock, job, &metadata)?;
+        let status = exec_command_once(db, job, &metadata)?;
         if !retry_config.should_retry(status, attempt) {
             // We are done retrying so clear the next attempt
             job.next_attempt.write().unwrap().take();

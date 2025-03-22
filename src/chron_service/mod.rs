@@ -11,7 +11,7 @@ use self::terminate_controller::TerminateController;
 use self::working_dir::expand_working_dir;
 use crate::chronfile::{self, Chronfile};
 use crate::database::Database;
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use chrono_humanize::{Accuracy, HumanTime, Tense};
 use cron::Schedule;
@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::str::FromStr;
-use std::sync::{Arc, Mutex, RwLock, Weak};
+use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::Duration;
 
@@ -95,26 +95,22 @@ pub struct ChronService {
     jobs: HashMap<String, Arc<Job>>,
     default_shell: String,
     shell: Option<String>,
-    me: Weak<RwLock<ChronService>>,
 }
 
 impl ChronService {
     // Create a new ChronService instance
-    pub fn new(chron_dir: &Path) -> Result<ChronServiceLock> {
+    pub fn new(chron_dir: &Path) -> Result<Self> {
         // Make sure that the chron directory exists
         std::fs::create_dir_all(chron_dir)?;
 
         let db = Database::new(chron_dir)?;
-        Ok(Arc::new_cyclic(|me| {
-            RwLock::new(Self {
-                log_dir: chron_dir.join("logs"),
-                db: Arc::new(Mutex::new(db)),
-                jobs: HashMap::new(),
-                default_shell: Self::get_user_shell().unwrap(),
-                shell: None,
-                me: Weak::clone(me),
-            })
-        }))
+        Ok(Self {
+            log_dir: chron_dir.join("logs"),
+            db: Arc::new(Mutex::new(db)),
+            jobs: HashMap::new(),
+            default_shell: Self::get_user_shell().unwrap(),
+            shell: None,
+        })
     }
 
     // Return the service's database connection
@@ -221,9 +217,9 @@ impl ChronService {
         });
         self.jobs.insert(name.to_owned(), Arc::clone(&job));
 
-        let me = self.get_me()?;
+        let db = self.get_db();
         thread::spawn(move || {
-            exec_command(&me, &job, &options.keep_alive, &Utc::now()).unwrap();
+            exec_command(&db, &job, &options.keep_alive, &Utc::now()).unwrap();
         });
 
         Ok(())
@@ -288,7 +284,7 @@ impl ChronService {
         });
         self.jobs.insert(name.to_owned(), Arc::clone(&job));
 
-        let me = self.get_me()?;
+        let db = self.get_db();
         let name = name.to_owned();
         thread::spawn(move || {
             loop {
@@ -327,7 +323,7 @@ impl ChronService {
                     debug!("{name}: scheduled for {scheduled_time} ({late} late)");
 
                     let completed = exec_command(
-                        &me,
+                        &db,
                         &job,
                         &RetryConfig {
                             delay: Some(retry_delay),
@@ -338,10 +334,7 @@ impl ChronService {
                     .unwrap();
                     if completed {
                         debug!("{name}: updating checkpoint {scheduled_time}");
-                        me.read()
-                            .unwrap()
-                            .db
-                            .lock()
+                        db.lock()
                             .unwrap()
                             .set_checkpoint(&name, scheduled_time)
                             .unwrap();
@@ -364,13 +357,6 @@ impl ChronService {
     // Get the shell to execute commands with
     fn get_shell(&self) -> String {
         self.shell.as_ref().unwrap_or(&self.default_shell).clone()
-    }
-
-    // Return the Arc<RwLock> of this ChronService
-    fn get_me(&self) -> Result<ChronServiceLock> {
-        self.me
-            .upgrade()
-            .ok_or_else(|| anyhow!("Self has been destructed"))
     }
 
     // Helper to validate the job name
