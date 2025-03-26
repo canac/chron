@@ -1,7 +1,7 @@
 use super::sleep::sleep_until;
 use super::{DatabaseLock, Job, RetryConfig};
 use crate::chron_service::Process;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Utc};
 use log::{debug, info, warn};
 use std::fs;
@@ -88,6 +88,10 @@ fn exec_command_once(db: &DatabaseLock, job: &Arc<Job>, metadata: &Metadata) -> 
         .unwrap()
         .set_run_status_code(run.id, status_code)?;
 
+    // Wait to clear the process until after saving the run status to the database to avoid a race condition where the
+    // process is None because the job terminated, but the most recent run in the database still has a status of None.
+    *job.running_process.write().unwrap() = None;
+
     if let Some(code) = status_code {
         if code != 0 {
             warn!("{name}: failed with exit code {code}");
@@ -108,13 +112,6 @@ fn exec_command_once(db: &DatabaseLock, job: &Arc<Job>, metadata: &Metadata) -> 
         }
     }
 
-    // Wait to clear the process until after saving the run status to the database to avoid a race
-    // condition where running_process is None because the job terminated, but the most recent run
-    // in the database still has a status of None.
-    let mut process_guard = job.running_process.write().unwrap();
-    process_guard.take();
-    drop(process_guard);
-
     Ok(match status_code {
         Some(0) => ExecStatus::Success,
         _ => ExecStatus::Failure,
@@ -129,10 +126,10 @@ fn poll_exit_status(job: &Arc<Job>) -> Result<Option<i32>> {
     let mut poll_interval = Duration::from_millis(1);
     loop {
         let mut process_guard = job.running_process.write().unwrap();
-        let process = &mut process_guard
+        let process = process_guard
             .as_mut()
-            .expect("process should not be None")
-            .child_process;
+            .map(|process| &mut process.child_process)
+            .ok_or_else(|| anyhow!("No process to poll"))?;
 
         // Attempt to terminate the process if we got a terminate signal from the terminate controller
         if job.terminate_controller.is_terminated() {
