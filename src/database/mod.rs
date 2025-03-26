@@ -74,7 +74,6 @@ CREATE TABLE IF NOT EXISTS checkpoint (
     }
 
     // Read the last runs of a job
-    #[allow(clippy::cast_possible_wrap)]
     pub fn get_last_runs(&self, name: &str, count: u64) -> Result<Vec<Run>> {
         let mut statement = self
             .connection
