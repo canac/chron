@@ -225,7 +225,16 @@ impl ChronService {
         for (name, thread) in jobs {
             debug!("Waiting for job {name} to terminate...");
             if let Err(err) = thread.handle.join() {
-                debug!("Job {name} panicked {err:?}");
+                let message = if let Some(message) = err.downcast_ref::<String>() {
+                    message.as_str()
+                } else if let Some(message) = err.downcast_ref::<&'static str>() {
+                    message
+                } else {
+                    debug!("Job {name} panicked");
+                    continue;
+                };
+
+                debug!("Job {name} panicked with error \"{message}\"");
             }
         }
         if has_jobs {
