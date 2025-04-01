@@ -14,6 +14,8 @@ use chrono::{DateTime, Duration, Local, TimeZone};
 use log::info;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
+use tokio::sync::oneshot::error::RecvError;
+use tokio::task::JoinHandle;
 use tokio::{fs::File, spawn, sync::oneshot::Receiver};
 use tokio_util::io::ReaderStream;
 
@@ -201,10 +203,11 @@ pub async fn create_server(
     .bind(("localhost", port))?
     .run();
     let handle = server.handle();
-    let terminator = spawn(async move {
-        rx_terminate.await.unwrap();
+    let terminator: JoinHandle<Result<(), RecvError>> = spawn(async move {
+        rx_terminate.await?;
         info!("Stopping HTTP server");
         handle.stop(true).await;
+        Ok(())
     });
 
     // Start the server and the terminator task

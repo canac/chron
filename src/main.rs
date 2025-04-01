@@ -4,6 +4,7 @@
     clippy::pedantic,
     clippy::nursery
 )]
+#![cfg_attr(not(test), warn(clippy::unwrap_used))]
 #![allow(clippy::missing_const_for_fn)]
 
 mod chron_service;
@@ -63,11 +64,11 @@ async fn main() -> Result<()> {
             Ok(chronfile) => {
                 debug!("Reloaded chronfile {}", watch_path.to_string_lossy());
                 if let Err(err) = ChronService::start(&watcher_chron, chronfile) {
-                    error!("Error starting chron\n{err:?}");
+                    error!("Failed to start chron\n{err:?}");
                 }
             }
             Err(err) => error!(
-                "Error reloading chronfile {}\n{err:?}",
+                "Failed to reload chronfile {}\n{err:?}",
                 watch_path.to_string_lossy()
             ),
         }
@@ -94,7 +95,7 @@ async fn main() -> Result<()> {
         }
         ChronService::stop(&ctrlc_chron);
         if let Some(tx) = tx.take() {
-            tx.send(()).unwrap();
+            tx.send(()).expect("Failed to send terminate message");
         }
     })?;
 

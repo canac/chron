@@ -34,7 +34,7 @@ impl ScheduledJob {
         let after = if last_tick.timestamp_subsec_nanos() == 0 {
             last_tick
         } else {
-            last_tick.with_nanosecond(0).unwrap() + chrono::Duration::seconds(1)
+            last_tick.with_nanosecond(0)? + chrono::Duration::seconds(1)
         };
         self.schedule
             .after(&after)
@@ -60,11 +60,7 @@ impl ScheduledJob {
             // There is a bug in cron where reverse iterators starts counting
             // from the second rounded down, so add a second to compensate
             // https://github.com/zslayton/cron/issues/108
-            .after::<Local>(
-                &now.checked_add_signed(chrono::Duration::seconds(1))
-                    .unwrap()
-                    .into(),
-            )
+            .after::<Local>(&now.checked_add_signed(chrono::Duration::seconds(1))?.into())
             // Iterating backwards in time (from newest to oldest)
             .rev()
             // Until the last tick

@@ -93,7 +93,7 @@ pub struct Job {
 
 struct Thread {
     job: Arc<Job>,
-    handle: JoinHandle<()>,
+    handle: JoinHandle<Result<()>>,
 }
 
 pub struct ChronService {
@@ -115,7 +115,7 @@ impl ChronService {
             log_dir: chron_dir.join("logs"),
             db: Arc::new(Mutex::new(db)),
             jobs: HashMap::new(),
-            default_shell: Self::get_user_shell().unwrap(),
+            default_shell: Self::get_user_shell().context("Failed to get user's default shell")?,
             shell: None,
         })
     }
@@ -225,17 +225,24 @@ impl ChronService {
         let has_jobs = !jobs.is_empty();
         for (name, thread) in jobs {
             debug!("Waiting for job {name} to terminate...");
-            if let Err(err) = thread.handle.join() {
-                let message = if let Some(message) = err.downcast_ref::<String>() {
-                    message.as_str()
-                } else if let Some(message) = err.downcast_ref::<&'static str>() {
-                    message
-                } else {
-                    debug!("Job {name} panicked");
-                    continue;
-                };
-
-                debug!("Job {name} panicked with error \"{message}\"");
+            match thread.handle.join() {
+                // The thread returned an error result
+                Ok(Err(err)) => {
+                    debug!("Job {name} failed with error: {err:?}");
+                }
+                // The thread panicked
+                Err(err) => {
+                    let message = if let Some(message) = err.downcast_ref::<String>() {
+                        message.as_str()
+                    } else if let Some(message) = err.downcast_ref::<&'static str>() {
+                        message
+                    } else {
+                        debug!("Job {name} panicked");
+                        continue;
+                    };
+                    debug!("Job {name} panicked with error \"{message}\"");
+                }
+                _ => (),
             }
         }
         if has_jobs {
@@ -268,7 +275,8 @@ impl ChronService {
 
         let db = self.get_db();
         let handle = Builder::new().name(name.to_owned()).spawn(move || {
-            exec_command(&db, &job, &options.keep_alive, &Utc::now()).unwrap();
+            exec_command(&db, &job, &options.keep_alive, &Utc::now())?;
+            Ok(())
         })?;
         self.jobs.insert(
             job_copy.name.clone(),
@@ -387,13 +395,10 @@ impl ChronService {
                             ..options.retry
                         },
                         &scheduled_time,
-                    )
-                    .unwrap();
+                    )?;
                     if completed {
                         debug!("{name}: updating checkpoint {scheduled_time}");
-                        db.lock_unpoisoned()
-                            .set_checkpoint(&name, scheduled_time)
-                            .unwrap();
+                        db.lock_unpoisoned().set_checkpoint(&name, scheduled_time)?;
                     }
                 };
 
@@ -403,8 +408,10 @@ impl ChronService {
                 };
 
                 // Wait until the next run before ticking again
-                sleep_until(next_run, &job.terminate_controller).unwrap();
+                sleep_until(next_run, &job.terminate_controller)?;
             }
+
+            Ok(())
         })?;
 
         self.jobs.insert(

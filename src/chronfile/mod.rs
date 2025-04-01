@@ -28,9 +28,9 @@ impl Chronfile {
     // Load a chronfile
     pub fn load(path: &PathBuf) -> Result<Self> {
         let toml_str = std::fs::read_to_string(path)
-            .with_context(|| format!("Error reading chronfile {path:?}"))?;
+            .with_context(|| format!("Failed to read chronfile {path:?}"))?;
         toml::from_str(&toml_str)
-            .with_context(|| format!("Error deserializing TOML chronfile {path:?}"))
+            .with_context(|| format!("Failed to deserialize TOML chronfile {path:?}"))
     }
 }
 

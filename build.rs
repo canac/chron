@@ -7,13 +7,15 @@ use std::fs::{create_dir_all, write};
 use std::io::Result;
 use std::path::PathBuf;
 
-fn main() {
+fn main() -> Result<()> {
     // Don't rebuild when the generated completions change
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src/cli.rs");
 
-    generate_completions().unwrap();
-    generate_manpage().unwrap();
+    generate_completions()?;
+    generate_manpage()?;
+
+    Ok(())
 }
 
 fn generate_completions() -> Result<()> {

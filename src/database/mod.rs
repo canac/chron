@@ -15,7 +15,7 @@ impl Database {
     pub fn new(chron_dir: &Path) -> Result<Self> {
         let db_path = chron_dir.join("chron.db");
         let connection = Connection::open(db_path.clone())
-            .with_context(|| format!("Error opening SQLite database {db_path:?}"))?;
+            .with_context(|| format!("Failed to open SQLite database {db_path:?}"))?;
         connection
             .execute_batch(
                 r"CREATE TABLE IF NOT EXISTS run (
@@ -35,13 +35,13 @@ CREATE TABLE IF NOT EXISTS checkpoint (
   timestamp DATETIME NOT NULL
 );",
             )
-            .context("Error creating SQLite tables")?;
+            .context("Failed to create SQLite tables")?;
 
         // Add a busy timeout so that when multiple processes try to write to
         // the database, they wait for each other to finish instead of erroring
         connection
             .execute_batch("PRAGMA busy_timeout = 1000")
-            .context("Error setting busy timeout")?;
+            .context("Failed to set busy timeout")?;
         Ok(Self { connection })
     }
 
@@ -58,7 +58,7 @@ CREATE TABLE IF NOT EXISTS checkpoint (
             .prepare("INSERT INTO run (name, scheduled_at, attempt, max_attempts) VALUES (?1, ?2, ?3, ?4) RETURNING *")?;
         let run = statement
             .query_row((name, scheduled_at, attempt, max_attempts), Run::from_row)
-            .context("Error saving run to database")?;
+            .context("Failed to save run to the database")?;
         Ok(run)
     }
 
@@ -69,7 +69,7 @@ CREATE TABLE IF NOT EXISTS checkpoint (
         )?;
         statement
             .execute((status_code, run_id))
-            .context("Error updating run status in the database")?;
+            .context("Failed to update run status in the database")?;
         Ok(())
     }
 
@@ -80,7 +80,7 @@ CREATE TABLE IF NOT EXISTS checkpoint (
             .prepare("SELECT id, scheduled_at, started_at, ended_at, status_code, attempt, max_attempts FROM run WHERE name = ?1 ORDER BY started_at DESC LIMIT ?2")?;
         let runs = statement
             .query_map((name, count), Run::from_row)
-            .context("Error loading last runs from the database")?
+            .context("Failed to load last runs from the database")?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(runs)
     }
@@ -93,7 +93,7 @@ CREATE TABLE IF NOT EXISTS checkpoint (
         let checkpoint = statement
             .query_row([job], Checkpoint::from_row)
             .optional()
-            .context("Error saving run to database")?;
+            .context("Failed to save run to the database")?;
         Ok(checkpoint.map(|checkpoint| Utc.from_utc_datetime(&checkpoint.timestamp)))
     }
 
@@ -105,7 +105,7 @@ CREATE TABLE IF NOT EXISTS checkpoint (
             .prepare("INSERT INTO checkpoint (job, timestamp) VALUES (?1, ?2) ON CONFLICT (job) DO UPDATE SET timestamp = (?2)")?;
         statement
             .execute((job, timestamp))
-            .context("Error saving checkpoint time to the database")?;
+            .context("Failed to save checkpoint time to the database")?;
         Ok(())
     }
 }
