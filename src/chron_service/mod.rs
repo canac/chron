@@ -453,7 +453,7 @@ impl ChronService {
     // Get the user's shell
     #[cfg(target_os = "windows")]
     fn get_user_shell() -> Result<String> {
-        Ok("Invoke-Expression".to_string())
+        Ok(String::from("Invoke-Expression"))
     }
 
     // Get the user's shell
