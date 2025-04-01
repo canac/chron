@@ -12,11 +12,11 @@ use askama::Template;
 use chrono::{DateTime, Duration, Local, TimeZone};
 use log::info;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use tokio::{fs::File, spawn, sync::oneshot::Receiver};
 use tokio_util::io::ReaderStream;
 
-type ThreadData = crate::chron_service::ChronServiceLock;
+type ThreadData = Arc<RwLock<crate::chron_service::ChronService>>;
 
 #[derive(Template)]
 #[template(path = "index.html")]

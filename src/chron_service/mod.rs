@@ -25,8 +25,8 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::thread::{JoinHandle, spawn};
 use std::time::Duration;
 
-pub type ChronServiceLock = Arc<RwLock<ChronService>>;
-pub type DatabaseLock = Arc<Mutex<Database>>;
+type ChronServiceLock = Arc<RwLock<ChronService>>;
+type DatabaseMutex = Arc<Mutex<Database>>;
 
 pub enum JobType {
     Startup {
@@ -97,7 +97,7 @@ struct Thread {
 
 pub struct ChronService {
     log_dir: PathBuf,
-    db: DatabaseLock,
+    db: DatabaseMutex,
     jobs: HashMap<String, Thread>,
     default_shell: String,
     shell: Option<String>,
@@ -120,7 +120,7 @@ impl ChronService {
     }
 
     // Return the service's database connection
-    pub fn get_db(&self) -> DatabaseLock {
+    pub fn get_db(&self) -> DatabaseMutex {
         Arc::clone(&self.db)
     }
 

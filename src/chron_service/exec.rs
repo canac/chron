@@ -1,5 +1,5 @@
 use super::sleep::sleep_until;
-use super::{DatabaseLock, Job, RetryConfig};
+use super::{DatabaseMutex, Job, RetryConfig};
 use crate::chron_service::Process;
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Utc};
@@ -23,7 +23,11 @@ pub enum ExecStatus {
 }
 
 // Helper to execute the specified command without retries
-fn exec_command_once(db: &DatabaseLock, job: &Arc<Job>, metadata: &Metadata) -> Result<ExecStatus> {
+fn exec_command_once(
+    db: &DatabaseMutex,
+    job: &Arc<Job>,
+    metadata: &Metadata,
+) -> Result<ExecStatus> {
     // Don't run the job at all if it is supposed to be terminated
     if job.terminate_controller.is_terminated() {
         return Ok(ExecStatus::Aborted);
@@ -170,7 +174,7 @@ fn poll_exit_status(job: &Arc<Job>) -> Result<Option<i32>> {
 // Execute the job's command, handling retries
 // Return a boolean indicating whether the command completed
 pub fn exec_command(
-    db: &DatabaseLock,
+    db: &DatabaseMutex,
     job: &Arc<Job>,
     retry_config: &RetryConfig,
     scheduled_time: &DateTime<Utc>,
