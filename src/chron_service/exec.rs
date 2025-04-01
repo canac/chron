@@ -1,6 +1,7 @@
 use super::sleep::sleep_until;
 use super::{DatabaseMutex, Job, RetryConfig};
 use crate::chron_service::Process;
+use crate::sync_ext::{MutexExt, RwLockExt};
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Utc};
 use log::{debug, info, warn};
@@ -45,7 +46,7 @@ fn exec_command_once(
     );
 
     // Record the run in the database
-    let run = db.lock().unwrap().insert_run(
+    let run = db.lock_unpoisoned().insert_run(
         &name,
         &metadata.scheduled_time.naive_utc(),
         metadata.attempt,
@@ -77,7 +78,7 @@ fn exec_command_once(
         .spawn()
         .with_context(|| format!("Failed to run command {}", job.command))?;
 
-    let mut process_guard = job.running_process.write().unwrap();
+    let mut process_guard = job.running_process.write_unpoisoned();
     *process_guard = Some(Process {
         child_process: process,
         run_id: run.id,
@@ -88,13 +89,12 @@ fn exec_command_once(
     let status_code = poll_exit_status(job)?;
 
     // Update the run status code in the database
-    db.lock()
-        .unwrap()
+    db.lock_unpoisoned()
         .set_run_status_code(run.id, status_code)?;
 
     // Wait to clear the process until after saving the run status to the database to avoid a race condition where the
     // process is None because the job terminated, but the most recent run in the database still has a status of None.
-    *job.running_process.write().unwrap() = None;
+    *job.running_process.write_unpoisoned() = None;
 
     if let Some(code) = status_code {
         if code != 0 {
@@ -129,7 +129,7 @@ fn poll_exit_status(job: &Arc<Job>) -> Result<Option<i32>> {
     // Check the status periodically until it exits without holding onto the child process lock
     let mut poll_interval = Duration::from_millis(1);
     loop {
-        let mut process_guard = job.running_process.write().unwrap();
+        let mut process_guard = job.running_process.write_unpoisoned();
         let process = process_guard
             .as_mut()
             .map(|process| &mut process.child_process)
@@ -201,7 +201,7 @@ pub fn exec_command(
         let status = exec_command_once(db, job, &metadata)?;
         if !retry_config.should_retry(status, attempt) {
             // We are done retrying so clear the next attempt
-            job.next_attempt.write().unwrap().take();
+            job.next_attempt.write_unpoisoned().take();
             break;
         }
 
@@ -216,9 +216,7 @@ pub fn exec_command(
                 .delay
                 .and_then(|delay| chrono::Duration::from_std(delay).ok())
                 .unwrap_or_default();
-        let mut attempt_guard = job.next_attempt.write().unwrap();
-        *attempt_guard = Some(next_attempt);
-        drop(attempt_guard);
+        *job.next_attempt.write_unpoisoned() = Some(next_attempt);
 
         sleep_until(next_attempt, &job.terminate_controller)?;
     }

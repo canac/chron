@@ -1,5 +1,6 @@
 use super::http_error::HttpError;
 use crate::chron_service::{Job, JobType, ProcessStatus};
+use crate::sync_ext::RwLockExt;
 use actix_web::{Result, http::StatusCode};
 use chrono::{DateTime, Local, Timelike};
 use std::path::PathBuf;
@@ -38,9 +39,7 @@ impl JobInfo {
             JobType::Scheduled {
                 ref scheduled_job, ..
             } => {
-                let job_guard = scheduled_job
-                    .read()
-                    .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?;
+                let job_guard = scheduled_job.read_unpoisoned();
                 (Some(job_guard.get_schedule()), job_guard.next_run())
             }
             JobType::Startup { .. } => (None, None),
@@ -50,8 +49,7 @@ impl JobInfo {
         let next_run = if run_id.is_none() {
             // Use the next retry attempt if it is set, falling back to the next scheduled run
             job.next_attempt
-                .read()
-                .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?
+                .read_unpoisoned()
                 // Clear any fractional seconds
                 .and_then(|timestamp| timestamp.with_nanosecond(0))
                 .or(next_run)

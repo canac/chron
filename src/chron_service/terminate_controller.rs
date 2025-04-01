@@ -1,3 +1,4 @@
+use crate::sync_ext::RwLockExt;
 use anyhow::{Context, Result};
 use std::sync::{
     RwLock,
@@ -26,7 +27,7 @@ impl TerminateController {
         self.terminated.store(true, Ordering::Relaxed);
 
         // Notify the most recent waiting wait_blocking caller that the controller has been terminated
-        let mut tx_guard = self.tx.write().unwrap();
+        let mut tx_guard = self.tx.write_unpoisoned();
         let tx = tx_guard.take();
         drop(tx_guard);
 
@@ -50,7 +51,7 @@ impl TerminateController {
         }
 
         let (tx, rx) = channel();
-        *self.tx.write().unwrap() = Some(tx);
+        *self.tx.write_unpoisoned() = Some(tx);
 
         if let err @ Err(RecvTimeoutError::Disconnected) = rx.recv_timeout(timeout) {
             // tx was dropped because a subsequent call to wait_blocking dropped the previous value of self.tx
@@ -58,7 +59,7 @@ impl TerminateController {
         };
 
         // Clear the transmitter so that the next call can set it again
-        *self.tx.write().unwrap() = None;
+        *self.tx.write_unpoisoned() = None;
 
         Ok(self.is_terminated())
     }

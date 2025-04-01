@@ -11,6 +11,7 @@ use self::terminate_controller::TerminateController;
 use self::working_dir::expand_working_dir;
 use crate::chronfile::{self, Chronfile};
 use crate::database::Database;
+use crate::sync_ext::{MutexExt, RwLockExt};
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use chrono_humanize::{Accuracy, HumanTime, Tense};
@@ -136,7 +137,7 @@ impl ChronService {
 
     // Start or start the chron service using the jobs defined in the provided chronfile
     pub fn start(chron_lock: &ChronServiceLock, chronfile: Chronfile) -> Result<()> {
-        let mut chron = chron_lock.write().unwrap();
+        let mut chron = chron_lock.write_unpoisoned();
         let same_shell = chron.shell == chronfile.config.shell;
         chron.shell = chronfile.config.shell;
 
@@ -177,7 +178,7 @@ impl ChronService {
                 if thread.job.command == job.command
                     && thread.job.working_dir == job.working_dir
                     && same_shell
-                    && matches!(&thread.job.r#type, JobType::Scheduled { options, scheduled_job } if **options == job.get_options() && scheduled_job.read().unwrap().get_schedule() == job.schedule)
+                    && matches!(&thread.job.r#type, JobType::Scheduled { options, scheduled_job } if **options == job.get_options() && scheduled_job.read_unpoisoned().get_schedule() == job.schedule)
                 {
                     debug!("Reusing existing scheduled job {name}");
                     chron.jobs.insert(name, thread);
@@ -203,7 +204,7 @@ impl ChronService {
 
     // Start or start the chron service using the jobs defined in the provided chronfile
     pub fn stop(chron_lock: &ChronServiceLock) {
-        let mut chron = chron_lock.write().unwrap();
+        let mut chron = chron_lock.write_unpoisoned();
         let jobs = take(&mut chron.jobs);
 
         // The lock should be released before terminating jobs to avoid holding it longer than necessary
@@ -293,7 +294,7 @@ impl ChronService {
         // However, jobs that don't make up missed runs resume now, not in the past
         let options = job.get_options();
         let resume_time = if options.make_up_missed_run {
-            self.db.lock().unwrap().get_checkpoint(name)?
+            self.db.lock_unpoisoned().get_checkpoint(name)?
         } else {
             None
         };
@@ -317,7 +318,7 @@ impl ChronService {
             // checkpoint prevents this problem.
             if let Some(start_time) = scheduled_job.prev_run() {
                 debug!("{name}: saving synthetic checkpoint {start_time}");
-                self.db.lock().unwrap().set_checkpoint(name, start_time)?;
+                self.db.lock_unpoisoned().set_checkpoint(name, start_time)?;
             } else {
                 debug!(
                     "{name}: cannot save synthetic checkpoint because schedule has no previous runs"
@@ -358,7 +359,7 @@ impl ChronService {
                 };
 
                 // Get the elapsed run since the last tick, if any
-                let mut job_guard = scheduled_job.write().unwrap();
+                let mut job_guard = scheduled_job.write_unpoisoned();
                 let now = Utc::now();
                 let run = job_guard.tick(now);
 
@@ -390,8 +391,7 @@ impl ChronService {
                     .unwrap();
                     if completed {
                         debug!("{name}: updating checkpoint {scheduled_time}");
-                        db.lock()
-                            .unwrap()
+                        db.lock_unpoisoned()
                             .set_checkpoint(&name, scheduled_time)
                             .unwrap();
                     }

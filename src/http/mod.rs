@@ -5,6 +5,7 @@ mod job_info;
 use self::http_error::HttpError;
 use self::job_info::JobInfo;
 use crate::chron_service::ProcessStatus;
+use crate::sync_ext::{MutexExt, RwLockExt};
 use actix_web::HttpResponse;
 use actix_web::web::{Data, Path};
 use actix_web::{App, HttpServer, Responder, Result, get, http::StatusCode};
@@ -33,9 +34,7 @@ async fn styles() -> Result<impl Responder> {
 
 #[get("/")]
 async fn index_handler(data: Data<ThreadData>) -> Result<impl Responder> {
-    let data_guard = data
-        .read()
-        .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?;
+    let data_guard = data.read_unpoisoned();
 
     let mut jobs = data_guard
         .get_jobs_iter()
@@ -79,18 +78,14 @@ struct JobTemplate {
 
 #[get("/job/{name}")]
 async fn job_handler(name: Path<String>, data: Data<ThreadData>) -> Result<impl Responder> {
-    let data_guard = data
-        .read()
-        .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?;
-
+    let data_guard = data.read_unpoisoned();
     let job = data_guard
         .get_job(&name)
         .ok_or_else(|| HttpError::from_status_code(StatusCode::NOT_FOUND))?;
     let job = JobInfo::from_job(&name, job)?;
     let runs = data_guard
         .get_db()
-        .lock()
-        .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?
+        .lock_unpoisoned()
         .get_last_runs(&name, 20)
         .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?
         .into_iter()
@@ -156,15 +151,12 @@ async fn job_logs_handler(
 ) -> Result<impl Responder> {
     let (name, run_id) = path.into_inner();
     let log_path = {
-        let data_guard = data
-            .read()
-            .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?;
+        let data_guard = data.read_unpoisoned();
         let run_id = if run_id == "latest" {
             // Look up the most recent run id
             data_guard
                 .get_db()
-                .lock()
-                .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?
+                .lock_unpoisoned()
                 .get_last_runs(&name, 1)
                 .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?
                 .first()

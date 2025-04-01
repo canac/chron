@@ -11,6 +11,7 @@ mod chronfile;
 mod cli;
 mod database;
 mod http;
+mod sync_ext;
 
 use crate::chron_service::ChronService;
 use crate::chronfile::Chronfile;
