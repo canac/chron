@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex, RwLock};
-use std::thread::{JoinHandle, spawn};
+use std::thread::{Builder, JoinHandle};
 use std::time::Duration;
 
 type ChronServiceLock = Arc<RwLock<ChronService>>;
@@ -257,9 +257,9 @@ impl ChronService {
         let job_copy = Arc::clone(&job);
 
         let db = self.get_db();
-        let handle = spawn(move || {
+        let handle = Builder::new().name(name.to_owned()).spawn(move || {
             exec_command(&db, &job, &options.keep_alive, &Utc::now()).unwrap();
-        });
+        })?;
         self.jobs.insert(
             job_copy.name.clone(),
             Thread {
@@ -333,7 +333,7 @@ impl ChronService {
 
         let db = self.get_db();
         let name = name.to_owned();
-        let handle = spawn(move || {
+        let handle = Builder::new().name(name.clone()).spawn(move || {
             loop {
                 // Stop executing if a terminate was requested
                 if job.terminate_controller.is_terminated() {
@@ -396,7 +396,7 @@ impl ChronService {
                 // Wait until the next run before ticking again
                 sleep_until(next_run, &job.terminate_controller).unwrap();
             }
-        });
+        })?;
 
         self.jobs.insert(
             job_copy.name.clone(),
