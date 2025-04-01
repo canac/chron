@@ -394,7 +394,7 @@ impl ChronService {
                 };
 
                 // Wait until the next run before ticking again
-                sleep_until(next_run);
+                sleep_until(next_run, &job.terminate_controller).unwrap();
             }
         });
 

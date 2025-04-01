@@ -161,7 +161,9 @@ fn poll_exit_status(job: &Arc<Job>) -> Result<Option<i32>> {
 
         // Wait briefly with capped exponential backoff before looping again
         poll_interval = std::cmp::min(poll_interval * 2, MAX_POLL_DELAY);
-        std::thread::sleep(poll_interval);
+        if job.terminate_controller.wait_blocking(poll_interval)? {
+            return Ok(None);
+        }
     }
 }
 
@@ -180,8 +182,7 @@ pub fn exec_command(
     for attempt in 0.. {
         // Stop executing if a terminate was requested
         if job.terminate_controller.is_terminated() {
-            // The command is only considered incomplete if it aborts
-            return Ok(false);
+            break;
         }
 
         if attempt > 0 {
@@ -200,6 +201,11 @@ pub fn exec_command(
             break;
         }
 
+        // Stop executing if a terminate was requested
+        if job.terminate_controller.is_terminated() {
+            break;
+        }
+
         // Record the timestamp of the next attempt and wait until then to re-run the job
         let next_attempt = Utc::now()
             + retry_config
@@ -210,8 +216,9 @@ pub fn exec_command(
         *attempt_guard = Some(next_attempt);
         drop(attempt_guard);
 
-        sleep_until(next_attempt);
+        sleep_until(next_attempt, &job.terminate_controller)?;
     }
 
-    Ok(true)
+    // The command is only considered incomplete if it aborted
+    Ok(!job.terminate_controller.is_terminated())
 }
