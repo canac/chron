@@ -400,7 +400,7 @@ impl ChronService {
                         debug!("{name}: updating checkpoint {scheduled_time}");
                         db.lock_unpoisoned().set_checkpoint(&name, scheduled_time)?;
                     }
-                };
+                }
 
                 let Some(next_run) = next_run else {
                     debug!("{name}: schedule contains no more future runs");

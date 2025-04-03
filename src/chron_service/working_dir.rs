@@ -13,7 +13,7 @@ pub fn expand_working_dir(dir: &PathBuf) -> PathBuf {
                 }
                 return expanded_dir;
             }
-        };
+        }
     }
     dir.to_owned()
 }

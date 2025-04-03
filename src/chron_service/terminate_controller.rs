@@ -56,7 +56,7 @@ impl TerminateController {
         if let err @ Err(RecvTimeoutError::Disconnected) = rx.recv_timeout(timeout) {
             // tx was dropped because a subsequent call to wait_blocking dropped the previous value of self.tx
             err.context("wait_blocking called concurrently")?;
-        };
+        }
 
         // Clear the transmitter so that the next call can set it again
         *self.tx.write_unpoisoned() = None;
