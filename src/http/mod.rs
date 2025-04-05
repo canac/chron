@@ -5,15 +5,16 @@ mod job_info;
 use self::http_error::HttpError;
 use self::job_info::JobInfo;
 use crate::chron_service::ProcessStatus;
-use crate::sync_ext::{MutexExt, RwLockExt};
 use actix_web::HttpResponse;
 use actix_web::web::{Data, Path};
-use actix_web::{App, HttpServer, Responder, Result, get, http::StatusCode};
+use actix_web::{App, HttpServer, Responder, Result, get, http::StatusCode, post};
 use askama::Template;
 use chrono::{DateTime, Duration, Local, TimeZone};
+use futures::future::join_all;
 use log::info;
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use tokio::sync::oneshot::error::RecvError;
 use tokio::task::JoinHandle;
 use tokio::{fs::File, spawn, sync::oneshot::Receiver};
@@ -36,14 +37,17 @@ async fn styles() -> Result<impl Responder> {
 
 #[get("/")]
 async fn index_handler(data: Data<ThreadData>) -> Result<impl Responder> {
-    let data_guard = data.read_unpoisoned();
-
-    let mut jobs = data_guard
-        .get_jobs_iter()
-        .map(|(name, job)| JobInfo::from_job(name, job))
-        .collect::<Result<Vec<_>>>()?;
+    let mut jobs = join_all(
+        data.read()
+            .await
+            .get_jobs_iter()
+            .map(|(name, job)| JobInfo::from_job(name, job)),
+    )
+    .await
+    .into_iter()
+    .collect::<anyhow::Result<Vec<_>>>()
+    .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?;
     jobs.sort_by(|job1, job2| job1.name.cmp(&job2.name));
-    drop(data_guard);
 
     let template = IndexTemplate { jobs };
     Ok(HttpResponse::Ok()
@@ -80,14 +84,17 @@ struct JobTemplate {
 
 #[get("/job/{name}")]
 async fn job_handler(name: Path<String>, data: Data<ThreadData>) -> Result<impl Responder> {
-    let data_guard = data.read_unpoisoned();
+    let data_guard = data.read().await;
     let job = data_guard
         .get_job(&name)
         .ok_or_else(|| HttpError::from_status_code(StatusCode::NOT_FOUND))?;
-    let job = JobInfo::from_job(&name, job)?;
+    let job = JobInfo::from_job(&name, job)
+        .await
+        .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?;
     let runs = data_guard
         .get_db()
-        .lock_unpoisoned()
+        .lock()
+        .await
         .get_last_runs(&name, 20)
         .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?
         .into_iter()
@@ -153,12 +160,13 @@ async fn job_logs_handler(
 ) -> Result<impl Responder> {
     let (name, run_id) = path.into_inner();
     let log_path = {
-        let data_guard = data.read_unpoisoned();
+        let data_guard = data.read().await;
         let run_id = if run_id == "latest" {
             // Look up the most recent run id
             data_guard
                 .get_db()
-                .lock_unpoisoned()
+                .lock()
+                .await
                 .get_last_runs(&name, 1)
                 .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?
                 .first()
@@ -183,6 +191,39 @@ async fn job_logs_handler(
         .streaming(ReaderStream::new(file)))
 }
 
+#[post("/job/{name}/terminate")]
+async fn job_terminate_handler(
+    name: Path<String>,
+    data: Data<ThreadData>,
+) -> Result<impl Responder> {
+    let data_guard = data.read().await;
+    let process = data_guard
+        .get_job(&name)
+        .ok_or_else(|| HttpError::from_status_code(StatusCode::NOT_FOUND))?
+        .running_process
+        .write()
+        .await
+        .take();
+    drop(data_guard);
+
+    let terminated = if let Some(process) = process {
+        process.terminate().await
+    } else {
+        false
+    };
+
+    let response = if terminated {
+        HttpResponse::Ok()
+            .content_type("text/plain; charset=utf-8")
+            .body("Terminated")
+    } else {
+        HttpResponse::NotFound()
+            .content_type("text/plain; charset=utf-8")
+            .body("Not Running")
+    };
+    Ok(response)
+}
+
 pub async fn create_server(
     data: ThreadData,
     port: u16,
@@ -198,6 +239,7 @@ pub async fn create_server(
             .service(index_handler)
             .service(job_handler)
             .service(job_logs_handler)
+            .service(job_terminate_handler)
     })
     .disable_signals()
     .bind(("localhost", port))?

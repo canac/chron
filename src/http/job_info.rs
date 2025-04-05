@@ -1,7 +1,5 @@
-use super::http_error::HttpError;
 use crate::chron_service::{Job, JobType, ProcessStatus};
-use crate::sync_ext::RwLockExt;
-use actix_web::{Result, http::StatusCode};
+use anyhow::Result;
 use chrono::{DateTime, Local, Timelike};
 use std::path::PathBuf;
 
@@ -19,27 +17,22 @@ pub struct JobInfo {
 
 impl JobInfo {
     // Generate the job info for a job
-    pub(crate) fn from_job(name: &str, job: &Job) -> Result<Self> {
-        let mut process_guard = job
-            .running_process
-            .write()
-            .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?;
-        let (status, run_id) = match process_guard.as_mut() {
-            Some(process) => (
-                ProcessStatus::Running {
-                    pid: process.child_process.id(),
-                },
-                Some(process.run_id),
-            ),
-            None => (ProcessStatus::Terminated, None),
-        };
-        drop(process_guard);
+    pub(crate) async fn from_job(name: &str, job: &Job) -> Result<Self> {
+        let (status, run_id) = job.running_process.read().await.as_ref().map_or_else(
+            || (ProcessStatus::Terminated, None),
+            |process| {
+                (
+                    ProcessStatus::Running { pid: process.pid },
+                    Some(process.run_id),
+                )
+            },
+        );
 
         let (schedule, next_run) = match job.r#type {
             JobType::Scheduled {
                 ref scheduled_job, ..
             } => {
-                let job_guard = scheduled_job.read_unpoisoned();
+                let job_guard = scheduled_job.read().await;
                 (Some(job_guard.get_schedule()), job_guard.next_run())
             }
             JobType::Startup { .. } => (None, None),
@@ -49,7 +42,8 @@ impl JobInfo {
         let next_run = if run_id.is_none() {
             // Use the next retry attempt if it is set, falling back to the next scheduled run
             job.next_attempt
-                .read_unpoisoned()
+                .read()
+                .await
                 // Clear any fractional seconds
                 .and_then(|timestamp| timestamp.with_nanosecond(0))
                 .or(next_run)

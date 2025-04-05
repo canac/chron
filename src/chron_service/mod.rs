@@ -1,18 +1,16 @@
 mod exec;
 mod scheduled_job;
 mod sleep;
-mod terminate_controller;
 mod working_dir;
 
 use self::exec::{ExecStatus, exec_command};
 use self::scheduled_job::ScheduledJob;
 use self::sleep::sleep_until;
-use self::terminate_controller::TerminateController;
 use self::working_dir::expand_working_dir;
 use crate::chronfile::{self, Chronfile};
 use crate::database::Database;
-use crate::sync_ext::{MutexExt, RwLockExt};
-use anyhow::{Context, Result, bail};
+use anyhow::Result;
+use anyhow::{Context, bail};
 use chrono::{DateTime, Utc};
 use chrono_humanize::{Accuracy, HumanTime, Tense};
 use cron::Schedule;
@@ -20,13 +18,15 @@ use log::debug;
 use std::collections::HashMap;
 use std::mem::take;
 use std::path::{Path, PathBuf};
-use std::process::Child;
 use std::str::FromStr;
-use std::sync::{Arc, Mutex, RwLock};
-use std::thread::{Builder, JoinHandle};
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::fs::create_dir_all;
+use tokio::spawn;
+use tokio::sync::oneshot::{Receiver, Sender};
+use tokio::sync::{Mutex, RwLock};
+use tokio::task::JoinHandle;
 
-type ChronServiceLock = Arc<RwLock<ChronService>>;
 type DatabaseMutex = Arc<Mutex<Database>>;
 
 pub enum JobType {
@@ -52,7 +52,7 @@ impl RetryConfig {
     // of previous attempts should be retried
     fn should_retry(&self, exec_status: ExecStatus, attempt: usize) -> bool {
         (match exec_status {
-            ExecStatus::Aborted | ExecStatus::Failure => self.failures,
+            ExecStatus::Failure => self.failures,
             ExecStatus::Success => self.successes,
         } && self.limit.is_none_or(|limit| attempt < limit))
     }
@@ -70,8 +70,22 @@ pub struct ScheduledJobOptions {
 }
 
 pub struct Process {
-    pub child_process: Child,
+    pub pid: u32,
     pub run_id: u32,
+
+    /// A oneshot channel to terminate the process and receive a response when the process had finished terminating
+    terminate: Option<(Sender<()>, Receiver<()>)>,
+}
+
+impl Process {
+    // Terminate the process and wait for it to finish terminating
+    // Return true if the process was terminated successfully
+    pub async fn terminate(mut self) -> bool {
+        let Some((tx_terminate, rx_terminated)) = self.terminate.take() else {
+            return false;
+        };
+        tx_terminate.send(()).is_ok() && rx_terminated.await.is_ok()
+    }
 }
 
 pub enum ProcessStatus {
@@ -86,29 +100,28 @@ pub struct Job {
     pub working_dir: Option<PathBuf>,
     pub log_dir: PathBuf,
     pub running_process: RwLock<Option<Process>>,
-    pub terminate_controller: TerminateController,
     pub r#type: JobType,
     pub next_attempt: RwLock<Option<DateTime<Utc>>>,
 }
 
-struct Thread {
-    job: Arc<Job>,
-    handle: JoinHandle<Result<()>>,
+pub struct Task {
+    pub job: Arc<Job>,
+    pub handle: JoinHandle<Result<()>>,
 }
 
 pub struct ChronService {
     log_dir: PathBuf,
     db: DatabaseMutex,
-    jobs: HashMap<String, Thread>,
+    jobs: HashMap<String, Task>,
     default_shell: String,
     shell: Option<String>,
 }
 
 impl ChronService {
     // Create a new ChronService instance
-    pub fn new(chron_dir: &Path) -> Result<Self> {
+    pub async fn new(chron_dir: &Path) -> Result<Self> {
         // Make sure that the chron directory exists
-        std::fs::create_dir_all(chron_dir)?;
+        create_dir_all(chron_dir).await?;
 
         let db = Database::new(chron_dir)?;
         Ok(Self {
@@ -127,45 +140,44 @@ impl ChronService {
 
     // Lookup a job by name
     pub fn get_job(&self, name: &String) -> Option<&Arc<Job>> {
-        self.jobs.get(name).map(|thread| &thread.job)
+        self.jobs.get(name).map(|task| &task.job)
     }
 
     // Return an iterator of the jobs
     pub fn get_jobs_iter(&self) -> impl Iterator<Item = (&String, &Arc<Job>)> {
-        self.jobs.iter().map(|(name, thread)| (name, &thread.job))
+        self.jobs.iter().map(|(name, task)| (name, &task.job))
     }
 
     // Start or start the chron service using the jobs defined in the provided chronfile
-    pub fn start(chron_lock: &ChronServiceLock, chronfile: Chronfile) -> Result<()> {
-        let mut chron = chron_lock.write_unpoisoned();
-        let same_shell = chron.shell == chronfile.config.shell;
-        chron.shell = chronfile.config.shell;
+    pub async fn start(&mut self, chronfile: Chronfile) -> Result<()> {
+        let same_shell = self.shell == chronfile.config.shell;
+        self.shell = chronfile.config.shell;
 
-        let mut existing_jobs = take(&mut chron.jobs);
+        let mut existing_jobs = take(&mut self.jobs);
 
         for (name, job) in chronfile.startup_jobs {
             if job.disabled {
                 continue;
             }
 
-            if let Some((name, thread)) = existing_jobs.remove_entry(&name) {
+            if let Some((name, task)) = existing_jobs.remove_entry(&name) {
                 // Reuse the job if the command, working dir, shell, and options are the same
-                if thread.job.command == job.command
-                    && thread.job.working_dir == job.working_dir
+                if task.job.command == job.command
+                    && task.job.working_dir == job.working_dir
                     && same_shell
-                    && matches!(&thread.job.r#type, JobType::Startup { options } if **options == job.get_options())
+                    && matches!(&task.job.r#type, JobType::Startup { options } if **options == job.get_options())
                 {
                     debug!("Reusing existing startup job {name}");
-                    chron.jobs.insert(name, thread);
+                    self.jobs.insert(name, task);
                     continue;
                 }
 
                 // Add back the job because it was not reused
-                existing_jobs.insert(name, thread);
+                existing_jobs.insert(name, task);
             }
 
             debug!("Registering new startup job {name}");
-            chron.startup(&name, &job)?;
+            self.startup(&name, &job)?;
         }
 
         for (name, job) in chronfile.scheduled_jobs {
@@ -173,75 +185,56 @@ impl ChronService {
                 continue;
             }
 
-            if let Some((name, thread)) = existing_jobs.remove_entry(&name) {
+            if let Some((name, task)) = existing_jobs.remove_entry(&name) {
                 // Reuse the job if the command, working dir, shell, options, and schedule are the same
-                if thread.job.command == job.command
-                    && thread.job.working_dir == job.working_dir
+                if task.job.command == job.command
+                    && task.job.working_dir == job.working_dir
                     && same_shell
-                    && matches!(&thread.job.r#type, JobType::Scheduled { options, scheduled_job } if **options == job.get_options() && scheduled_job.read_unpoisoned().get_schedule() == job.schedule)
+                    && matches!(&task.job.r#type, JobType::Scheduled { options, scheduled_job } if **options == job.get_options() && scheduled_job.read().await.get_schedule() == job.schedule)
                 {
                     debug!("Reusing existing scheduled job {name}");
-                    chron.jobs.insert(name, thread);
+                    self.jobs.insert(name, task);
                     continue;
                 }
 
                 // Add back the job because it was not reused
-                existing_jobs.insert(name, thread);
+                existing_jobs.insert(name, task);
             }
 
             debug!("Registering new scheduled job {name}");
-            chron.schedule(&name, &job)?;
+            self.schedule(&name, &job).await?;
         }
 
-        // The lock should be released before terminating jobs to avoid holding it longer than necessary
-        drop(chron);
-
         // Terminate all existing jobs that weren't reused
-        Self::terminate_jobs_blocking(existing_jobs);
+        Self::terminate_jobs(existing_jobs).await;
 
         Ok(())
     }
 
     // Start or start the chron service using the jobs defined in the provided chronfile
-    pub fn stop(chron_lock: &ChronServiceLock) {
-        let mut chron = chron_lock.write_unpoisoned();
-        let jobs = take(&mut chron.jobs);
+    pub async fn stop(&mut self) {
+        let jobs = take(&mut self.jobs);
 
-        // The lock should be released before terminating jobs to avoid holding it longer than necessary
-        drop(chron);
-
-        Self::terminate_jobs_blocking(jobs);
+        Self::terminate_jobs(jobs).await;
     }
 
-    // Terminate a collection of jobs and block until all of their threads complete
-    // It will block for no more than MAX_POLL_DELAY unless there is heavy contention waiting for the database mutex
-    fn terminate_jobs_blocking(jobs: HashMap<String, Thread>) {
-        for (name, thread) in &jobs {
-            debug!("Terminating job {name}");
-            thread.job.terminate_controller.terminate();
-        }
-
-        // Wait for each of the threads to complete
+    // Terminate a collection of jobs and wait for all of their tasks complete
+    async fn terminate_jobs(jobs: HashMap<String, Task>) {
+        // Wait for each of the tasks to complete
         let has_jobs = !jobs.is_empty();
-        for (name, thread) in jobs {
+        for (name, task) in jobs {
             debug!("Waiting for job {name} to terminate...");
-            match thread.handle.join() {
-                // The thread returned an error result
-                Ok(Err(err)) => {
-                    debug!("Job {name} failed with error: {err:?}");
-                }
-                // The thread panicked
-                Err(err) => {
-                    let message = if let Some(message) = err.downcast_ref::<String>() {
-                        message.as_str()
-                    } else if let Some(message) = err.downcast_ref::<&'static str>() {
-                        message
-                    } else {
-                        debug!("Job {name} panicked");
-                        continue;
-                    };
-                    debug!("Job {name} panicked with error \"{message}\"");
-                }
+            let process = task.job.running_process.write().await.take();
+            if let Some(process) = process {
+                process.terminate().await;
+            }
+            task.handle.abort();
+
+            match task.handle.await {
+                // The task returned an error result
+                Ok(Err(err)) => debug!("Job {name} failed with error: {err:?}"),
+                // The task panicked
+                Err(err) if err.is_panic() => debug!("Job {name} failed with error: {err:?}"),
                 _ => (),
             }
         }
@@ -265,7 +258,6 @@ impl ChronService {
             working_dir: job.working_dir.as_ref().map(expand_working_dir),
             log_dir: self.calculate_log_dir(name),
             running_process: RwLock::new(None),
-            terminate_controller: TerminateController::new(),
             r#type: JobType::Startup {
                 options: Arc::clone(&options),
             },
@@ -274,13 +266,13 @@ impl ChronService {
         let job_copy = Arc::clone(&job);
 
         let db = self.get_db();
-        let handle = Builder::new().name(name.to_owned()).spawn(move || {
-            exec_command(&db, &job, &options.keep_alive, &Utc::now())?;
-            Ok(())
-        })?;
+        let handle = spawn(async move {
+            exec_command(&db, &job, &options.keep_alive, &Utc::now()).await?;
+            Ok::<(), anyhow::Error>(())
+        });
         self.jobs.insert(
             job_copy.name.clone(),
-            Thread {
+            Task {
                 job: job_copy,
                 handle,
             },
@@ -291,7 +283,7 @@ impl ChronService {
 
     // Add a new job to be run on the given schedule
     #[allow(clippy::too_many_lines)]
-    fn schedule(&mut self, name: &str, job: &chronfile::ScheduledJob) -> Result<()> {
+    async fn schedule(&mut self, name: &str, job: &chronfile::ScheduledJob) -> Result<()> {
         Self::validate_name(name)?;
         if self.jobs.contains_key(name) {
             bail!("A job with the name {name} already exists")
@@ -302,7 +294,7 @@ impl ChronService {
         // However, jobs that don't make up missed runs resume now, not in the past
         let options = job.get_options();
         let resume_time = if options.make_up_missed_run {
-            self.db.lock_unpoisoned().get_checkpoint(name)?
+            self.db.lock().await.get_checkpoint(name)?
         } else {
             None
         };
@@ -326,7 +318,7 @@ impl ChronService {
             // checkpoint prevents this problem.
             if let Some(start_time) = scheduled_job.prev_run() {
                 debug!("{name}: saving synthetic checkpoint {start_time}");
-                self.db.lock_unpoisoned().set_checkpoint(name, start_time)?;
+                self.db.lock().await.set_checkpoint(name, start_time)?;
             } else {
                 debug!(
                     "{name}: cannot save synthetic checkpoint because schedule has no previous runs"
@@ -340,7 +332,6 @@ impl ChronService {
             working_dir: job.working_dir.as_ref().map(expand_working_dir),
             log_dir: self.calculate_log_dir(name),
             running_process: RwLock::new(None),
-            terminate_controller: TerminateController::new(),
             r#type: JobType::Scheduled {
                 options: Arc::new(options),
                 scheduled_job: RwLock::new(Box::new(scheduled_job)),
@@ -351,13 +342,8 @@ impl ChronService {
 
         let db = self.get_db();
         let name = name.to_owned();
-        let handle = Builder::new().name(name.clone()).spawn(move || {
+        let handle = spawn(async move {
             loop {
-                // Stop executing if a terminate was requested
-                if job.terminate_controller.is_terminated() {
-                    break;
-                }
-
                 let JobType::Scheduled {
                     ref options,
                     ref scheduled_job,
@@ -367,7 +353,7 @@ impl ChronService {
                 };
 
                 // Get the elapsed run since the last tick, if any
-                let mut job_guard = scheduled_job.write_unpoisoned();
+                let mut job_guard = scheduled_job.write().await;
                 let now = Utc::now();
                 let run = job_guard.tick(now);
 
@@ -387,7 +373,7 @@ impl ChronService {
                         .to_text_en(Accuracy::Precise, Tense::Present);
                     debug!("{name}: scheduled for {scheduled_time} ({late} late)");
 
-                    let completed = exec_command(
+                    exec_command(
                         &db,
                         &job,
                         &RetryConfig {
@@ -395,11 +381,10 @@ impl ChronService {
                             ..options.retry
                         },
                         &scheduled_time,
-                    )?;
-                    if completed {
-                        debug!("{name}: updating checkpoint {scheduled_time}");
-                        db.lock_unpoisoned().set_checkpoint(&name, scheduled_time)?;
-                    }
+                    )
+                    .await?;
+                    debug!("{name}: updating checkpoint {scheduled_time}");
+                    db.lock().await.set_checkpoint(&name, scheduled_time)?;
                 }
 
                 let Some(next_run) = next_run else {
@@ -408,15 +393,15 @@ impl ChronService {
                 };
 
                 // Wait until the next run before ticking again
-                sleep_until(next_run, &job.terminate_controller)?;
+                sleep_until(next_run).await;
             }
 
             Ok(())
-        })?;
+        });
 
         self.jobs.insert(
             job_copy.name.clone(),
-            Thread {
+            Task {
                 job: job_copy,
                 handle,
             },

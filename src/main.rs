@@ -12,7 +12,6 @@ mod chronfile;
 mod cli;
 mod database;
 mod http;
-mod sync_ext;
 
 use crate::chron_service::ChronService;
 use crate::chronfile::Chronfile;
@@ -24,9 +23,11 @@ use notify::RecursiveMode;
 use notify_debouncer_mini::{DebounceEventResult, new_debouncer};
 use std::io::{IsTerminal, stdin};
 use std::process::exit;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, RwLock};
 use std::time::Duration;
+use tokio::runtime::Handle;
+use tokio::sync::RwLock;
 use tokio::sync::oneshot::channel;
 
 #[actix_web::main]
@@ -44,34 +45,36 @@ async fn main() -> Result<()> {
         .init()?;
 
     let chronfile_path = cli.chronfile;
-    let chronfile = Chronfile::load(&chronfile_path)?;
+    let chronfile = Chronfile::load(&chronfile_path).await?;
 
     let project_dirs = directories::ProjectDirs::from("com", "canac", "chron")
         .context("Failed to determine application directories")?;
-    let chron_lock = Arc::new(RwLock::new(ChronService::new(
-        project_dirs.data_local_dir(),
-    )?));
-    ChronService::start(&chron_lock, chronfile)?;
+    let mut chron = ChronService::new(project_dirs.data_local_dir()).await?;
+    chron.start(chronfile).await?;
+    let chron_lock = Arc::new(RwLock::new(chron));
 
     let watcher_chron = Arc::clone(&chron_lock);
     let watch_path = chronfile_path.clone();
+    let handle = Handle::current();
     let mut debouncer = new_debouncer(Duration::from_secs(1), move |res: DebounceEventResult| {
         if res.is_err() {
             return;
         }
 
-        match Chronfile::load(&watch_path) {
-            Ok(chronfile) => {
-                debug!("Reloaded chronfile {}", watch_path.to_string_lossy());
-                if let Err(err) = ChronService::start(&watcher_chron, chronfile) {
-                    error!("Failed to start chron\n{err:?}");
+        handle.block_on(async {
+            match Chronfile::load(&watch_path).await {
+                Ok(chronfile) => {
+                    debug!("Reloaded chronfile {}", watch_path.to_string_lossy());
+                    if let Err(err) = watcher_chron.write().await.start(chronfile).await {
+                        error!("Failed to start chron\n{err:?}");
+                    }
                 }
+                Err(err) => error!(
+                    "Failed to reload chronfile {}\n{err:?}",
+                    watch_path.to_string_lossy()
+                ),
             }
-            Err(err) => error!(
-                "Failed to reload chronfile {}\n{err:?}",
-                watch_path.to_string_lossy()
-            ),
-        }
+        });
     })
     .context("Failed to create watcher debouncer")?;
     debouncer
@@ -83,6 +86,7 @@ async fn main() -> Result<()> {
     let ctrlc_chron = Arc::clone(&chron_lock);
     let mut tx = Some(tx);
     let second_signal = AtomicBool::new(false);
+    let handle = Handle::current();
     ctrlc::set_handler(move || {
         if second_signal.swap(true, Ordering::Relaxed) {
             info!("Shutting down forcefully");
@@ -93,7 +97,7 @@ async fn main() -> Result<()> {
         if stdin().is_terminal() {
             info!("To shut down immediately, press Ctrl-C again");
         }
-        ChronService::stop(&ctrlc_chron);
+        handle.block_on(async { ctrlc_chron.write().await.stop().await });
         if let Some(tx) = tx.take() {
             tx.send(()).expect("Failed to send terminate message");
         }

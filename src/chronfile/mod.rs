@@ -6,6 +6,7 @@ pub use self::startup_job::StartupJob;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::{collections::HashMap, path::PathBuf};
+use tokio::fs::read_to_string;
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -26,8 +27,9 @@ pub struct Chronfile {
 
 impl Chronfile {
     // Load a chronfile
-    pub fn load(path: &PathBuf) -> Result<Self> {
-        let toml_str = std::fs::read_to_string(path)
+    pub async fn load(path: &PathBuf) -> Result<Self> {
+        let toml_str = read_to_string(path)
+            .await
             .with_context(|| format!("Failed to read chronfile {path:?}"))?;
         toml::from_str(&toml_str)
             .with_context(|| format!("Failed to deserialize TOML chronfile {path:?}"))
