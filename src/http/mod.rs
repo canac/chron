@@ -4,7 +4,8 @@ mod job_info;
 
 use self::http_error::HttpError;
 use self::job_info::JobInfo;
-use crate::chron_service::ProcessStatus;
+use crate::chron_service::{ChronService, ProcessStatus};
+use crate::database::Database;
 use actix_web::HttpResponse;
 use actix_web::web::{Data, Path};
 use actix_web::{App, HttpServer, Responder, Result, get, http::StatusCode, post};
@@ -14,13 +15,18 @@ use futures::future::join_all;
 use log::info;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use tokio::sync::oneshot::error::RecvError;
+use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 use tokio::{fs::File, spawn, sync::oneshot::Receiver};
 use tokio_util::io::ReaderStream;
 
-type ThreadData = Arc<RwLock<crate::chron_service::ChronService>>;
+struct AppState {
+    chron: Arc<RwLock<ChronService>>,
+    db: Arc<Mutex<Database>>,
+}
+
+type AppData = Data<AppState>;
 
 #[derive(Template)]
 #[template(path = "index.html")]
@@ -36,9 +42,10 @@ async fn styles() -> Result<impl Responder> {
 }
 
 #[get("/")]
-async fn index_handler(data: Data<ThreadData>) -> Result<impl Responder> {
+async fn index_handler(data: AppData) -> Result<impl Responder> {
     let mut jobs = join_all(
-        data.read()
+        data.chron
+            .read()
             .await
             .get_jobs_iter()
             .map(|(name, job)| JobInfo::from_job(name, job)),
@@ -83,16 +90,16 @@ struct JobTemplate {
 }
 
 #[get("/job/{name}")]
-async fn job_handler(name: Path<String>, data: Data<ThreadData>) -> Result<impl Responder> {
-    let data_guard = data.read().await;
+async fn job_handler(name: Path<String>, data: AppData) -> Result<impl Responder> {
+    let data_guard = data.chron.read().await;
     let job = data_guard
         .get_job(&name)
         .ok_or_else(|| HttpError::from_status_code(StatusCode::NOT_FOUND))?;
     let job = JobInfo::from_job(&name, job)
         .await
         .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?;
-    let runs = data_guard
-        .get_db()
+    let runs = data
+        .db
         .lock()
         .await
         .get_last_runs(&name, 20)
@@ -154,17 +161,12 @@ async fn job_handler(name: Path<String>, data: Data<ThreadData>) -> Result<impl 
 
 #[get("/job/{name}/logs/{run_id}")]
 #[allow(clippy::significant_drop_tightening)] // produces false positives
-async fn job_logs_handler(
-    path: Path<(String, String)>,
-    data: Data<ThreadData>,
-) -> Result<impl Responder> {
+async fn job_logs_handler(path: Path<(String, String)>, data: AppData) -> Result<impl Responder> {
     let (name, run_id) = path.into_inner();
     let log_path = {
-        let data_guard = data.read().await;
         let run_id = if run_id == "latest" {
             // Look up the most recent run id
-            data_guard
-                .get_db()
+            data.db
                 .lock()
                 .await
                 .get_last_runs(&name, 1)
@@ -177,6 +179,7 @@ async fn job_logs_handler(
                 .parse::<u32>()
                 .map_err(|_| HttpError::from_status_code(StatusCode::NOT_FOUND))?
         };
+        let data_guard = data.chron.read().await;
         let job = data_guard
             .get_job(&name)
             .ok_or_else(|| HttpError::from_status_code(StatusCode::NOT_FOUND))?;
@@ -192,11 +195,8 @@ async fn job_logs_handler(
 }
 
 #[post("/job/{name}/terminate")]
-async fn job_terminate_handler(
-    name: Path<String>,
-    data: Data<ThreadData>,
-) -> Result<impl Responder> {
-    let data_guard = data.read().await;
+async fn job_terminate_handler(name: Path<String>, data: AppData) -> Result<impl Responder> {
+    let data_guard = data.chron.read().await;
     let process = data_guard
         .get_job(&name)
         .ok_or_else(|| HttpError::from_status_code(StatusCode::NOT_FOUND))?
@@ -225,16 +225,19 @@ async fn job_terminate_handler(
 }
 
 pub async fn create_server(
-    data: ThreadData,
+    chron: Arc<RwLock<ChronService>>,
     port: u16,
     rx_terminate: Receiver<()>,
 ) -> Result<(), std::io::Error> {
     info!("Starting HTTP server on port {}", port);
 
+    let db = Arc::clone(&chron.read().await.get_db());
     let server = HttpServer::new(move || {
-        let app_data = Data::new(Arc::clone(&data));
         App::new()
-            .app_data(app_data)
+            .app_data(Data::new(AppState {
+                chron: Arc::clone(&chron),
+                db: Arc::clone(&db),
+            }))
             .service(styles)
             .service(index_handler)
             .service(job_handler)
