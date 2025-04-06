@@ -15,15 +15,15 @@ use futures::future::join_all;
 use log::info;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 use tokio::sync::oneshot::error::RecvError;
-use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 use tokio::{fs::File, spawn, sync::oneshot::Receiver};
 use tokio_util::io::ReaderStream;
 
 struct AppState {
     chron: Arc<RwLock<ChronService>>,
-    db: Arc<Mutex<Database>>,
+    db: Arc<Database>,
 }
 
 type AppData = Data<AppState>;
@@ -100,8 +100,6 @@ async fn job_handler(name: Path<String>, data: AppData) -> Result<impl Responder
         .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?;
     let runs = data
         .db
-        .lock()
-        .await
         .get_last_runs(name.into_inner(), 20)
         .await
         .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?
@@ -168,8 +166,6 @@ async fn job_logs_handler(path: Path<(String, String)>, data: AppData) -> Result
         let run_id = if run_id == "latest" {
             // Look up the most recent run id
             data.db
-                .lock()
-                .await
                 .get_last_runs(name.clone(), 1)
                 .await
                 .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?

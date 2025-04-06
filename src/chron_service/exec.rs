@@ -1,6 +1,7 @@
 use super::sleep::sleep_until;
-use super::{DatabaseMutex, Job, RetryConfig};
+use super::{Job, RetryConfig};
 use crate::chron_service::Process;
+use crate::database::Database;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use log::{debug, info, warn};
@@ -42,7 +43,7 @@ async fn write_mailbox_message(name: &str, code: i32) -> Result<()> {
 
 // Helper to execute the specified command without retries
 async fn exec_command_once(
-    db: &DatabaseMutex,
+    db: &Arc<Database>,
     job: &Arc<Job>,
     metadata: &Metadata<'_>,
 ) -> Result<ExecStatus> {
@@ -59,8 +60,6 @@ async fn exec_command_once(
 
     // Record the run in the database
     let run = db
-        .lock()
-        .await
         .insert_run(
             name.clone(),
             metadata.scheduled_time.naive_utc(),
@@ -132,10 +131,7 @@ async fn exec_command_once(
     };
 
     // Update the run status code in the database
-    db.lock()
-        .await
-        .set_run_status_code(run.id, status_code)
-        .await?;
+    db.set_run_status_code(run.id, status_code).await?;
 
     // Wait to clear the process until after saving the run status to the database to avoid a race condition where the
     // process is None because the job terminated, but the most recent run in the database still has a status of None.
@@ -164,7 +160,7 @@ async fn exec_command_once(
 
 // Execute the job's command, handling retries
 pub async fn exec_command(
-    db: &DatabaseMutex,
+    db: &Arc<Database>,
     job: &Arc<Job>,
     retry_config: &RetryConfig,
     scheduled_time: &DateTime<Utc>,

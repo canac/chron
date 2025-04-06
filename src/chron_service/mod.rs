@@ -23,11 +23,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::fs::create_dir_all;
 use tokio::spawn;
+use tokio::sync::RwLock;
 use tokio::sync::oneshot::{Receiver, Sender};
-use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
-
-type DatabaseMutex = Arc<Mutex<Database>>;
 
 pub enum JobType {
     Startup {
@@ -111,7 +109,7 @@ pub struct Task {
 
 pub struct ChronService {
     log_dir: PathBuf,
-    db: DatabaseMutex,
+    db: Arc<Database>,
     jobs: HashMap<String, Task>,
     default_shell: String,
     shell: Option<String>,
@@ -126,7 +124,7 @@ impl ChronService {
         let db = Database::new(chron_dir).await?;
         Ok(Self {
             log_dir: chron_dir.join("logs"),
-            db: Arc::new(Mutex::new(db)),
+            db: Arc::new(db),
             jobs: HashMap::new(),
             default_shell: Self::get_user_shell().context("Failed to get user's default shell")?,
             shell: None,
@@ -134,7 +132,7 @@ impl ChronService {
     }
 
     // Return the service's database connection
-    pub fn get_db(&self) -> DatabaseMutex {
+    pub fn get_db(&self) -> Arc<Database> {
         Arc::clone(&self.db)
     }
 
@@ -282,7 +280,6 @@ impl ChronService {
     }
 
     // Add a new job to be run on the given schedule
-    #[allow(clippy::too_many_lines)]
     async fn schedule(&mut self, name: &str, job: &chronfile::ScheduledJob) -> Result<()> {
         Self::validate_name(name)?;
         if self.jobs.contains_key(name) {
@@ -294,7 +291,7 @@ impl ChronService {
         // However, jobs that don't make up missed runs resume now, not in the past
         let options = job.get_options();
         let resume_time = if options.make_up_missed_run {
-            self.db.lock().await.get_checkpoint(name.to_owned()).await?
+            self.db.get_checkpoint(name.to_owned()).await?
         } else {
             None
         };
@@ -318,11 +315,7 @@ impl ChronService {
             // checkpoint prevents this problem.
             if let Some(start_time) = scheduled_job.prev_run() {
                 debug!("{name}: saving synthetic checkpoint {start_time}");
-                self.db
-                    .lock()
-                    .await
-                    .set_checkpoint(name.to_owned(), start_time)
-                    .await?;
+                self.db.set_checkpoint(name.to_owned(), start_time).await?;
             } else {
                 debug!(
                     "{name}: cannot save synthetic checkpoint because schedule has no previous runs"
@@ -388,10 +381,7 @@ impl ChronService {
                     )
                     .await?;
                     debug!("{name}: updating checkpoint {scheduled_time}");
-                    db.lock()
-                        .await
-                        .set_checkpoint(name.clone(), scheduled_time)
-                        .await?;
+                    db.set_checkpoint(name.clone(), scheduled_time).await?;
                 }
 
                 let Some(next_run) = next_run else {
