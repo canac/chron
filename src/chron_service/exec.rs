@@ -2,6 +2,7 @@ use super::sleep::sleep_until;
 use super::{Job, RetryConfig};
 use crate::chron_service::Process;
 use crate::database::Database;
+use crate::result_ext::ResultExt;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use log::{debug, info, warn};
@@ -107,22 +108,15 @@ async fn exec_command_once(
     // Wait for the process to exit
     let (status_code, terminated) = tokio::select! {
         tx_result = rx_terminate => {
-            let terminated = if tx_result.is_ok() {
+            let terminated = tx_result.is_ok();
+            if terminated {
                 info!("{}: killing running process \"{}\"", job.name, job.command);
 
-                let kill_result = process.kill().await;
-                if let Err(ref err) = kill_result {
-                    // Ignore InvalidInput errors, which are because the process already terminated
-                    if !matches!(&err.kind(), std::io::ErrorKind::InvalidInput) {
-                        kill_result.with_context(|| {
-                            format!("Failed to terminate command {}", job.command)
-                        })?;
-                    }
-                }
-                true
-            } else {
-                false
-            };
+                // Ignore InvalidInput errors, which are because the process already terminated
+                process.kill().await.filter_err(|err| err.kind() != std::io::ErrorKind::InvalidInput).with_context(|| {
+                    format!("Failed to terminate command {}", job.command)
+                })?;
+            }
             (None, terminated)
         }
         status = process.wait() => {
