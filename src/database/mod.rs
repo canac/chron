@@ -2,23 +2,29 @@ mod models;
 
 use self::models::{Checkpoint, Run};
 use anyhow::{Context, Result};
+use async_sqlite::rusqlite::{self, OptionalExtension};
+use async_sqlite::{Client, ClientBuilder};
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
-use rusqlite::{Connection, OptionalExtension};
 use std::path::Path;
 
 pub struct Database {
-    connection: Connection,
+    client: Client,
 }
 
 impl Database {
     // Create a new Database instance
-    pub fn new(chron_dir: &Path) -> Result<Self> {
+    pub async fn new(chron_dir: &Path) -> Result<Self> {
         let db_path = chron_dir.join("chron.db");
-        let connection = Connection::open(db_path.clone())
+        let client = ClientBuilder::new()
+            .path(db_path.clone())
+            .journal_mode(async_sqlite::JournalMode::Wal)
+            .open()
+            .await
             .with_context(|| format!("Failed to open SQLite database {db_path:?}"))?;
-        connection
-            .execute_batch(
-                r"CREATE TABLE IF NOT EXISTS run (
+        client
+            .conn(|conn| {
+                conn.execute_batch(
+                    r"CREATE TABLE IF NOT EXISTS run (
   id INTEGER PRIMARY KEY NOT NULL,
   name VARCHAR NOT NULL,
   scheduled_at DATETIME NOT NULL,
@@ -34,77 +40,91 @@ CREATE TABLE IF NOT EXISTS checkpoint (
   job VARCHAR NOT NULL UNIQUE,
   timestamp DATETIME NOT NULL
 );",
-            )
+                )
+            })
+            .await
             .context("Failed to create SQLite tables")?;
 
-        // Add a busy timeout so that when multiple processes try to write to
-        // the database, they wait for each other to finish instead of erroring
-        connection
-            .execute_batch("PRAGMA busy_timeout = 1000")
+        client
+            .conn(|conn| {
+                // Add a busy timeout so that when multiple processes try to write to
+                // the database, they wait for each other to finish instead of erroring
+                conn.execute_batch("PRAGMA busy_timeout = 1000")
+            })
+            .await
             .context("Failed to set busy timeout")?;
-        Ok(Self { connection })
+        Ok(Self { client })
     }
 
     // Record a new run in the database and return the id of the new run
-    pub fn insert_run(
+    pub async fn insert_run(
         &self,
-        name: &str,
-        scheduled_at: &NaiveDateTime,
+        name: String,
+        scheduled_at: NaiveDateTime,
         attempt: usize,
         max_attempts: Option<usize>,
     ) -> Result<Run> {
-        let mut statement = self
-            .connection
-            .prepare("INSERT INTO run (name, scheduled_at, attempt, max_attempts) VALUES (?1, ?2, ?3, ?4) RETURNING *")?;
-        let run = statement
-            .query_row((name, scheduled_at, attempt, max_attempts), Run::from_row)
-            .context("Failed to save run to the database")?;
-        Ok(run)
+        self.client
+            .conn(move |conn| {
+                conn.query_row(
+                    "INSERT INTO run (name, scheduled_at, attempt, max_attempts) VALUES (?1, ?2, ?3, ?4) RETURNING *",
+                    (name, scheduled_at, attempt, max_attempts),
+                    Run::from_row,
+                )
+            })
+            .await
+            .context("Failed to save run to the database")
     }
 
     // Set the status code of an existing run
-    pub fn set_run_status_code(&self, run_id: u32, status_code: Option<i32>) -> Result<()> {
-        let mut statement = self.connection.prepare(
-            "UPDATE run SET ended_at = STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW'), status_code = ?1 WHERE id = ?2",
-        )?;
-        statement
-            .execute((status_code, run_id))
+    pub async fn set_run_status_code(&self, run_id: u32, status_code: Option<i32>) -> Result<()> {
+        self.client
+            .conn(move |conn| {
+                conn.execute(
+                    "UPDATE run SET ended_at = STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW'), status_code = ?1 WHERE id = ?2",
+                    (status_code, run_id),
+                )
+            })
+            .await
             .context("Failed to update run status in the database")?;
         Ok(())
     }
 
     // Read the last runs of a job
-    pub fn get_last_runs(&self, name: &str, count: u64) -> Result<Vec<Run>> {
-        let mut statement = self
-            .connection
-            .prepare("SELECT id, scheduled_at, started_at, ended_at, status_code, attempt, max_attempts FROM run WHERE name = ?1 ORDER BY started_at DESC LIMIT ?2")?;
-        let runs = statement
-            .query_map((name, count), Run::from_row)
-            .context("Failed to load last runs from the database")?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(runs)
+    pub async fn get_last_runs(&self, name: String, count: u64) -> Result<Vec<Run>> {
+        self.client.conn(move |conn| {
+            let mut statement = conn
+                .prepare("SELECT id, scheduled_at, started_at, ended_at, status_code, attempt, max_attempts FROM run WHERE name = ?1 ORDER BY started_at DESC LIMIT ?2")?;
+            statement.query_map(
+                (name, count),
+                Run::from_row,
+            )?.collect::<rusqlite::Result<Vec<_>>>()
+        }).await.context("Failed to load last runs from the database")
     }
 
     // Read the checkpoint time of a job
-    pub fn get_checkpoint(&self, job: &str) -> Result<Option<DateTime<Utc>>> {
-        let mut statement = self
-            .connection
-            .prepare("SELECT timestamp FROM checkpoint WHERE job = ?1")?;
-        let checkpoint = statement
-            .query_row([job], Checkpoint::from_row)
-            .optional()
+    pub async fn get_checkpoint(&self, job: String) -> Result<Option<DateTime<Utc>>> {
+        let checkpoint = self
+            .client
+            .conn(|conn| {
+                let mut statement =
+                    conn.prepare("SELECT timestamp FROM checkpoint WHERE job = ?1")?;
+                statement.query_row([job], Checkpoint::from_row).optional()
+            })
+            .await
             .context("Failed to save run to the database")?;
         Ok(checkpoint.map(|checkpoint| Utc.from_utc_datetime(&checkpoint.timestamp)))
     }
 
     // Write the checkpoint time of a job
-    pub fn set_checkpoint(&self, job: &str, timestamp: DateTime<Utc>) -> Result<()> {
-        let timestamp = timestamp.naive_utc();
-        let mut statement = self
-            .connection
-            .prepare("INSERT INTO checkpoint (job, timestamp) VALUES (?1, ?2) ON CONFLICT (job) DO UPDATE SET timestamp = (?2)")?;
-        statement
-            .execute((job, timestamp))
+    pub async fn set_checkpoint(&self, job: String, timestamp: DateTime<Utc>) -> Result<()> {
+        self.client
+            .conn(move |conn| {
+                let timestamp = timestamp.naive_utc();
+                let mut statement = conn.prepare("INSERT INTO checkpoint (job, timestamp) VALUES (?1, ?2) ON CONFLICT (job) DO UPDATE SET timestamp = (?2)")?;
+                statement.execute((job, timestamp))
+            })
+            .await
             .context("Failed to save checkpoint time to the database")?;
         Ok(())
     }

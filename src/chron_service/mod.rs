@@ -123,7 +123,7 @@ impl ChronService {
         // Make sure that the chron directory exists
         create_dir_all(chron_dir).await?;
 
-        let db = Database::new(chron_dir)?;
+        let db = Database::new(chron_dir).await?;
         Ok(Self {
             log_dir: chron_dir.join("logs"),
             db: Arc::new(Mutex::new(db)),
@@ -294,7 +294,7 @@ impl ChronService {
         // However, jobs that don't make up missed runs resume now, not in the past
         let options = job.get_options();
         let resume_time = if options.make_up_missed_run {
-            self.db.lock().await.get_checkpoint(name)?
+            self.db.lock().await.get_checkpoint(name.to_owned()).await?
         } else {
             None
         };
@@ -318,7 +318,11 @@ impl ChronService {
             // checkpoint prevents this problem.
             if let Some(start_time) = scheduled_job.prev_run() {
                 debug!("{name}: saving synthetic checkpoint {start_time}");
-                self.db.lock().await.set_checkpoint(name, start_time)?;
+                self.db
+                    .lock()
+                    .await
+                    .set_checkpoint(name.to_owned(), start_time)
+                    .await?;
             } else {
                 debug!(
                     "{name}: cannot save synthetic checkpoint because schedule has no previous runs"
@@ -384,7 +388,10 @@ impl ChronService {
                     )
                     .await?;
                     debug!("{name}: updating checkpoint {scheduled_time}");
-                    db.lock().await.set_checkpoint(&name, scheduled_time)?;
+                    db.lock()
+                        .await
+                        .set_checkpoint(name.clone(), scheduled_time)
+                        .await?;
                 }
 
                 let Some(next_run) = next_run else {

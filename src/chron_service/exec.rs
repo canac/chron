@@ -58,12 +58,16 @@ async fn exec_command_once(
     );
 
     // Record the run in the database
-    let run = db.lock().await.insert_run(
-        &name,
-        &metadata.scheduled_time.naive_utc(),
-        metadata.attempt,
-        metadata.max_attempts,
-    )?;
+    let run = db
+        .lock()
+        .await
+        .insert_run(
+            name.clone(),
+            metadata.scheduled_time.naive_utc(),
+            metadata.attempt,
+            metadata.max_attempts,
+        )
+        .await?;
 
     // Open the log file, creating the directory if necessary
     create_dir_all(&job.log_dir)
@@ -128,7 +132,10 @@ async fn exec_command_once(
     };
 
     // Update the run status code in the database
-    db.lock().await.set_run_status_code(run.id, status_code)?;
+    db.lock()
+        .await
+        .set_run_status_code(run.id, status_code)
+        .await?;
 
     // Wait to clear the process until after saving the run status to the database to avoid a race condition where the
     // process is None because the job terminated, but the most recent run in the database still has a status of None.

@@ -7,6 +7,7 @@ edition = "2024"
 
 [dependencies]
 actix-web = { version = "4.0.1", default-features = false, features = ["compress-brotli", "macros"] }
+async-sqlite = { version = "0.5.0", features = ["chrono"] }
 anyhow = "1.0.56"
 askama = { version = "0.12.1", default-features = false }
 chrono = { version = "0.4.19" }
@@ -21,7 +22,6 @@ humantime-serde = "1.1.1"
 log = "0.4.17"
 notify = { version = "6.1.1", default-features = false, features = ["macos_fsevent"] }
 notify-debouncer-mini = { version = "0.4.1", default-features = false }
-rusqlite = { version = "0.32.1", features = ["bundled", "chrono"] }
 serde = { version = "1.0.136", features = ["derive"] }
 serde_json = "1.0.79"
 simple_logger = { version = "5.0.0", features = ["stderr"] }

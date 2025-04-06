@@ -102,7 +102,8 @@ async fn job_handler(name: Path<String>, data: AppData) -> Result<impl Responder
         .db
         .lock()
         .await
-        .get_last_runs(&name, 20)
+        .get_last_runs(name.into_inner(), 20)
+        .await
         .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?
         .into_iter()
         .map(|run| {
@@ -169,7 +170,8 @@ async fn job_logs_handler(path: Path<(String, String)>, data: AppData) -> Result
             data.db
                 .lock()
                 .await
-                .get_last_runs(&name, 1)
+                .get_last_runs(name.clone(), 1)
+                .await
                 .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?
                 .first()
                 .ok_or_else(|| HttpError::from_status_code(StatusCode::NOT_FOUND))?

@@ -1,5 +1,5 @@
+use async_sqlite::rusqlite::{Result, Row};
 use chrono::NaiveDateTime;
-use rusqlite::Row;
 
 /*
  * The checkpoint table records the last time that a job completed. This
@@ -14,7 +14,7 @@ pub struct Checkpoint {
 }
 
 impl Checkpoint {
-    pub fn from_row(row: &Row) -> rusqlite::Result<Self> {
+    pub fn from_row(row: &Row) -> Result<Self> {
         Ok(Self {
             timestamp: row.get("timestamp")?,
         })
@@ -32,7 +32,7 @@ pub struct Run {
 }
 
 impl Run {
-    pub fn from_row(row: &Row) -> rusqlite::Result<Self> {
+    pub fn from_row(row: &Row) -> Result<Self> {
         Ok(Self {
             id: row.get::<_, i32>("id")?.unsigned_abs(),
             scheduled_at: row.get("scheduled_at")?,
