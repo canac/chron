@@ -54,7 +54,7 @@ async fn main() -> Result<()> {
     let chron = ChronService::new(project_dirs.data_local_dir()).await?;
     let chron_lock = Arc::new(RwLock::new(chron));
     let server = http::create_server(Arc::clone(&chron_lock), port).await?;
-    chron_lock.write().await.start(chronfile).await?;
+    chron_lock.write().await.start(chronfile, port).await?;
 
     let watcher_chron = Arc::clone(&chron_lock);
     let watch_path = chronfile_path.clone();
@@ -68,7 +68,7 @@ async fn main() -> Result<()> {
             match Chronfile::load(&watch_path).await {
                 Ok(chronfile) => {
                     debug!("Reloading chronfile {}", watch_path.to_string_lossy());
-                    if let Err(err) = watcher_chron.write().await.start(chronfile).await {
+                    if let Err(err) = watcher_chron.write().await.start(chronfile, port).await {
                         error!("Failed to start chron\n{err:?}");
                     }
                 }
@@ -100,7 +100,14 @@ async fn main() -> Result<()> {
         if stdin().is_terminal() {
             info!("To shut down immediately, press Ctrl-C again");
         }
-        handle.block_on(async { ctrlc_chron.write().await.stop().await });
+        handle.block_on(async {
+            ctrlc_chron
+                .write()
+                .await
+                .stop()
+                .await
+                .expect("Failed to stop chron");
+        });
         if let Some(tx) = tx.take() {
             tx.send(()).expect("Failed to send terminate message");
         }

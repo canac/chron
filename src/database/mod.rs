@@ -1,11 +1,20 @@
 mod models;
 
-use self::models::{Checkpoint, Run};
+use self::models::{Checkpoint, Job, Run};
 use anyhow::{Context, Result};
-use async_sqlite::rusqlite::{self, OptionalExtension};
-use async_sqlite::{Client, ClientBuilder};
+use async_sqlite::rusqlite::{self, OptionalExtension, types::Value, vtab::array::load_module};
+use async_sqlite::{Client, ClientBuilder, JournalMode};
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
+use log::info;
+use std::collections::HashSet;
 use std::path::Path;
+use std::rc::Rc;
+
+#[cfg_attr(test, derive(Debug, Eq, PartialEq))]
+pub enum ReserveResult {
+    Reserved,
+    Failed { conflicting_jobs: Vec<String> },
+}
 
 pub struct Database {
     client: Client,
@@ -17,14 +26,28 @@ impl Database {
         let db_path = chron_dir.join("chron.db");
         let client = ClientBuilder::new()
             .path(db_path.clone())
-            .journal_mode(async_sqlite::JournalMode::Wal)
+            .journal_mode(JournalMode::Wal)
             .open()
             .await
             .with_context(|| format!("Failed to open SQLite database {db_path:?}"))?;
-        client
+
+        let db = Self { client };
+        db.init().await?;
+        Ok(db)
+    }
+
+    // Create the database tables
+    async fn init(&self) -> Result<()> {
+        self.client
             .conn(|conn| {
                 conn.execute_batch(
-                    r"CREATE TABLE IF NOT EXISTS run (
+                    r"
+CREATE TABLE IF NOT EXISTS job (
+  name VARCHAR PRIMARY KEY NOT NULL,
+  port INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS run (
   id INTEGER PRIMARY KEY NOT NULL,
   name VARCHAR NOT NULL,
   scheduled_at DATETIME NOT NULL,
@@ -40,12 +63,16 @@ CREATE TABLE IF NOT EXISTS checkpoint (
   job VARCHAR NOT NULL UNIQUE,
   timestamp DATETIME NOT NULL
 );",
-                )
+                )?;
+
+                load_module(conn)?;
+
+                Ok(())
             })
             .await
             .context("Failed to create SQLite tables")?;
 
-        client
+        self.client
             .conn(|conn| {
                 // Add a busy timeout so that when multiple processes try to write to
                 // the database, they wait for each other to finish instead of erroring
@@ -53,7 +80,8 @@ CREATE TABLE IF NOT EXISTS checkpoint (
             })
             .await
             .context("Failed to set busy timeout")?;
-        Ok(Self { client })
+
+        Ok(())
     }
 
     // Record a new run in the database and return the id of the new run
@@ -127,5 +155,264 @@ CREATE TABLE IF NOT EXISTS checkpoint (
             .await
             .context("Failed to save checkpoint time to the database")?;
         Ok(())
+    }
+
+    // Attempt to associate the given jobs with the current process, identified by its port
+    // Reacquiring jobs already associated with this port is a noop
+    // This will fail if another process has already acquired the jobs
+    pub async fn acquire_jobs(
+        &self,
+        jobs: Vec<String>,
+        port: u16,
+        check_port_active: impl Fn(u16) -> bool + Send + 'static,
+    ) -> Result<ReserveResult> {
+        let result = self
+            .client
+            .conn(move |conn| {
+                conn.execute_batch("BEGIN EXCLUSIVE TRANSACTION")?;
+
+                let mut statement = conn.prepare(
+                    "SELECT name, port FROM job WHERE name IN rarray(?1) AND port != ?2",
+                )?;
+                let job_param = Rc::new(
+                    jobs.clone()
+                        .into_iter()
+                        .map(Value::from)
+                        .collect::<Vec<_>>(),
+                );
+                let conflicting_jobs = statement
+                    .query_map((job_param, port), Job::from_row)?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+
+                // Given the jobs that are already in use, determine which ports they are associated and check whether
+                // those ports still belong to a running chron server. Then use that information to determine which
+                // conflicting jobs can be automatically released and which are still in use.
+                let ports = conflicting_jobs
+                    .iter()
+                    .map(|job| job.port)
+                    .collect::<HashSet<_>>();
+                let recovered_ports = ports
+                    .into_iter()
+                    .filter(|job_port| !check_port_active(*job_port))
+                    .collect::<HashSet<_>>();
+                let (released_jobs, conflicting_jobs) = conflicting_jobs
+                    .into_iter()
+                    .partition::<Vec<_>, _>(|job| recovered_ports.contains(&job.port));
+                if !released_jobs.is_empty() {
+                    info!(
+                        "Recovered jobs: {}",
+                        released_jobs
+                            .iter()
+                            .map(|job| job.name.clone())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                }
+
+                // Whether or not conflicts remain, still release any jobs that could be recovered
+                let mut statement = conn.prepare("DELETE FROM job WHERE port = ?1")?;
+                for port in recovered_ports {
+                    statement.execute([port])?;
+                }
+
+                if !conflicting_jobs.is_empty() {
+                    conn.execute_batch("COMMIT")?;
+
+                    let conflicting_jobs =
+                        conflicting_jobs.into_iter().map(|job| job.name).collect();
+                    return Ok(ReserveResult::Failed { conflicting_jobs });
+                }
+
+                // If this job already exists it is because it is already acquired by this port, so it can be ignored
+                let mut statement = conn.prepare(
+                    "INSERT INTO job (name, port) VALUES (?1, ?2) ON CONFLICT DO NOTHING",
+                )?;
+                for job in jobs {
+                    statement.execute((job, port))?;
+                }
+                conn.execute_batch("COMMIT")?;
+                Ok(ReserveResult::Reserved)
+            })
+            .await?;
+
+        Ok(result)
+    }
+
+    // Release previously acquired jobs
+    pub async fn release_jobs(&self, jobs: Vec<String>) -> Result<()> {
+        self.client
+            .conn(move |conn| {
+                conn.execute(
+                    "DELETE FROM job WHERE name IN rarray(?1)",
+                    [Rc::new(
+                        jobs.into_iter().map(Value::from).collect::<Vec<_>>(),
+                    )],
+                )
+            })
+            .await
+            .context("Failed to unlock jobs in the database")?;
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tokio::test;
+
+    use super::*;
+
+    async fn open_db() -> Result<Database> {
+        let client = ClientBuilder::new().open().await?;
+        let db = Database { client };
+        db.init().await?;
+        Ok(db)
+    }
+
+    fn check_port_active(_: u16) -> bool {
+        true
+    }
+
+    #[test]
+    async fn test_acquire_jobs() {
+        let db = open_db().await.unwrap();
+        assert_eq!(
+            db.acquire_jobs(
+                vec!["job1".to_owned(), "job2".to_owned()],
+                1000,
+                check_port_active,
+            )
+            .await
+            .unwrap(),
+            ReserveResult::Reserved
+        );
+        assert_eq!(
+            db.acquire_jobs(
+                vec!["job1".to_owned(), "job2".to_owned(), "job3".to_owned()],
+                1001,
+                check_port_active
+            )
+            .await
+            .unwrap(),
+            ReserveResult::Failed {
+                conflicting_jobs: vec!["job1".to_owned(), "job2".to_owned()]
+            }
+        );
+        assert_eq!(
+            db.acquire_jobs(vec!["job3".to_owned()], 1000, check_port_active)
+                .await
+                .unwrap(),
+            ReserveResult::Reserved
+        );
+    }
+
+    #[test]
+    async fn test_reacquire_jobs() {
+        let db = open_db().await.unwrap();
+        assert_eq!(
+            db.acquire_jobs(
+                vec!["job1".to_owned(), "job2".to_owned()],
+                1000,
+                check_port_active,
+            )
+            .await
+            .unwrap(),
+            ReserveResult::Reserved
+        );
+        assert_eq!(
+            db.acquire_jobs(
+                vec!["job1".to_owned(), "job2".to_owned(), "job3".to_owned()],
+                1000,
+                check_port_active
+            )
+            .await
+            .unwrap(),
+            ReserveResult::Reserved
+        );
+    }
+
+    #[test]
+    async fn test_acquire_recoverable_jobs() {
+        let db = open_db().await.unwrap();
+
+        assert_eq!(
+            db.acquire_jobs(
+                vec!["job1".to_owned(), "job2".to_owned()],
+                1000,
+                check_port_active,
+            )
+            .await
+            .unwrap(),
+            ReserveResult::Reserved
+        );
+        assert_eq!(
+            db.acquire_jobs(vec!["job3".to_owned()], 1001, check_port_active)
+                .await
+                .unwrap(),
+            ReserveResult::Reserved
+        );
+
+        // Port 1001 is inactive and job 3 is released
+        assert_eq!(
+            db.acquire_jobs(
+                vec!["job1".to_owned(), "job2".to_owned(), "job3".to_owned()],
+                1002,
+                |port| port == 1000
+            )
+            .await
+            .unwrap(),
+            ReserveResult::Failed {
+                conflicting_jobs: vec!["job1".to_owned(), "job2".to_owned()]
+            }
+        );
+        assert_eq!(
+            db.acquire_jobs(vec!["job3".to_owned()], 1000, check_port_active)
+                .await
+                .unwrap(),
+            ReserveResult::Reserved
+        );
+    }
+
+    #[test]
+    async fn test_acquire_jobs_empty() {
+        let db = open_db().await.unwrap();
+        assert_eq!(
+            db.acquire_jobs(Vec::new(), 1000, check_port_active)
+                .await
+                .unwrap(),
+            ReserveResult::Reserved
+        );
+    }
+
+    #[test]
+    async fn test_release_jobs() {
+        let db = open_db().await.unwrap();
+        assert_eq!(
+            db.acquire_jobs(
+                vec!["job1".to_owned(), "job2".to_owned()],
+                1000,
+                check_port_active,
+            )
+            .await
+            .unwrap(),
+            ReserveResult::Reserved
+        );
+        db.release_jobs(vec!["job2".to_owned()]).await.unwrap();
+        assert_eq!(
+            db.acquire_jobs(
+                vec!["job2".to_owned(), "job3".to_owned()],
+                1000,
+                check_port_active,
+            )
+            .await
+            .unwrap(),
+            ReserveResult::Reserved
+        );
+    }
+
+    #[test]
+    async fn test_release_jobs_empty() {
+        let db = open_db().await.unwrap();
+        db.release_jobs(Vec::new()).await.unwrap();
     }
 }

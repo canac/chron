@@ -8,7 +8,7 @@ use self::scheduled_job::ScheduledJob;
 use self::sleep::sleep_until;
 use self::working_dir::expand_working_dir;
 use crate::chronfile::{self, Chronfile};
-use crate::database::Database;
+use crate::database::{Database, ReserveResult};
 use anyhow::Result;
 use anyhow::{Context, bail};
 use chrono::{DateTime, Utc};
@@ -146,13 +146,21 @@ impl ChronService {
         self.jobs.iter().map(|(name, task)| (name, &task.job))
     }
 
+    // Determine whether a port still belongs to any running chron server
+    fn check_port_active(port: u16) -> bool {
+        let inactive = reqwest::blocking::get(format!("http://localhost:{port}"))
+            .is_err_and(|err| err.is_connect());
+        !inactive
+    }
+
     // Start or start the chron service using the jobs defined in the provided chronfile
-    pub async fn start(&mut self, chronfile: Chronfile) -> Result<()> {
+    pub async fn start(&mut self, chronfile: Chronfile, port: u16) -> Result<()> {
         let same_shell = self.shell == chronfile.config.shell;
         self.shell = chronfile.config.shell;
 
         let mut existing_jobs = take(&mut self.jobs);
 
+        let mut startup_jobs = HashMap::<String, chronfile::StartupJob>::new();
         for (name, job) in chronfile.startup_jobs {
             if job.disabled {
                 continue;
@@ -174,10 +182,10 @@ impl ChronService {
                 existing_jobs.insert(name, task);
             }
 
-            debug!("Registering new startup job {name}");
-            self.startup(&name, &job)?;
+            startup_jobs.insert(name, job);
         }
 
+        let mut scheduled_jobs = HashMap::<String, chronfile::ScheduledJob>::new();
         for (name, job) in chronfile.scheduled_jobs {
             if job.disabled {
                 continue;
@@ -199,21 +207,64 @@ impl ChronService {
                 existing_jobs.insert(name, task);
             }
 
+            scheduled_jobs.insert(name, job);
+        }
+
+        // Determine any newly added jobs and lock them in the database
+        let acquired_jobs = startup_jobs
+            .keys()
+            .cloned()
+            .chain(scheduled_jobs.keys().cloned())
+            .collect::<Vec<_>>();
+        if !acquired_jobs.is_empty() {
+            debug!("Acquiring jobs: {}...", acquired_jobs.join(", "));
+            match self
+                .db
+                .acquire_jobs(acquired_jobs, port, Self::check_port_active)
+                .await?
+            {
+                ReserveResult::Reserved => {}
+                ReserveResult::Failed { conflicting_jobs } => bail!(
+                    "The following jobs are in use by another chron process: {}",
+                    conflicting_jobs.join(", ")
+                ),
+            }
+        }
+
+        let unlocked_jobs = existing_jobs
+            .keys()
+            .filter(|job| !startup_jobs.contains_key(*job) && !scheduled_jobs.contains_key(*job))
+            .cloned()
+            .collect::<Vec<_>>();
+
+        for (name, job) in startup_jobs {
+            debug!("Registering new startup job {name}");
+            self.startup(&name, &job)?;
+        }
+
+        for (name, job) in scheduled_jobs {
             debug!("Registering new scheduled job {name}");
             self.schedule(&name, &job).await?;
         }
 
         // Terminate all existing jobs that weren't reused
         Self::terminate_jobs(existing_jobs).await;
+        if !unlocked_jobs.is_empty() {
+            debug!("Releasing jobs: {}", unlocked_jobs.join(", "));
+            self.db.release_jobs(unlocked_jobs).await?;
+        }
 
         Ok(())
     }
 
     // Start or start the chron service using the jobs defined in the provided chronfile
-    pub async fn stop(&mut self) {
+    pub async fn stop(&mut self) -> Result<()> {
         let jobs = take(&mut self.jobs);
 
+        let unlocked_jobs = jobs.keys().cloned().collect();
         Self::terminate_jobs(jobs).await;
+        self.db.release_jobs(unlocked_jobs).await?;
+        Ok(())
     }
 
     // Terminate a collection of jobs and wait for all of their tasks complete

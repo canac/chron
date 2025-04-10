@@ -1,6 +1,21 @@
 use async_sqlite::rusqlite::{Result, Row};
 use chrono::NaiveDateTime;
 
+#[derive(Debug)]
+pub struct Job {
+    pub name: String,
+    pub port: u16,
+}
+
+impl Job {
+    pub fn from_row(row: &Row) -> Result<Self> {
+        Ok(Self {
+            name: row.get("name")?,
+            port: row.get("port")?,
+        })
+    }
+}
+
 /*
  * The checkpoint table records the last time that a job completed. This
  * information is used to correctly calculate missed job runs between runs
