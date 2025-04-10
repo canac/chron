@@ -34,6 +34,7 @@ use tokio::sync::oneshot::channel;
 #[actix_web::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    let port = cli.port;
 
     simple_logger::SimpleLogger::new()
         .with_module_level("actix_server", LevelFilter::Off)
@@ -50,9 +51,10 @@ async fn main() -> Result<()> {
 
     let project_dirs = directories::ProjectDirs::from("com", "canac", "chron")
         .context("Failed to determine application directories")?;
-    let mut chron = ChronService::new(project_dirs.data_local_dir()).await?;
-    chron.start(chronfile).await?;
+    let chron = ChronService::new(project_dirs.data_local_dir()).await?;
     let chron_lock = Arc::new(RwLock::new(chron));
+    let server = http::create_server(Arc::clone(&chron_lock), port).await?;
+    chron_lock.write().await.start(chronfile).await?;
 
     let watcher_chron = Arc::clone(&chron_lock);
     let watch_path = chronfile_path.clone();
@@ -65,13 +67,13 @@ async fn main() -> Result<()> {
         handle.block_on(async {
             match Chronfile::load(&watch_path).await {
                 Ok(chronfile) => {
-                    debug!("Reloaded chronfile {}", watch_path.to_string_lossy());
+                    debug!("Reloading chronfile {}", watch_path.to_string_lossy());
                     if let Err(err) = watcher_chron.write().await.start(chronfile).await {
                         error!("Failed to start chron\n{err:?}");
                     }
                 }
                 Err(err) => error!(
-                    "Failed to reload chronfile {}\n{err:?}",
+                    "Failed to parse chronfile {}\n{err:?}",
                     watch_path.to_string_lossy()
                 ),
             }
@@ -104,10 +106,14 @@ async fn main() -> Result<()> {
         }
     })?;
 
-    match cli.port {
-        Some(port) => http::create_server(chron_lock, port, rx).await?,
-        // Wait for termination signal
-        None => rx.await?,
+    // Start the HTTP server
+    let handle = server.handle();
+    tokio::select! {
+        _ = server => (),
+        _ = rx => {
+            info!("Stopping HTTP server");
+            handle.stop(true).await;
+        },
     }
 
     Ok(())

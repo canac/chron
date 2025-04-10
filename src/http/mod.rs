@@ -7,6 +7,7 @@ use self::job_info::JobInfo;
 use crate::chron_service::{ChronService, ProcessStatus};
 use crate::database::Database;
 use actix_web::HttpResponse;
+use actix_web::dev::Server;
 use actix_web::web::{Data, Path};
 use actix_web::{App, HttpServer, Responder, Result, get, http::StatusCode, post};
 use askama::Template;
@@ -15,10 +16,8 @@ use futures::future::join_all;
 use log::info;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::fs::File;
 use tokio::sync::RwLock;
-use tokio::sync::oneshot::error::RecvError;
-use tokio::task::JoinHandle;
-use tokio::{fs::File, spawn, sync::oneshot::Receiver};
 use tokio_util::io::ReaderStream;
 
 struct AppState {
@@ -225,8 +224,7 @@ async fn job_terminate_handler(name: Path<String>, data: AppData) -> Result<impl
 pub async fn create_server(
     chron: Arc<RwLock<ChronService>>,
     port: u16,
-    rx_terminate: Receiver<()>,
-) -> Result<(), std::io::Error> {
+) -> Result<Server, std::io::Error> {
     info!("Starting HTTP server on port {}", port);
 
     let db = Arc::clone(&chron.read().await.get_db());
@@ -245,19 +243,5 @@ pub async fn create_server(
     .disable_signals()
     .bind(("localhost", port))?
     .run();
-    let handle = server.handle();
-    let terminator: JoinHandle<Result<(), RecvError>> = spawn(async move {
-        rx_terminate.await?;
-        info!("Stopping HTTP server");
-        handle.stop(true).await;
-        Ok(())
-    });
-
-    // Start the server and the terminator task
-    tokio::select! {
-        _ = server => (),
-        _ = terminator => (),
-    }
-
-    Ok(())
+    Ok(server)
 }
