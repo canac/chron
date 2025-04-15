@@ -1,3 +1,4 @@
+pub mod api;
 mod filters;
 mod http_error;
 mod job_info;
@@ -9,8 +10,9 @@ use crate::database::Database;
 use actix_web::HttpResponse;
 use actix_web::dev::Server;
 use actix_web::middleware::DefaultHeaders;
-use actix_web::web::{Data, Path};
+use actix_web::web::{Data, Json, Path};
 use actix_web::{App, HttpServer, Responder, Result, get, http::StatusCode, post};
+use api::JobStatus;
 use askama::Template;
 use chrono::{DateTime, Duration, Local, TimeZone};
 use futures::future::join_all;
@@ -192,6 +194,32 @@ async fn job_logs_handler(path: Path<(String, String)>, data: AppData) -> Result
         .streaming(ReaderStream::new(file)))
 }
 
+#[get("/job/{job}/status")]
+async fn job_status_handler(name: Path<String>, data: AppData) -> Result<impl Responder> {
+    let chron_guard = data.chron.read().await;
+    let job = chron_guard
+        .get_job(name.as_str())
+        .ok_or_else(|| HttpError::from_status_code(StatusCode::NOT_FOUND))?;
+    let job_info = JobInfo::from_job(&name, job)
+        .await
+        .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?;
+    drop(chron_guard);
+
+    let status = JobStatus {
+        command: job_info.command,
+        shell: job_info.shell,
+        schedule: job_info.schedule,
+        status: match job_info.status {
+            ProcessStatus::Running { pid } => format!("running (pid {pid})"),
+            ProcessStatus::Terminated => job_info.next_run.map_or_else(
+                || "not running".to_owned(),
+                |next_run| format!("not running (next run at {next_run})"),
+            ),
+        },
+    };
+    Ok(Json(status))
+}
+
 #[get("/job/{job}/log_path")]
 async fn job_log_path_handler(name: Path<String>, data: AppData) -> Result<impl Responder> {
     let run_id = data
@@ -259,6 +287,7 @@ pub fn create_server(
             .wrap(DefaultHeaders::new().add(("X-Powered-By", "chron")))
             .service(
                 actix_web::web::scope("/api")
+                    .service(job_status_handler)
                     .service(job_log_path_handler)
                     .service(job_terminate_handler),
             )

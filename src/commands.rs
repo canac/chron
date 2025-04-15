@@ -1,8 +1,9 @@
 use crate::chron_service::ChronService;
 use crate::chronfile::Chronfile;
-use crate::cli::{KillArgs, LogsArgs, RunArgs};
+use crate::cli::{KillArgs, LogsArgs, RunArgs, StatusArgs};
 use crate::database::Database;
 use crate::http;
+use crate::http::api::JobStatus;
 use anyhow::{Context, Result, bail};
 use log::{LevelFilter, debug, error, info};
 use notify::RecursiveMode;
@@ -133,6 +134,30 @@ fn validate_response(job: &str, res: &Response) -> Result<()> {
     if res.status() == StatusCode::NOT_FOUND {
         bail!("Job {job} is not running");
     }
+
+    Ok(())
+}
+
+/// Implementation for the `status` CLI command
+pub async fn status(db: Arc<Database>, args: StatusArgs) -> Result<()> {
+    let StatusArgs { job } = args;
+    let port = db.get_job_port(job.clone()).await?;
+    let Some(port) = port else {
+        bail!("Job {job} is not running");
+    };
+    let origin = format!("http://localhost:{port}");
+    let res = reqwest::get(format!("{origin}/api/job/{job}/status"))
+        .await
+        .context("Failed to connect to chron server")?;
+    validate_response(&job, &res)?;
+
+    let status: JobStatus = res.json().await?;
+    println!("command: {}", status.command);
+    println!("shell: {}", status.shell);
+    if let Some(schedule) = status.schedule.as_ref() {
+        println!("schedule: {schedule}");
+    }
+    println!("status: {}", status.status);
 
     Ok(())
 }

@@ -16,6 +16,12 @@ pub struct RunArgs {
 }
 
 #[derive(Parser)]
+pub struct StatusArgs {
+    /// The job's name
+    pub job: String,
+}
+
+#[derive(Parser)]
 pub struct LogsArgs {
     /// The job's name
     pub job: String,
@@ -39,6 +45,9 @@ pub struct KillArgs {
 pub enum Command {
     /// Run a Chronfile
     Run(RunArgs),
+
+    /// Print the job's current status
+    Status(StatusArgs),
 
     /// Print the logs of the job's most recent run
     Logs(LogsArgs),
