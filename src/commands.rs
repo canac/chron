@@ -7,6 +7,7 @@ use anyhow::{Context, Result, bail};
 use log::{LevelFilter, debug, error, info};
 use notify::RecursiveMode;
 use notify_debouncer_mini::{DebounceEventResult, new_debouncer};
+use reqwest::header::HeaderValue;
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, BufWriter, IsTerminal, Read, Write, stdin};
 use std::path::PathBuf;
@@ -127,11 +128,16 @@ pub async fn logs(db: Arc<Database>, args: LogsArgs) -> Result<()> {
     let Some(port) = port else {
         bail!("Job {job} is not running");
     };
-    let log_path = reqwest::get(format!("http://localhost:{port}/api/job/{job}/log_path"))
-        .await?
-        .text()
-        .await?;
+    let origin = format!("http://localhost:{port}");
+    let res = reqwest::get(format!("{origin}/api/job/{job}/log_path"))
+        .await
+        .context("Failed to connect to chron server")?;
 
+    if res.headers().get("x-powered-by") != Some(&HeaderValue::from_static("chron")) {
+        bail!("Server at {origin} is not a chron server");
+    }
+
+    let log_path = res.text().await?;
     let file = OpenOptions::new()
         .read(true)
         .open(&log_path)
