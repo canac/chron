@@ -157,6 +157,18 @@ CREATE TABLE IF NOT EXISTS checkpoint (
         Ok(())
     }
 
+    // Get the port currently associated with a job, if any
+    pub async fn get_job_port(&self, job: String) -> Result<Option<u16>> {
+        let port = self
+            .client
+            .conn(move |conn| {
+                let mut statement = conn.prepare("SELECT port FROM job WHERE name = ?1")?;
+                statement.query_row([job], |row| row.get("port")).optional()
+            })
+            .await?;
+        Ok(port)
+    }
+
     // Attempt to associate the given jobs with the current process, identified by its port
     // Reacquiring jobs already associated with this port is a noop
     // This will fail if another process has already acquired the jobs

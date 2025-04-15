@@ -1,0 +1,172 @@
+use crate::chron_service::ChronService;
+use crate::chronfile::Chronfile;
+use crate::cli::{LogsArgs, RunArgs};
+use crate::database::Database;
+use crate::http;
+use anyhow::{Context, Result, bail};
+use log::{LevelFilter, debug, error, info};
+use notify::RecursiveMode;
+use notify_debouncer_mini::{DebounceEventResult, new_debouncer};
+use std::fs::OpenOptions;
+use std::io::{BufRead, BufReader, BufWriter, IsTerminal, Read, Write, stdin};
+use std::path::PathBuf;
+use std::process::exit;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
+use tokio::runtime::Handle;
+use tokio::sync::RwLock;
+use tokio::sync::oneshot::channel;
+
+/// Return the directory where chron will store application data
+pub fn get_data_dir() -> Result<PathBuf> {
+    let project_dirs = directories::ProjectDirs::from("com", "canac", "chron")
+        .context("Failed to determine application directories")?;
+    Ok(project_dirs.data_local_dir().to_owned())
+}
+
+/// Implementation for the `run` CLI command
+pub async fn run(db: Arc<Database>, args: RunArgs) -> Result<()> {
+    let RunArgs {
+        port,
+        quiet,
+        chronfile: chronfile_path,
+    } = args;
+
+    simple_logger::SimpleLogger::new()
+        .with_module_level("actix_server", LevelFilter::Off)
+        .with_module_level("mio", LevelFilter::Off)
+        .with_level(if quiet {
+            LevelFilter::Warn
+        } else {
+            LevelFilter::Debug
+        })
+        .init()?;
+
+    let chronfile = Chronfile::load(&chronfile_path).await?;
+
+    let chron = ChronService::new(&get_data_dir()?, Arc::clone(&db)).await?;
+    let chron_lock = Arc::new(RwLock::new(chron));
+    let server = http::create_server(Arc::clone(&chron_lock), Arc::clone(&db), port)?;
+    chron_lock.write().await.start(chronfile, port).await?;
+
+    let watcher_chron = Arc::clone(&chron_lock);
+    let watch_path = chronfile_path.clone();
+    let handle = Handle::current();
+    let mut debouncer = new_debouncer(Duration::from_secs(1), move |res: DebounceEventResult| {
+        if res.is_err() {
+            return;
+        }
+
+        handle.block_on(async {
+            match Chronfile::load(&watch_path).await {
+                Ok(chronfile) => {
+                    debug!("Reloading chronfile {}", watch_path.to_string_lossy());
+                    if let Err(err) = watcher_chron.write().await.start(chronfile, port).await {
+                        error!("Failed to start chron\n{err:?}");
+                    }
+                }
+                Err(err) => error!(
+                    "Failed to parse chronfile {}\n{err:?}",
+                    watch_path.to_string_lossy()
+                ),
+            }
+        });
+    })
+    .context("Failed to create watcher debouncer")?;
+    debouncer
+        .watcher()
+        .watch(&chronfile_path, RecursiveMode::NonRecursive)
+        .context("Failed to start chronfile watcher")?;
+
+    let (tx, rx) = channel();
+    let ctrlc_chron = Arc::clone(&chron_lock);
+    let mut tx = Some(tx);
+    let second_signal = AtomicBool::new(false);
+    let handle = Handle::current();
+    ctrlc::set_handler(move || {
+        if second_signal.swap(true, Ordering::Relaxed) {
+            info!("Shutting down forcefully");
+            exit(1);
+        }
+
+        info!("Shutting down gracefully...");
+        if stdin().is_terminal() {
+            info!("To shut down immediately, press Ctrl-C again");
+        }
+        handle.block_on(async {
+            ctrlc_chron
+                .write()
+                .await
+                .stop()
+                .await
+                .expect("Failed to stop chron");
+        });
+        if let Some(tx) = tx.take() {
+            tx.send(()).expect("Failed to send terminate message");
+        }
+    })?;
+
+    // Start the HTTP server
+    let handle = server.handle();
+    tokio::select! {
+        _ = server => (),
+        _ = rx => {
+            info!("Stopping HTTP server");
+            handle.stop(true).await;
+        },
+    }
+
+    Ok(())
+}
+
+/// Implementation for the `logs` CLI command
+pub async fn logs(db: Arc<Database>, args: LogsArgs) -> Result<()> {
+    let LogsArgs { job, lines, follow } = args;
+    let port = db.get_job_port(job.clone()).await?;
+    let Some(port) = port else {
+        bail!("Job {job} is not running");
+    };
+    let log_path = reqwest::get(format!("http://localhost:{port}/api/job/{job}/log_path"))
+        .await?
+        .text()
+        .await?;
+
+    let file = OpenOptions::new()
+        .read(true)
+        .open(&log_path)
+        .context("Failed to open log file")?;
+    let mut reader = BufReader::new(file);
+
+    let mut logs = String::new();
+    reader
+        .read_to_string(&mut logs)
+        .context("Failed to read log file")?;
+
+    if let Some(lines) = lines {
+        let log_lines: Vec<&str> = logs.lines().collect();
+        let start = log_lines.len().saturating_sub(lines);
+
+        let mut writer = BufWriter::new(std::io::stdout().lock());
+        for line in &log_lines[start..] {
+            writeln!(writer, "{line}")?;
+        }
+        writer.flush()?;
+    } else {
+        println!("{logs}");
+    }
+
+    if follow {
+        loop {
+            let mut line = String::new();
+            let bytes_read = reader.read_line(&mut line)?;
+            if bytes_read > 0 {
+                print!("{line}");
+            } else {
+                std::thread::sleep(Duration::from_secs(1));
+            }
+        }
+    }
+
+    Ok(())
+}

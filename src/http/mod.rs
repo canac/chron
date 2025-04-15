@@ -8,6 +8,7 @@ use crate::chron_service::{ChronService, ProcessStatus};
 use crate::database::Database;
 use actix_web::HttpResponse;
 use actix_web::dev::Server;
+use actix_web::middleware::DefaultHeaders;
 use actix_web::web::{Data, Path};
 use actix_web::{App, HttpServer, Responder, Result, get, http::StatusCode, post};
 use askama::Template;
@@ -221,19 +222,46 @@ async fn job_terminate_handler(name: Path<String>, data: AppData) -> Result<impl
     Ok(response)
 }
 
-pub async fn create_server(
+#[get("/job/{job}/log_path")]
+async fn job_log_path_handler(name: Path<String>, data: AppData) -> Result<impl Responder> {
+    let run_id = data
+        .db
+        .get_last_runs(name.to_owned(), 1)
+        .await
+        .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?
+        .first()
+        .ok_or_else(|| HttpError::from_status_code(StatusCode::NOT_FOUND))?
+        .id;
+
+    let log_path = data
+        .chron
+        .read()
+        .await
+        .get_job(name.as_str())
+        .ok_or_else(|| HttpError::from_status_code(StatusCode::NOT_FOUND))?
+        .log_dir
+        .join(format!("{run_id}.log"));
+
+    Ok(HttpResponse::Ok()
+        .content_type("text/plain; charset=utf-8")
+        .body(log_path.to_string_lossy().into_owned()))
+}
+
+pub fn create_server(
     chron: Arc<RwLock<ChronService>>,
+    db: Arc<Database>,
     port: u16,
 ) -> Result<Server, std::io::Error> {
     info!("Starting HTTP server on port {}", port);
 
-    let db = Arc::clone(&chron.read().await.get_db());
     let server = HttpServer::new(move || {
         App::new()
             .app_data(Data::new(AppState {
                 chron: Arc::clone(&chron),
                 db: Arc::clone(&db),
             }))
+            .wrap(DefaultHeaders::new().add(("X-Powered-By", "chron")))
+            .service(actix_web::web::scope("/api").service(job_log_path_handler))
             .service(styles)
             .service(index_handler)
             .service(job_handler)

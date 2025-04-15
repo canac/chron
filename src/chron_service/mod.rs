@@ -117,27 +117,21 @@ pub struct ChronService {
 
 impl ChronService {
     // Create a new ChronService instance
-    pub async fn new(chron_dir: &Path) -> Result<Self> {
+    pub async fn new(data_dir: &Path, db: Arc<Database>) -> Result<Self> {
         // Make sure that the chron directory exists
-        create_dir_all(chron_dir).await?;
+        create_dir_all(data_dir).await?;
 
-        let db = Database::new(chron_dir).await?;
         Ok(Self {
-            log_dir: chron_dir.join("logs"),
-            db: Arc::new(db),
+            log_dir: data_dir.join("logs"),
+            db,
             jobs: HashMap::new(),
             default_shell: Self::get_user_shell().context("Failed to get user's default shell")?,
             shell: None,
         })
     }
 
-    // Return the service's database connection
-    pub fn get_db(&self) -> Arc<Database> {
-        Arc::clone(&self.db)
-    }
-
     // Lookup a job by name
-    pub fn get_job(&self, name: &String) -> Option<&Arc<Job>> {
+    pub fn get_job(&self, name: &str) -> Option<&Arc<Job>> {
         self.jobs.get(name).map(|task| &task.job)
     }
 
@@ -314,7 +308,7 @@ impl ChronService {
         });
         let job_copy = Arc::clone(&job);
 
-        let db = self.get_db();
+        let db = Arc::clone(&self.db);
         let handle = spawn(async move {
             exec_command(&db, &job, &options.keep_alive, &Utc::now()).await?;
             Ok::<(), anyhow::Error>(())
@@ -388,7 +382,7 @@ impl ChronService {
         });
         let job_copy = Arc::clone(&job);
 
-        let db = self.get_db();
+        let db = Arc::clone(&self.db);
         let name = name.to_owned();
         let handle = spawn(async move {
             loop {
