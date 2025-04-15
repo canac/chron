@@ -30,12 +30,21 @@ pub struct LogsArgs {
 }
 
 #[derive(Parser)]
+pub struct KillArgs {
+    /// The job's name
+    pub job: String,
+}
+
+#[derive(Parser)]
 pub enum Command {
     /// Run a Chronfile
     Run(RunArgs),
 
     /// Print the logs of the job's most recent run
     Logs(LogsArgs),
+
+    /// Kill the job's currently running process
+    Kill(KillArgs),
 }
 
 #[derive(Parser)]

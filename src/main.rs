@@ -34,6 +34,9 @@ async fn main() -> Result<()> {
         Command::Logs(args) => {
             commands::logs(db, args).await?;
         }
+        Command::Kill(args) => {
+            commands::kill(db, args).await?;
+        }
     }
 
     Ok(())

@@ -1,6 +1,6 @@
 use crate::chron_service::ChronService;
 use crate::chronfile::Chronfile;
-use crate::cli::{LogsArgs, RunArgs};
+use crate::cli::{KillArgs, LogsArgs, RunArgs};
 use crate::database::Database;
 use crate::http;
 use anyhow::{Context, Result, bail};
@@ -8,6 +8,7 @@ use log::{LevelFilter, debug, error, info};
 use notify::RecursiveMode;
 use notify_debouncer_mini::{DebounceEventResult, new_debouncer};
 use reqwest::header::HeaderValue;
+use reqwest::{Client, Response, StatusCode};
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, BufWriter, IsTerminal, Read, Write, stdin};
 use std::path::PathBuf;
@@ -121,6 +122,21 @@ pub async fn run(db: Arc<Database>, args: RunArgs) -> Result<()> {
     Ok(())
 }
 
+fn validate_response(job: &str, res: &Response) -> Result<()> {
+    if res.headers().get("x-powered-by") != Some(&HeaderValue::from_static("chron")) {
+        bail!(
+            "Server at {} is not a chron server",
+            res.url().origin().ascii_serialization()
+        );
+    }
+
+    if res.status() == StatusCode::NOT_FOUND {
+        bail!("Job {job} is not running");
+    }
+
+    Ok(())
+}
+
 /// Implementation for the `logs` CLI command
 pub async fn logs(db: Arc<Database>, args: LogsArgs) -> Result<()> {
     let LogsArgs { job, lines, follow } = args;
@@ -132,10 +148,7 @@ pub async fn logs(db: Arc<Database>, args: LogsArgs) -> Result<()> {
     let res = reqwest::get(format!("{origin}/api/job/{job}/log_path"))
         .await
         .context("Failed to connect to chron server")?;
-
-    if res.headers().get("x-powered-by") != Some(&HeaderValue::from_static("chron")) {
-        bail!("Server at {origin} is not a chron server");
-    }
+    validate_response(&job, &res)?;
 
     let log_path = res.text().await?;
     let file = OpenOptions::new()
@@ -173,6 +186,28 @@ pub async fn logs(db: Arc<Database>, args: LogsArgs) -> Result<()> {
             }
         }
     }
+
+    Ok(())
+}
+
+/// Implementation for the `kill` CLI command
+pub async fn kill(db: Arc<Database>, args: KillArgs) -> Result<()> {
+    let KillArgs { job } = args;
+    let port = db.get_job_port(job.clone()).await?;
+    let Some(port) = port else {
+        bail!("Job {job} is not running");
+    };
+    let origin = format!("http://localhost:{port}");
+    let res = Client::builder()
+        .build()?
+        .post(format!("{origin}/api/job/{job}/terminate"))
+        .send()
+        .await
+        .context("Failed to connect to chron server")?;
+    validate_response(&job, &res)?;
+
+    let pid: i32 = res.json().await?;
+    println!("Terminated process {pid}");
 
     Ok(())
 }

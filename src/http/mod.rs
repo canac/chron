@@ -192,36 +192,6 @@ async fn job_logs_handler(path: Path<(String, String)>, data: AppData) -> Result
         .streaming(ReaderStream::new(file)))
 }
 
-#[post("/job/{name}/terminate")]
-async fn job_terminate_handler(name: Path<String>, data: AppData) -> Result<impl Responder> {
-    let data_guard = data.chron.read().await;
-    let process = data_guard
-        .get_job(&name)
-        .ok_or_else(|| HttpError::from_status_code(StatusCode::NOT_FOUND))?
-        .running_process
-        .write()
-        .await
-        .take();
-    drop(data_guard);
-
-    let terminated = if let Some(process) = process {
-        process.terminate().await
-    } else {
-        false
-    };
-
-    let response = if terminated {
-        HttpResponse::Ok()
-            .content_type("text/plain; charset=utf-8")
-            .body("Terminated")
-    } else {
-        HttpResponse::NotFound()
-            .content_type("text/plain; charset=utf-8")
-            .body("Not Running")
-    };
-    Ok(response)
-}
-
 #[get("/job/{job}/log_path")]
 async fn job_log_path_handler(name: Path<String>, data: AppData) -> Result<impl Responder> {
     let run_id = data
@@ -247,6 +217,32 @@ async fn job_log_path_handler(name: Path<String>, data: AppData) -> Result<impl 
         .body(log_path.to_string_lossy().into_owned()))
 }
 
+#[post("/job/{name}/terminate")]
+async fn job_terminate_handler(name: Path<String>, data: AppData) -> Result<impl Responder> {
+    let data_guard = data.chron.read().await;
+    let process = data_guard
+        .get_job(&name)
+        .ok_or_else(|| HttpError::from_status_code(StatusCode::NOT_FOUND))?
+        .running_process
+        .write()
+        .await
+        .take();
+    drop(data_guard);
+
+    if let Some(process) = process {
+        let pid = process.pid;
+        if process.terminate().await {
+            return Ok(HttpResponse::Ok()
+                .content_type("text/plain; charset=utf-8")
+                .body(pid.to_string()));
+        }
+    }
+
+    Ok(HttpResponse::NotFound()
+        .content_type("text/plain; charset=utf-8")
+        .body("Not Running"))
+}
+
 pub fn create_server(
     chron: Arc<RwLock<ChronService>>,
     db: Arc<Database>,
@@ -261,12 +257,15 @@ pub fn create_server(
                 db: Arc::clone(&db),
             }))
             .wrap(DefaultHeaders::new().add(("X-Powered-By", "chron")))
-            .service(actix_web::web::scope("/api").service(job_log_path_handler))
+            .service(
+                actix_web::web::scope("/api")
+                    .service(job_log_path_handler)
+                    .service(job_terminate_handler),
+            )
             .service(styles)
             .service(index_handler)
             .service(job_handler)
             .service(job_logs_handler)
-            .service(job_terminate_handler)
     })
     .disable_signals()
     .bind(("localhost", port))?
