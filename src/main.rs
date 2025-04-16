@@ -12,6 +12,7 @@ mod chronfile;
 mod cli;
 mod commands;
 mod database;
+mod format;
 mod http;
 mod result_ext;
 
