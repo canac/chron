@@ -22,6 +22,12 @@ pub struct StatusArgs {
 }
 
 #[derive(Parser)]
+pub struct RunsArgs {
+    /// The job's name
+    pub job: String,
+}
+
+#[derive(Parser)]
 pub struct LogsArgs {
     /// The job's name
     pub job: String,
@@ -48,6 +54,9 @@ pub enum Command {
 
     /// Print the job's current status
     Status(StatusArgs),
+
+    /// Print the job's most recent runs
+    Runs(RunsArgs),
 
     /// Print the logs of the job's most recent run
     Logs(LogsArgs),

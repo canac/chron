@@ -1,7 +1,8 @@
 use crate::chron_service::ChronService;
 use crate::chronfile::Chronfile;
-use crate::cli::{KillArgs, LogsArgs, RunArgs, StatusArgs};
-use crate::database::Database;
+use crate::cli::{KillArgs, LogsArgs, RunArgs, RunsArgs, StatusArgs};
+use crate::database::{Database, RunStatus};
+use crate::format;
 use crate::http;
 use crate::http::api::JobStatus;
 use anyhow::{Context, Result, bail};
@@ -158,6 +159,60 @@ pub async fn status(db: Arc<Database>, args: StatusArgs) -> Result<()> {
         println!("schedule: {schedule}");
     }
     println!("status: {}", status.status);
+
+    Ok(())
+}
+
+/// Implementation for the `runs` CLI command
+pub async fn runs(db: Arc<Database>, args: RunsArgs) -> Result<()> {
+    const TIME_WIDTH: usize = 22;
+    const EXECUTION_WIDTH: usize = 18;
+    const STATUS_WIDTH: usize = 12;
+
+    let RunsArgs { job } = args;
+    let port = db.get_job_port(job.clone()).await?;
+    let Some(port) = port else {
+        bail!("Job {job} is not running");
+    };
+    let origin = format!("http://localhost:{port}");
+    let res = reqwest::get(format!("{origin}/api/job/{job}/status"))
+        .await
+        .context("Failed to connect to chron server")?;
+    validate_response(&job, &res)?;
+
+    let status: JobStatus = res.json().await?;
+    let runs = db.get_last_runs(job.clone(), 10).await?;
+
+    if runs.is_empty() {
+        bail!("No runs found for job {job}");
+    }
+
+    println!(
+        "{:<TIME_WIDTH$}| {:<EXECUTION_WIDTH$}| {:<STATUS_WIDTH$}",
+        "time", "execution time", "status code"
+    );
+    println!(
+        "{}+-{}+-{}",
+        "-".repeat(TIME_WIDTH),
+        "-".repeat(EXECUTION_WIDTH),
+        "-".repeat(STATUS_WIDTH)
+    );
+    for run in runs {
+        let run = run.with_current_run_id(status.current_run_id);
+        let status = match run.status() {
+            RunStatus::Running => "running".to_owned(),
+            RunStatus::Completed { status_code } => status_code.to_string(),
+            RunStatus::Terminated => "terminated".to_owned(),
+        };
+        println!(
+            "{:<TIME_WIDTH$}| {:<EXECUTION_WIDTH$}| {:<STATUS_WIDTH$}",
+            format::relative_date(&run.started_at()),
+            run.execution_time()
+                .map(|duration| format::duration(&duration))
+                .unwrap_or_default(),
+            status
+        );
+    }
 
     Ok(())
 }

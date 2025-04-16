@@ -107,6 +107,8 @@ async fn job_handler(name: Path<String>, data: AppData) -> Result<impl Responder
         .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?
         .into_iter()
         .map(|run| {
+            let run = run.with_current_run_id(job.run_id);
+
             // If the job is currently running, the run in the database will have a status of None,
             // which is indistinguishable from a run that terminated without a status code. To be
             // able to show that the current run is running in the runs table, we need to look for a
@@ -140,10 +142,8 @@ async fn job_handler(name: Path<String>, data: AppData) -> Result<impl Responder
                     "{}{}",
                     run.attempt + 1,
                     run.max_attempts
-                        .map_or_else(String::new, |max_attempts| format!(
-                            " of {}",
-                            max_attempts + 1
-                        ))
+                        .map(|max_attempts| format!(" of {}", max_attempts + 1))
+                        .unwrap_or_default()
                 ),
             }
         })
@@ -209,6 +209,7 @@ async fn job_status_handler(name: Path<String>, data: AppData) -> Result<impl Re
         command: job_info.command,
         shell: job_info.shell,
         schedule: job_info.schedule,
+        current_run_id: job_info.run_id,
         status: match job_info.status {
             ProcessStatus::Running { pid } => format!("running (pid {pid})"),
             ProcessStatus::Terminated => job_info.next_run.map_or_else(

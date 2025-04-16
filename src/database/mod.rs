@@ -1,6 +1,6 @@
 mod models;
 
-use self::models::{Checkpoint, Job, Run};
+pub use self::models::{Checkpoint, Job, Run, RunStatus};
 use anyhow::{Context, Result};
 use async_sqlite::rusqlite::{self, OptionalExtension, types::Value, vtab::array::load_module};
 use async_sqlite::{Client, ClientBuilder, JournalMode};

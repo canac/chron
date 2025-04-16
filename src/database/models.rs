@@ -1,5 +1,5 @@
 use async_sqlite::rusqlite::{Result, Row};
-use chrono::NaiveDateTime;
+use chrono::{DateTime, Duration, Local, NaiveDateTime, TimeZone};
 
 #[derive(Debug)]
 pub struct Job {
@@ -29,11 +29,18 @@ pub struct Checkpoint {
 }
 
 impl Checkpoint {
+    /// Create a Checkpoint model from a database row
     pub fn from_row(row: &Row) -> Result<Self> {
         Ok(Self {
             timestamp: row.get("timestamp")?,
         })
     }
+}
+
+pub enum RunStatus {
+    Running,
+    Completed { status_code: i32 },
+    Terminated,
 }
 
 pub struct Run {
@@ -44,18 +51,58 @@ pub struct Run {
     pub status_code: Option<i32>,
     pub attempt: usize,
     pub max_attempts: Option<usize>,
+    pub current: bool,
 }
 
 impl Run {
+    /// Create a Run model from a database row
     pub fn from_row(row: &Row) -> Result<Self> {
         Ok(Self {
-            id: row.get::<_, i32>("id")?.unsigned_abs(),
+            id: row.get("id")?,
             scheduled_at: row.get("scheduled_at")?,
             started_at: row.get("started_at")?,
             ended_at: row.get("ended_at")?,
             status_code: row.get("status_code")?,
             attempt: row.get("attempt")?,
             max_attempts: row.get("max_attempts")?,
+            current: false,
         })
+    }
+
+    /// Augment the run with information about the job's current run id, making `status` and
+    /// `execution_time` more accurate for currently running jobs
+    pub fn with_current_run_id(mut self, current_run_id: Option<u32>) -> Self {
+        if Some(self.id) == current_run_id {
+            self.current = true;
+        }
+        self
+    }
+
+    /// Return the run's status
+    pub fn status(&self) -> RunStatus {
+        if self.current {
+            RunStatus::Running
+        } else {
+            self.status_code
+                .map_or(RunStatus::Terminated, |status_code| RunStatus::Completed {
+                    status_code,
+                })
+        }
+    }
+
+    /// Return the run's start time
+    pub fn started_at(&self) -> DateTime<Local> {
+        Local.from_utc_datetime(&self.started_at)
+    }
+
+    /// Return the run's current elapsed execution time
+    pub fn execution_time(&self) -> Option<Duration> {
+        let ended_at = if self.current {
+            Some(Local::now())
+        } else {
+            self.ended_at
+                .map(|timestamp| Local.from_utc_datetime(&timestamp))
+        };
+        ended_at.map(|ended_at| ended_at.signed_duration_since(self.started_at()))
     }
 }
