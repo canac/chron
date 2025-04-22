@@ -142,10 +142,7 @@ fn validate_response(job: &str, res: &Response) -> Result<()> {
 /// Implementation for the `status` CLI command
 pub async fn status(db: Arc<Database>, args: StatusArgs) -> Result<()> {
     let StatusArgs { job } = args;
-    let port = db.get_job_port(job.clone()).await?;
-    let Some(port) = port else {
-        bail!("Job {job} is not running");
-    };
+    let port = get_job_port(&db, job.clone()).await?;
     let origin = format!("http://localhost:{port}");
     let res = reqwest::get(format!("{origin}/api/job/{job}/status"))
         .await
@@ -170,10 +167,7 @@ pub async fn runs(db: Arc<Database>, args: RunsArgs) -> Result<()> {
     const STATUS_WIDTH: usize = 12;
 
     let RunsArgs { job } = args;
-    let port = db.get_job_port(job.clone()).await?;
-    let Some(port) = port else {
-        bail!("Job {job} is not running");
-    };
+    let port = get_job_port(&db, job.clone()).await?;
     let origin = format!("http://localhost:{port}");
     let res = Client::builder()
         .build()?
@@ -221,10 +215,7 @@ pub async fn runs(db: Arc<Database>, args: RunsArgs) -> Result<()> {
 /// Implementation for the `logs` CLI command
 pub async fn logs(db: Arc<Database>, args: LogsArgs) -> Result<()> {
     let LogsArgs { job, lines, follow } = args;
-    let port = db.get_job_port(job.clone()).await?;
-    let Some(port) = port else {
-        bail!("Job {job} is not running");
-    };
+    let port = get_job_port(&db, job.clone()).await?;
     let origin = format!("http://localhost:{port}");
     let res = reqwest::get(format!("{origin}/api/job/{job}/log_path"))
         .await
@@ -274,10 +265,7 @@ pub async fn logs(db: Arc<Database>, args: LogsArgs) -> Result<()> {
 /// Implementation for the `kill` CLI command
 pub async fn kill(db: Arc<Database>, args: KillArgs) -> Result<()> {
     let KillArgs { job } = args;
-    let port = db.get_job_port(job.clone()).await?;
-    let Some(port) = port else {
-        bail!("Job {job} is not running");
-    };
+    let port = get_job_port(&db, job.clone()).await?;
     let origin = format!("http://localhost:{port}");
     let res = Client::builder()
         .build()?
@@ -291,4 +279,12 @@ pub async fn kill(db: Arc<Database>, args: KillArgs) -> Result<()> {
     println!("Terminated process {pid}");
 
     Ok(())
+}
+
+/// Get the port of a job, returning an error if it is not running
+async fn get_job_port(db: &Arc<Database>, job: String) -> Result<u16> {
+    match db.get_job_port(job.clone()).await? {
+        Some(port) => Ok(port),
+        None => bail!("Job {job} is not running"),
+    }
 }
