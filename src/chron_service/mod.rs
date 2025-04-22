@@ -21,7 +21,6 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::fs::create_dir_all;
 use tokio::spawn;
 use tokio::sync::RwLock;
 use tokio::sync::oneshot::{Receiver, Sender};
@@ -117,10 +116,7 @@ pub struct ChronService {
 
 impl ChronService {
     // Create a new ChronService instance
-    pub async fn new(data_dir: &Path, db: Arc<Database>) -> Result<Self> {
-        // Make sure that the chron directory exists
-        create_dir_all(data_dir).await?;
-
+    pub fn new(data_dir: &Path, db: Arc<Database>) -> Result<Self> {
         Ok(Self {
             log_dir: data_dir.join("logs"),
             db,

@@ -23,11 +23,17 @@ use cli::Command;
 use commands::get_data_dir;
 use database::Database;
 use std::sync::Arc;
+use tokio::fs::create_dir_all;
 
 #[actix_web::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    let db = Arc::new(Database::new(&get_data_dir()?).await?);
+
+    // Make sure that the chron directory exists
+    let data_dir = get_data_dir()?;
+    create_dir_all(&data_dir).await?;
+
+    let db = Arc::new(Database::new(&data_dir).await?);
     match cli.command {
         Command::Run(args) => {
             commands::run(db, args).await?;

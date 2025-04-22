@@ -49,7 +49,7 @@ pub async fn run(db: Arc<Database>, args: RunArgs) -> Result<()> {
 
     let chronfile = Chronfile::load(&chronfile_path).await?;
 
-    let chron = ChronService::new(&get_data_dir()?, Arc::clone(&db)).await?;
+    let chron = ChronService::new(&get_data_dir()?, Arc::clone(&db))?;
     let chron_lock = Arc::new(RwLock::new(chron));
     let server = http::create_server(Arc::clone(&chron_lock), Arc::clone(&db), port)?;
     chron_lock.write().await.start(chronfile, port).await?;
