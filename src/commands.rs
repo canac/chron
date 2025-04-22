@@ -180,7 +180,6 @@ pub async fn runs(db: Arc<Database>, args: RunsArgs) -> Result<()> {
         .context("Failed to connect to chron server")?;
     validate_response(&job, &res)?;
 
-    let status: JobStatus = res.json().await?;
     let runs = db.get_last_runs(job.clone(), 10).await?;
 
     if runs.is_empty() {
@@ -198,7 +197,6 @@ pub async fn runs(db: Arc<Database>, args: RunsArgs) -> Result<()> {
         "-".repeat(STATUS_WIDTH)
     );
     for run in runs {
-        let run = run.with_current_run_id(status.current_run_id);
         let status = match run.status() {
             RunStatus::Running => "running".to_owned(),
             RunStatus::Completed { status_code } => status_code.to_string(),

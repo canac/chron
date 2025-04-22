@@ -107,8 +107,6 @@ async fn job_handler(name: Path<String>, data: AppData) -> Result<impl Responder
         .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?
         .into_iter()
         .map(|run| {
-            let run = run.with_current_run_id(job.run_id);
-
             // If the job is currently running, the run in the database will have a status of None,
             // which is indistinguishable from a run that terminated without a status code. To be
             // able to show that the current run is running in the runs table, we need to look for a

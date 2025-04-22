@@ -99,7 +99,7 @@ CREATE TABLE IF NOT EXISTS checkpoint (
                 let run = conn.query_row(
                     "INSERT INTO run (job_name, scheduled_at, attempt, max_attempts)
 VALUES (?1, ?2, ?3, ?4)
-RETURNING *",
+RETURNING *, TRUE as current",
                     (name.clone(), scheduled_at, attempt, max_attempts),
                     Run::from_row,
                 )?;
@@ -137,8 +137,9 @@ WHERE id = ?2",
     pub async fn get_last_runs(&self, name: String, count: u64) -> Result<Vec<Run>> {
         self.client.conn(move |conn| {
             let mut statement = conn
-                .prepare("SELECT id, scheduled_at, started_at, ended_at, status_code, attempt, max_attempts
+                .prepare("SELECT id, scheduled_at, started_at, ended_at, status_code, attempt, max_attempts, run.id = job.current_run_id AS current
 FROM run
+LEFT JOIN job ON run.job_name = job.name AND run.id = job.current_run_id AND run.ended_at IS NULL
 WHERE job_name = ?1
 ORDER BY started_at DESC
 LIMIT ?2")?;
@@ -206,6 +207,9 @@ WHERE name = ?1 AND port IS NOT NULL",
     // Attempt to associate the given jobs with the current process, identified by its port
     // Reacquiring jobs already associated with this port is a noop
     // This will fail if another process has already acquired the jobs
+    // Successfully acquiring a job will clear the current_run_id of the job. Acquired, running jobs are guaranteed to
+    // have accurate current run information. Released jobs make no such guarantees, so callers should verify that the
+    // job is actually running before trusting information from the database about the job's current run.
     pub async fn acquire_jobs(
         &self,
         jobs: Vec<String>,
@@ -311,6 +315,7 @@ ON CONFLICT (name)
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
     use tokio::test;
 
     use super::*;
@@ -354,6 +359,48 @@ mod tests {
             .unwrap();
         let run_id = insert_run(&db, name.clone()).await;
         assert_eq!(get_current_run_ids(&db).await, vec![Some(run_id)]);
+    }
+
+    #[test]
+    async fn test_get_last_runs() {
+        let db = open_db().await;
+        let name = "job".to_owned();
+        db.acquire_jobs(vec![name.clone()], 1000, check_port_active)
+            .await
+            .unwrap();
+        db.insert_run(name.clone(), Utc::now().naive_utc(), 2, Some(3))
+            .await
+            .unwrap();
+
+        let runs = db.get_last_runs(name.clone(), 1).await.unwrap();
+        let run = runs.first().unwrap();
+        assert_eq!(run.id, 1);
+        assert_eq!(run.attempt, 2);
+        assert_eq!(run.max_attempts, Some(3));
+        // The inserted run is the current run
+        assert!(run.current);
+
+        // Ensure that the next started_at is different
+        tokio::time::sleep(Duration::from_millis(1)).await;
+
+        db.insert_run(name.clone(), Utc::now().naive_utc(), 1, Some(3))
+            .await
+            .unwrap();
+        let runs = db.get_last_runs(name.clone(), 2).await.unwrap();
+        assert_eq!(runs.len(), 2);
+        // The runs are sorted by started_at descending
+        assert_eq!(runs[0].id, 2);
+        assert_eq!(runs[1].id, 1);
+        // The newly-inserted run is the current run and the old insert run is not the current
+        assert!(runs[0].current);
+        assert!(!runs[1].current);
+
+        db.set_run_status_code(runs[0].id, Some(0)).await.unwrap();
+        let runs = db.get_last_runs(name, 1).await.unwrap();
+        let run = runs.first().unwrap();
+        assert_eq!(run.status_code, Some(0));
+        // The completed run is not the current run
+        assert!(!run.current);
     }
 
     #[test]

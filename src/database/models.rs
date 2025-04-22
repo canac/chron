@@ -37,12 +37,14 @@ impl Checkpoint {
     }
 }
 
+#[cfg_attr(test, derive(Debug, Eq, PartialEq))]
 pub enum RunStatus {
     Running,
     Completed { status_code: i32 },
     Terminated,
 }
 
+#[cfg_attr(test, derive(Debug, Eq, PartialEq))]
 pub struct Run {
     pub id: u32,
     pub scheduled_at: NaiveDateTime,
@@ -65,17 +67,8 @@ impl Run {
             status_code: row.get("status_code")?,
             attempt: row.get("attempt")?,
             max_attempts: row.get("max_attempts")?,
-            current: false,
+            current: row.get::<_, Option<bool>>("current")?.unwrap_or_default(),
         })
-    }
-
-    /// Augment the run with information about the job's current run id, making `status` and
-    /// `execution_time` more accurate for currently running jobs
-    pub fn with_current_run_id(mut self, current_run_id: Option<u32>) -> Self {
-        if Some(self.id) == current_run_id {
-            self.current = true;
-        }
-        self
     }
 
     /// Return the run's status
