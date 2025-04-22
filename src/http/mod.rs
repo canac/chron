@@ -7,11 +7,12 @@ use self::http_error::HttpError;
 use self::job_info::JobInfo;
 use crate::chron_service::{ChronService, ProcessStatus};
 use crate::database::Database;
-use actix_web::HttpResponse;
 use actix_web::dev::Server;
 use actix_web::middleware::DefaultHeaders;
 use actix_web::web::{Data, Json, Path};
-use actix_web::{App, HttpServer, Responder, Result, get, http::StatusCode, post};
+use actix_web::{
+    App, HttpResponse, HttpServer, Responder, Result, get, head, http::StatusCode, post,
+};
 use api::JobStatus;
 use askama::Template;
 use chrono::{DateTime, Duration, Local, TimeZone};
@@ -192,6 +193,17 @@ async fn job_logs_handler(path: Path<(String, String)>, data: AppData) -> Result
         .streaming(ReaderStream::new(file)))
 }
 
+#[head("/job/{job}")]
+async fn job_exists_handler(name: Path<String>, data: AppData) -> Result<impl Responder> {
+    let chron_guard = data.chron.read().await;
+    if chron_guard.get_job(name.as_str()).is_none() {
+        return Err(HttpError::from_status_code(StatusCode::NOT_FOUND).into());
+    }
+    drop(chron_guard);
+
+    Ok(HttpResponse::Ok())
+}
+
 #[get("/job/{job}/status")]
 async fn job_status_handler(name: Path<String>, data: AppData) -> Result<impl Responder> {
     let chron_guard = data.chron.read().await;
@@ -286,6 +298,7 @@ pub fn create_server(
             .wrap(DefaultHeaders::new().add(("X-Powered-By", "chron")))
             .service(
                 actix_web::web::scope("/api")
+                    .service(job_exists_handler)
                     .service(job_status_handler)
                     .service(job_log_path_handler)
                     .service(job_terminate_handler),

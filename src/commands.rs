@@ -175,7 +175,10 @@ pub async fn runs(db: Arc<Database>, args: RunsArgs) -> Result<()> {
         bail!("Job {job} is not running");
     };
     let origin = format!("http://localhost:{port}");
-    let res = reqwest::get(format!("{origin}/api/job/{job}/status"))
+    let res = Client::builder()
+        .build()?
+        .head(format!("{origin}/api/job/{job}"))
+        .send()
         .await
         .context("Failed to connect to chron server")?;
     validate_response(&job, &res)?;
