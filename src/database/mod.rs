@@ -159,7 +159,7 @@ LIMIT ?2")?;
 FROM checkpoint
 WHERE job = ?1",
                 )?;
-                statement.query_row([job], Checkpoint::from_row).optional()
+                statement.query_row((job,), Checkpoint::from_row).optional()
             })
             .await
             .context("Failed to save run to the database")?;
@@ -195,7 +195,9 @@ ON CONFLICT (job)
 FROM job
 WHERE name = ?1 AND port IS NOT NULL",
                 )?;
-                statement.query_row([job], |row| row.get("port")).optional()
+                statement
+                    .query_row((job,), |row| row.get("port"))
+                    .optional()
             })
             .await?;
         Ok(port)
@@ -252,7 +254,7 @@ WHERE name IN rarray(?1) AND port IS NOT NULL AND port != ?2",
                 conn.execute(
                     "UPDATE job SET port = NULL, current_run_id = NULL
 WHERE port IN rarray(?1)",
-                    [Self::make_rarray(recovered_ports)],
+                    (Self::make_rarray(recovered_ports),),
                 )?;
 
                 if !conflicting_jobs.is_empty() {
@@ -288,7 +290,7 @@ ON CONFLICT (name)
             .conn(move |conn| {
                 conn.execute(
                     "UPDATE job SET port = NULL WHERE name IN rarray(?1)",
-                    [Self::make_rarray(jobs)],
+                    (Self::make_rarray(jobs),),
                 )
             })
             .await
@@ -332,7 +334,7 @@ mod tests {
             .conn(move |conn| {
                 let mut statement = conn.prepare("SELECT current_run_id FROM job")?;
                 statement
-                    .query_map([], |row| row.get::<_, Option<u32>>("current_run_id"))?
+                    .query_map((), |row| row.get::<_, Option<u32>>("current_run_id"))?
                     .collect::<rusqlite::Result<Vec<_>>>()
             })
             .await
