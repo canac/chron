@@ -41,15 +41,16 @@ impl Database {
         self.client
             .conn(|conn| {
                 conn.execute_batch(
-                    r"
+                    "
 CREATE TABLE IF NOT EXISTS job (
   name VARCHAR PRIMARY KEY NOT NULL,
-  port INTEGER NOT NULL
+  port INTEGER,
+  current_run_id INTEGER REFERENCES run(id)
 );
 
 CREATE TABLE IF NOT EXISTS run (
   id INTEGER PRIMARY KEY NOT NULL,
-  name VARCHAR NOT NULL,
+  job_name VARCHAR NOT NULL REFERENCES job(name),
   scheduled_at DATETIME NOT NULL,
   started_at DATETIME NOT NULL DEFAULT (STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW')),
   ended_at DATETIME,
@@ -94,11 +95,23 @@ CREATE TABLE IF NOT EXISTS checkpoint (
     ) -> Result<Run> {
         self.client
             .conn(move |conn| {
-                conn.query_row(
-                    "INSERT INTO run (name, scheduled_at, attempt, max_attempts) VALUES (?1, ?2, ?3, ?4) RETURNING *",
-                    (name, scheduled_at, attempt, max_attempts),
+                conn.execute_batch("BEGIN")?;
+                let run = conn.query_row(
+                    "INSERT INTO run (job_name, scheduled_at, attempt, max_attempts)
+VALUES (?1, ?2, ?3, ?4)
+RETURNING *",
+                    (name.clone(), scheduled_at, attempt, max_attempts),
                     Run::from_row,
-                )
+                )?;
+                conn.execute(
+                    "UPDATE job
+SET current_run_id = ?1
+WHERE name = ?2",
+                    (run.id, name),
+                )?;
+                conn.execute_batch("COMMIT")?;
+
+                Ok(run)
             })
             .await
             .context("Failed to save run to the database")
@@ -109,7 +122,9 @@ CREATE TABLE IF NOT EXISTS checkpoint (
         self.client
             .conn(move |conn| {
                 conn.execute(
-                    "UPDATE run SET ended_at = STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW'), status_code = ?1 WHERE id = ?2",
+                    "UPDATE run
+SET ended_at = STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW'), status_code = ?1
+WHERE id = ?2",
                     (status_code, run_id),
                 )
             })
@@ -122,7 +137,11 @@ CREATE TABLE IF NOT EXISTS checkpoint (
     pub async fn get_last_runs(&self, name: String, count: u64) -> Result<Vec<Run>> {
         self.client.conn(move |conn| {
             let mut statement = conn
-                .prepare("SELECT id, scheduled_at, started_at, ended_at, status_code, attempt, max_attempts FROM run WHERE name = ?1 ORDER BY started_at DESC LIMIT ?2")?;
+                .prepare("SELECT id, scheduled_at, started_at, ended_at, status_code, attempt, max_attempts
+FROM run
+WHERE job_name = ?1
+ORDER BY started_at DESC
+LIMIT ?2")?;
             statement.query_map(
                 (name, count),
                 Run::from_row,
@@ -135,8 +154,11 @@ CREATE TABLE IF NOT EXISTS checkpoint (
         let checkpoint = self
             .client
             .conn(|conn| {
-                let mut statement =
-                    conn.prepare("SELECT timestamp FROM checkpoint WHERE job = ?1")?;
+                let mut statement = conn.prepare(
+                    "SELECT timestamp
+FROM checkpoint
+WHERE job = ?1",
+                )?;
                 statement.query_row([job], Checkpoint::from_row).optional()
             })
             .await
@@ -149,7 +171,13 @@ CREATE TABLE IF NOT EXISTS checkpoint (
         self.client
             .conn(move |conn| {
                 let timestamp = timestamp.naive_utc();
-                let mut statement = conn.prepare("INSERT INTO checkpoint (job, timestamp) VALUES (?1, ?2) ON CONFLICT (job) DO UPDATE SET timestamp = (?2)")?;
+                let mut statement = conn.prepare(
+                    "INSERT INTO checkpoint (job, timestamp)
+VALUES (?1, ?2)
+ON CONFLICT (job)
+    DO UPDATE
+    SET timestamp = (?2)",
+                )?;
                 statement.execute((job, timestamp))
             })
             .await
@@ -162,7 +190,11 @@ CREATE TABLE IF NOT EXISTS checkpoint (
         let port = self
             .client
             .conn(move |conn| {
-                let mut statement = conn.prepare("SELECT port FROM job WHERE name = ?1")?;
+                let mut statement = conn.prepare(
+                    "SELECT port
+FROM job
+WHERE name = ?1 AND port IS NOT NULL",
+                )?;
                 statement.query_row([job], |row| row.get("port")).optional()
             })
             .await?;
@@ -184,16 +216,11 @@ CREATE TABLE IF NOT EXISTS checkpoint (
                 conn.execute_batch("BEGIN EXCLUSIVE TRANSACTION")?;
 
                 let mut statement = conn.prepare(
-                    "SELECT name, port FROM job WHERE name IN rarray(?1) AND port != ?2",
+                    "SELECT name, port FROM job
+WHERE name IN rarray(?1) AND port IS NOT NULL AND port != ?2",
                 )?;
-                let job_param = Rc::new(
-                    jobs.clone()
-                        .into_iter()
-                        .map(Value::from)
-                        .collect::<Vec<_>>(),
-                );
                 let conflicting_jobs = statement
-                    .query_map((job_param, port), Job::from_row)?
+                    .query_map((Self::make_rarray(jobs.clone()), port), Job::from_row)?
                     .collect::<rusqlite::Result<Vec<_>>>()?;
 
                 // Given the jobs that are already in use, determine which ports they are associated and check whether
@@ -222,10 +249,11 @@ CREATE TABLE IF NOT EXISTS checkpoint (
                 }
 
                 // Whether or not conflicts remain, still release any jobs that could be recovered
-                let mut statement = conn.prepare("DELETE FROM job WHERE port = ?1")?;
-                for port in recovered_ports {
-                    statement.execute([port])?;
-                }
+                conn.execute(
+                    "UPDATE job SET port = NULL, current_run_id = NULL
+WHERE port IN rarray(?1)",
+                    [Self::make_rarray(recovered_ports)],
+                )?;
 
                 if !conflicting_jobs.is_empty() {
                     conn.execute_batch("COMMIT")?;
@@ -237,7 +265,11 @@ CREATE TABLE IF NOT EXISTS checkpoint (
 
                 // If this job already exists it is because it is already acquired by this port, so it can be ignored
                 let mut statement = conn.prepare(
-                    "INSERT INTO job (name, port) VALUES (?1, ?2) ON CONFLICT DO NOTHING",
+                    "INSERT INTO job (name, port)
+VALUES (?1, ?2)
+ON CONFLICT (name)
+    DO UPDATE
+    SET port = ?2, current_run_id = NULL",
                 )?;
                 for job in jobs {
                     statement.execute((job, port))?;
@@ -255,16 +287,23 @@ CREATE TABLE IF NOT EXISTS checkpoint (
         self.client
             .conn(move |conn| {
                 conn.execute(
-                    "DELETE FROM job WHERE name IN rarray(?1)",
-                    [Rc::new(
-                        jobs.into_iter().map(Value::from).collect::<Vec<_>>(),
-                    )],
+                    "UPDATE job SET port = NULL WHERE name IN rarray(?1)",
+                    [Self::make_rarray(jobs)],
                 )
             })
             .await
             .context("Failed to unlock jobs in the database")?;
 
         Ok(())
+    }
+
+    /// Convert an iterator into an rarray
+    fn make_rarray<T, I>(iter: I) -> Rc<Vec<Value>>
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<Value>,
+    {
+        Rc::new(iter.into_iter().map(Into::into).collect::<Vec<_>>())
     }
 }
 
@@ -274,11 +313,30 @@ mod tests {
 
     use super::*;
 
-    async fn open_db() -> Result<Database> {
-        let client = ClientBuilder::new().open().await?;
+    async fn open_db() -> Database {
+        let client = ClientBuilder::new().open().await.unwrap();
         let db = Database { client };
-        db.init().await?;
-        Ok(db)
+        db.init().await.unwrap();
+        db
+    }
+
+    async fn insert_run(db: &Database, name: String) -> u32 {
+        db.insert_run(name.clone(), Utc::now().naive_utc(), 0, None)
+            .await
+            .unwrap()
+            .id
+    }
+
+    async fn get_current_run_ids(db: &Database) -> Vec<Option<u32>> {
+        db.client
+            .conn(move |conn| {
+                let mut statement = conn.prepare("SELECT current_run_id FROM job")?;
+                statement
+                    .query_map([], |row| row.get::<_, Option<u32>>("current_run_id"))?
+                    .collect::<rusqlite::Result<Vec<_>>>()
+            })
+            .await
+            .unwrap()
     }
 
     fn check_port_active(_: u16) -> bool {
@@ -286,8 +344,19 @@ mod tests {
     }
 
     #[test]
+    async fn test_insert_run_updates_job() {
+        let db = open_db().await;
+        let name = "job".to_owned();
+        db.acquire_jobs(vec![name.clone()], 1000, check_port_active)
+            .await
+            .unwrap();
+        let run_id = insert_run(&db, name.clone()).await;
+        assert_eq!(get_current_run_ids(&db).await, vec![Some(run_id)]);
+    }
+
+    #[test]
     async fn test_acquire_jobs() {
-        let db = open_db().await.unwrap();
+        let db = open_db().await;
         assert_eq!(
             db.acquire_jobs(
                 vec!["job1".to_owned(), "job2".to_owned()],
@@ -320,7 +389,7 @@ mod tests {
 
     #[test]
     async fn test_reacquire_jobs() {
-        let db = open_db().await.unwrap();
+        let db = open_db().await;
         assert_eq!(
             db.acquire_jobs(
                 vec!["job1".to_owned(), "job2".to_owned()],
@@ -331,6 +400,8 @@ mod tests {
             .unwrap(),
             ReserveResult::Reserved
         );
+        insert_run(&db, "job1".to_owned()).await;
+        insert_run(&db, "job2".to_owned()).await;
         assert_eq!(
             db.acquire_jobs(
                 vec!["job1".to_owned(), "job2".to_owned(), "job3".to_owned()],
@@ -341,12 +412,13 @@ mod tests {
             .unwrap(),
             ReserveResult::Reserved
         );
+        // Test that reacquired jobs' current_run_id is cleared
+        assert_eq!(get_current_run_ids(&db).await, vec![None, None, None]);
     }
 
     #[test]
     async fn test_acquire_recoverable_jobs() {
-        let db = open_db().await.unwrap();
-
+        let db = open_db().await;
         assert_eq!(
             db.acquire_jobs(
                 vec!["job1".to_owned(), "job2".to_owned()],
@@ -363,6 +435,9 @@ mod tests {
                 .unwrap(),
             ReserveResult::Reserved
         );
+        insert_run(&db, "job1".to_owned()).await;
+        insert_run(&db, "job2".to_owned()).await;
+        insert_run(&db, "job3".to_owned()).await;
 
         // Port 1001 is inactive and job 3 is released
         assert_eq!(
@@ -377,6 +452,9 @@ mod tests {
                 conflicting_jobs: vec!["job1".to_owned(), "job2".to_owned()]
             }
         );
+        // Test that reclaimed jobs' current_run_id is cleared
+        assert_eq!(get_current_run_ids(&db).await, vec![Some(1), Some(2), None]);
+
         assert_eq!(
             db.acquire_jobs(vec!["job3".to_owned()], 1000, check_port_active)
                 .await
@@ -386,8 +464,27 @@ mod tests {
     }
 
     #[test]
+    async fn test_acquire_released_jobs() {
+        let db = open_db().await;
+        let jobs = vec!["job1".to_owned(), "job2".to_owned()];
+        assert_eq!(
+            db.acquire_jobs(jobs.clone(), 1000, check_port_active)
+                .await
+                .unwrap(),
+            ReserveResult::Reserved
+        );
+        db.release_jobs(jobs.clone()).await.unwrap();
+        assert_eq!(
+            db.acquire_jobs(jobs, 1000, check_port_active)
+                .await
+                .unwrap(),
+            ReserveResult::Reserved
+        );
+    }
+
+    #[test]
     async fn test_acquire_jobs_empty() {
-        let db = open_db().await.unwrap();
+        let db = open_db().await;
         assert_eq!(
             db.acquire_jobs(Vec::new(), 1000, check_port_active)
                 .await
@@ -398,7 +495,7 @@ mod tests {
 
     #[test]
     async fn test_release_jobs() {
-        let db = open_db().await.unwrap();
+        let db = open_db().await;
         assert_eq!(
             db.acquire_jobs(
                 vec!["job1".to_owned(), "job2".to_owned()],
@@ -424,7 +521,7 @@ mod tests {
 
     #[test]
     async fn test_release_jobs_empty() {
-        let db = open_db().await.unwrap();
+        let db = open_db().await;
         db.release_jobs(Vec::new()).await.unwrap();
     }
 }
