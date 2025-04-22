@@ -404,6 +404,34 @@ mod tests {
     }
 
     #[test]
+    async fn get_acquired_job_port() {
+        let db = open_db().await;
+        db.acquire_jobs(vec!["job1".to_owned()], 1000, check_port_active)
+            .await
+            .unwrap();
+        assert_eq!(
+            db.get_job_port("job1".to_owned()).await.unwrap(),
+            Some(1000),
+        );
+    }
+
+    #[test]
+    async fn get_released_job_port() {
+        let db = open_db().await;
+        db.acquire_jobs(vec!["job1".to_owned()], 1000, check_port_active)
+            .await
+            .unwrap();
+        db.release_jobs(vec!["job1".to_owned()]).await.unwrap();
+        assert_eq!(db.get_job_port("job1".to_owned()).await.unwrap(), None);
+    }
+
+    #[test]
+    async fn get_unknown_job_port() {
+        let db = open_db().await;
+        assert_eq!(db.get_job_port("job1".to_owned()).await.unwrap(), None);
+    }
+
+    #[test]
     async fn test_acquire_jobs() {
         let db = open_db().await;
         assert_eq!(
