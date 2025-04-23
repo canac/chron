@@ -15,6 +15,7 @@ use chrono::{DateTime, Utc};
 use chrono_humanize::{Accuracy, HumanTime, Tense};
 use cron::Schedule;
 use log::debug;
+use reqwest::header::HeaderValue;
 use std::collections::HashMap;
 use std::mem::take;
 use std::path::{Path, PathBuf};
@@ -138,9 +139,13 @@ impl ChronService {
 
     // Determine whether a port still belongs to any running chron server
     fn check_port_active(port: u16) -> bool {
-        let inactive = reqwest::blocking::get(format!("http://localhost:{port}"))
-            .is_err_and(|err| err.is_connect());
-        !inactive
+        let res = reqwest::blocking::get(format!("http://localhost:{port}"));
+        match res {
+            Ok(res) => {
+                res.headers().get("x-powered-by") == Some(&HeaderValue::from_static("chron"))
+            }
+            Err(err) => !err.is_connect(),
+        }
     }
 
     // Start or start the chron service using the jobs defined in the provided chronfile
