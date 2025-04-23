@@ -256,7 +256,8 @@ WHERE name IN rarray(?1) AND port IS NOT NULL AND port != ?2",
 
                 // Whether or not conflicts remain, still release any jobs that could be recovered
                 conn.execute(
-                    "UPDATE job SET port = NULL, current_run_id = NULL
+                    "UPDATE job
+SET port = NULL, current_run_id = NULL
 WHERE port IN rarray(?1)",
                     (Self::make_rarray(recovered_ports),),
                 )?;
@@ -283,7 +284,8 @@ ON CONFLICT (name)
                 conn.execute_batch("COMMIT")?;
                 Ok(ReserveResult::Reserved)
             })
-            .await?;
+            .await
+            .context("Failed to acquire jobs in the database")?;
 
         Ok(result)
     }
@@ -293,12 +295,31 @@ ON CONFLICT (name)
         self.client
             .conn(move |conn| {
                 conn.execute(
-                    "UPDATE job SET port = NULL WHERE name IN rarray(?1)",
+                    "UPDATE job
+SET port = NULL, current_run_id = NULL
+WHERE name IN rarray(?1)",
                     (Self::make_rarray(jobs),),
                 )
             })
             .await
-            .context("Failed to unlock jobs in the database")?;
+            .context("Failed to release jobs by name in the database")?;
+
+        Ok(())
+    }
+
+    // Release all previously acquired jobs associated with a port
+    pub async fn release_port(&self, port: u16) -> Result<()> {
+        self.client
+            .conn(move |conn| {
+                conn.execute(
+                    "UPDATE job
+SET port = NULL, current_run_id = NULL
+WHERE port = ?1",
+                    (port,),
+                )
+            })
+            .await
+            .context("Failed to release jobs by port in the database")?;
 
         Ok(())
     }
@@ -600,5 +621,26 @@ mod tests {
     async fn test_release_jobs_empty() {
         let db = open_db().await;
         db.release_jobs(Vec::new()).await.unwrap();
+    }
+
+    #[test]
+    async fn test_release_port() {
+        let db = open_db().await;
+        let jobs = vec!["job1".to_owned(), "job2".to_owned()];
+        assert_eq!(
+            db.acquire_jobs(jobs.clone(), 1000, check_port_active)
+                .await
+                .unwrap(),
+            ReserveResult::Reserved
+        );
+
+        db.release_port(1000).await.unwrap();
+
+        assert_eq!(
+            db.acquire_jobs(jobs, 1001, check_port_active)
+                .await
+                .unwrap(),
+            ReserveResult::Reserved
+        );
     }
 }
