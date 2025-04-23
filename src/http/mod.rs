@@ -282,34 +282,50 @@ async fn job_terminate_handler(name: Path<String>, data: AppData) -> Result<impl
         .body("Not Running"))
 }
 
+/// Create a new chron HTTP server on the provided port. If the port is unavailable, try ascending ports until one can
+/// successfully connect.
+/// Returns the server and the port it is bound to.
 pub fn create_server(
-    chron: Arc<RwLock<ChronService>>,
-    db: Arc<Database>,
-    port: u16,
-) -> Result<Server, std::io::Error> {
-    info!("Starting HTTP server on port {}", port);
+    chron: &Arc<RwLock<ChronService>>,
+    db: &Arc<Database>,
+    mut port: u16,
+) -> Result<(Server, u16), std::io::Error> {
+    loop {
+        let chron = Arc::clone(chron);
+        let db = Arc::clone(db);
+        let result = HttpServer::new(move || {
+            App::new()
+                .app_data(Data::new(AppState {
+                    chron: Arc::clone(&chron),
+                    db: Arc::clone(&db),
+                }))
+                .wrap(DefaultHeaders::new().add(("X-Powered-By", "chron")))
+                .service(
+                    actix_web::web::scope("/api")
+                        .service(job_exists_handler)
+                        .service(job_status_handler)
+                        .service(job_log_path_handler)
+                        .service(job_terminate_handler),
+                )
+                .service(styles)
+                .service(index_handler)
+                .service(job_handler)
+                .service(job_logs_handler)
+        })
+        .disable_signals()
+        .bind(("localhost", port));
 
-    let server = HttpServer::new(move || {
-        App::new()
-            .app_data(Data::new(AppState {
-                chron: Arc::clone(&chron),
-                db: Arc::clone(&db),
-            }))
-            .wrap(DefaultHeaders::new().add(("X-Powered-By", "chron")))
-            .service(
-                actix_web::web::scope("/api")
-                    .service(job_exists_handler)
-                    .service(job_status_handler)
-                    .service(job_log_path_handler)
-                    .service(job_terminate_handler),
-            )
-            .service(styles)
-            .service(index_handler)
-            .service(job_handler)
-            .service(job_logs_handler)
-    })
-    .disable_signals()
-    .bind(("localhost", port))?
-    .run();
-    Ok(server)
+        match result {
+            Ok(server) => {
+                info!("Starting HTTP server on port {}", port);
+                return Ok((server.run(), port));
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::AddrInUse && port != u16::MAX => {
+                let next_port = port.saturating_add(1);
+                info!("Port {port} is unavailable, trying port {next_port}...");
+                port = next_port;
+            }
+            Err(err) => return Err(err),
+        }
+    }
 }

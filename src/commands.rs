@@ -51,7 +51,7 @@ pub async fn run(db: Arc<Database>, args: RunArgs) -> Result<()> {
 
     let chron = ChronService::new(&get_data_dir()?, Arc::clone(&db))?;
     let chron_lock = Arc::new(RwLock::new(chron));
-    let server = http::create_server(Arc::clone(&chron_lock), Arc::clone(&db), port)?;
+    let (server, port) = http::create_server(&chron_lock, &db, port)?;
     // Release any jobs associated with an old chron process using this port. The fact that we bound to the port is
     // proof that the old process is no longer running.
     db.release_port(port).await?;
