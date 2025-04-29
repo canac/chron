@@ -80,7 +80,7 @@ mod tests {
 
     use super::*;
 
-    // Parse a scheduled job and return its retry config
+    /// Parse a scheduled job and return its retry config
     fn parse_retry(input: &'static str) -> std::result::Result<RetryConfig, Error> {
         Ok(toml::from_str::<ScheduledJob>(input)?.get_options().retry)
     }

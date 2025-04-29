@@ -86,7 +86,7 @@ mod tests {
 
     use super::*;
 
-    // Parse a startup job and return its keep alive config
+    /// Parse a startup job and return its keep alive config
     fn parse_keep_alive(input: &'static str) -> std::result::Result<RetryConfig, Error> {
         Ok(toml::from_str::<StartupJob>(input)?
             .get_options()

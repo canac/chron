@@ -46,8 +46,8 @@ pub struct RetryConfig {
 }
 
 impl RetryConfig {
-    // Determine whether a command with a certain status and a certain number
-    // of previous attempts should be retried
+    /// Determine whether a command with a certain status and a certain number of previous attempts
+    /// should be retried
     fn should_retry(&self, exec_status: ExecStatus, attempt: usize) -> bool {
         (match exec_status {
             ExecStatus::Failure => self.failures,
@@ -76,8 +76,8 @@ pub struct Process {
 }
 
 impl Process {
-    // Terminate the process and wait for it to finish terminating
-    // Return true if the process was terminated successfully
+    /// Terminate the process and wait for it to finish terminating
+    // Returns `trues if the process was terminated successfully
     pub async fn terminate(mut self) -> bool {
         let Some((tx_terminate, rx_terminated)) = self.terminate.take() else {
             return false;
@@ -116,7 +116,7 @@ pub struct ChronService {
 }
 
 impl ChronService {
-    // Create a new ChronService instance
+    /// Create a new `ChronService` instance
     pub fn new(data_dir: &Path, db: Arc<Database>) -> Result<Self> {
         Ok(Self {
             log_dir: data_dir.join("logs"),
@@ -127,17 +127,17 @@ impl ChronService {
         })
     }
 
-    // Lookup a job by name
+    /// Lookup a job by name
     pub fn get_job(&self, name: &str) -> Option<&Arc<Job>> {
         self.jobs.get(name).map(|task| &task.job)
     }
 
-    // Return an iterator of the jobs
+    /// Return an iterator of the jobs
     pub fn get_jobs_iter(&self) -> impl Iterator<Item = (&String, &Arc<Job>)> {
         self.jobs.iter().map(|(name, task)| (name, &task.job))
     }
 
-    // Determine whether a port still belongs to any running chron server
+    /// Determine whether a port still belongs to any running chron server
     fn check_port_active(port: u16) -> bool {
         let res = reqwest::blocking::get(format!("http://localhost:{port}"));
         match res {
@@ -148,7 +148,7 @@ impl ChronService {
         }
     }
 
-    // Start or start the chron service using the jobs defined in the provided chronfile
+    /// Start or start the chron service using the jobs defined in the provided chronfile
     pub async fn start(&mut self, chronfile: Chronfile, port: u16) -> Result<()> {
         let same_shell = self.shell == chronfile.config.shell;
         self.shell = chronfile.config.shell;
@@ -252,7 +252,7 @@ impl ChronService {
         Ok(())
     }
 
-    // Start or start the chron service using the jobs defined in the provided chronfile
+    /// Start or start the chron service using the jobs defined in the provided chronfile
     pub async fn stop(&mut self) -> Result<()> {
         let jobs = take(&mut self.jobs);
 
@@ -262,7 +262,7 @@ impl ChronService {
         Ok(())
     }
 
-    // Terminate a collection of jobs and wait for all of their tasks complete
+    /// Terminate a collection of jobs and wait for all of their tasks complete
     async fn terminate_jobs(jobs: HashMap<String, Task>) {
         // Wait for each of the tasks to complete
         let has_jobs = !jobs.is_empty();
@@ -287,7 +287,7 @@ impl ChronService {
         }
     }
 
-    // Add a new job to be run on startup
+    /// Add a new job to be run on startup
     fn startup(&mut self, name: &str, job: &chronfile::StartupJob) -> Result<()> {
         Self::validate_name(name)?;
         if self.jobs.contains_key(name) {
@@ -325,7 +325,7 @@ impl ChronService {
         Ok(())
     }
 
-    // Add a new job to be run on the given schedule
+    /// Add a new job to be run on the given schedule
     async fn schedule(&mut self, name: &str, job: &chronfile::ScheduledJob) -> Result<()> {
         Self::validate_name(name)?;
         if self.jobs.contains_key(name) {
@@ -453,12 +453,12 @@ impl ChronService {
         Ok(())
     }
 
-    // Get the shell to execute commands with
+    /// Get the shell to execute commands with
     fn get_shell(&self) -> String {
         self.shell.as_ref().unwrap_or(&self.default_shell).clone()
     }
 
-    // Helper to validate the job name
+    /// Validate a job name
     fn validate_name(name: &str) -> Result<()> {
         if name.starts_with('-')
             || name.ends_with('-')
@@ -473,18 +473,18 @@ impl ChronService {
         Ok(())
     }
 
-    // Helper to get the log file dir for a command
+    // Calculate the log file directory for a job
     fn calculate_log_dir(&self, name: &str) -> PathBuf {
         self.log_dir.join(name)
     }
 
-    // Get the user's shell
+    /// Get the user's shell
     #[cfg(target_os = "windows")]
     fn get_user_shell() -> Result<String> {
         Ok(String::from("Invoke-Expression"))
     }
 
-    // Get the user's shell
+    /// Get the user's shell
     #[cfg(not(target_os = "windows"))]
     fn get_user_shell() -> Result<String> {
         std::env::var("SHELL").context("Couldn't get $SHELL environment variable")

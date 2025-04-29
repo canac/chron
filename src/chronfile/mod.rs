@@ -26,7 +26,7 @@ pub struct Chronfile {
 }
 
 impl Chronfile {
-    // Load a chronfile
+    /// Load a chronfile by its path
     pub async fn load(path: &PathBuf) -> Result<Self> {
         let toml_str = read_to_string(path)
             .await

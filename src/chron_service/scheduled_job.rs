@@ -12,7 +12,7 @@ pub struct ScheduledJob {
 }
 
 impl ScheduledJob {
-    // Create a new scheduled job
+    /// Create a new scheduled job
     pub fn new(schedule: Schedule, last_tick: DateTime<Utc>) -> Self {
         Self {
             schedule,
@@ -20,12 +20,12 @@ impl ScheduledJob {
         }
     }
 
-    // Return the string representation of the job's schedule
+    /// Return the string representation of the job's schedule
     pub fn get_schedule(&self) -> String {
         self.schedule.to_string()
     }
 
-    // Return the date of the last time that this scheduled job ran
+    /// Return the date of the last time that this scheduled job ran
     pub fn prev_run(&self) -> Option<DateTime<Utc>> {
         let last_tick: DateTime<Local> = self.last_tick.into();
         // Schedule::after ignores fractional seconds, so compensate by
@@ -42,7 +42,7 @@ impl ScheduledJob {
             .map(std::convert::Into::into)
     }
 
-    // Return the date of the next time that this scheduled job will run
+    /// Return the date of the next time that this scheduled job will run
     pub fn next_run(&self) -> Option<DateTime<Utc>> {
         self.schedule
             .after::<Local>(&self.last_tick.into())
@@ -50,7 +50,7 @@ impl ScheduledJob {
             .map(std::convert::Into::into)
     }
 
-    // Tick and return the oldest elapsed run since last tick, if any
+    /// Tick and return the oldest elapsed run since last tick, if any
     pub fn tick(&mut self, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
         let last_tick = self.last_tick;
         self.last_tick = now;
@@ -71,7 +71,7 @@ impl ScheduledJob {
             .map(std::convert::Into::into)
     }
 
-    // Calculate the estimated duration between the last run and the next run
+    /// Calculate the estimated duration between the last run and the next run
     pub fn get_current_period(&self, now: &DateTime<Local>) -> Result<Duration> {
         let mut upcoming = self.schedule.after(now);
         let last = upcoming

@@ -21,7 +21,7 @@ pub struct Database {
 }
 
 impl Database {
-    // Create a new Database instance
+    /// Create a new Database instance
     pub async fn new(chron_dir: &Path) -> Result<Self> {
         let db_path = chron_dir.join("chron.db");
         let client = ClientBuilder::new()
@@ -36,7 +36,7 @@ impl Database {
         Ok(db)
     }
 
-    // Create the database tables
+    /// Create the database tables
     async fn init(&self) -> Result<()> {
         self.client
             .conn(|conn| {
@@ -85,7 +85,7 @@ CREATE TABLE IF NOT EXISTS checkpoint (
         Ok(())
     }
 
-    // Record a new run in the database and return the id of the new run
+    /// Record a new run in the database and return the id of the new run
     pub async fn insert_run(
         &self,
         name: String,
@@ -117,7 +117,7 @@ WHERE name = ?2",
             .context("Failed to save run to the database")
     }
 
-    // Set the status code of an existing run
+    /// Set the status code of an existing run
     pub async fn set_run_status_code(&self, run_id: u32, status_code: Option<i32>) -> Result<()> {
         self.client
             .conn(move |conn| {
@@ -133,7 +133,7 @@ WHERE id = ?2",
         Ok(())
     }
 
-    // Read the last runs of a job
+    /// Read the last runs of a job
     pub async fn get_last_runs(&self, name: String, count: u64) -> Result<Vec<Run>> {
         self.client.conn(move |conn| {
             let mut statement = conn
@@ -150,7 +150,7 @@ LIMIT ?2")?;
         }).await.context("Failed to load last runs from the database")
     }
 
-    // Read the checkpoint time of a job
+    /// Read the checkpoint time of a job
     pub async fn get_checkpoint(&self, job: String) -> Result<Option<DateTime<Utc>>> {
         let checkpoint = self
             .client
@@ -167,7 +167,7 @@ WHERE job = ?1",
         Ok(checkpoint.map(|checkpoint| Utc.from_utc_datetime(&checkpoint.timestamp)))
     }
 
-    // Write the checkpoint time of a job
+    /// Write the checkpoint time of a job
     pub async fn set_checkpoint(&self, job: String, timestamp: DateTime<Utc>) -> Result<()> {
         self.client
             .conn(move |conn| {
@@ -186,7 +186,7 @@ ON CONFLICT (job)
         Ok(())
     }
 
-    // Get the port currently associated with a job, if any
+    /// Get the port currently associated with a job, if any
     pub async fn get_job_port(&self, job: String) -> Result<Option<u16>> {
         let port = self
             .client
@@ -204,12 +204,12 @@ WHERE name = ?1 AND port IS NOT NULL",
         Ok(port)
     }
 
-    // Attempt to associate the given jobs with the current process, identified by its port
-    // Reacquiring jobs already associated with this port is a noop
-    // This will fail if another process has already acquired the jobs
-    // Successfully acquiring a job will clear the current_run_id of the job. Acquired, running jobs are guaranteed to
-    // have accurate current run information. Released jobs make no such guarantees, so callers should verify that the
-    // job is actually running before trusting information from the database about the job's current run.
+    /// Attempt to associate the given jobs with the current process, identified by its port
+    /// Reacquiring jobs already associated with this port is a noop
+    /// This will fail if another process has already acquired the jobs
+    /// Successfully acquiring a job will clear the `current_run_id` of the job. Acquired, running jobs are guaranteed
+    /// to have accurate current run information. Released jobs make no such guarantees, so callers should verify that
+    /// the job is actually running before trusting information from the database about the job's current run.
     pub async fn acquire_jobs(
         &self,
         jobs: Vec<String>,
@@ -290,7 +290,7 @@ ON CONFLICT (name)
         Ok(result)
     }
 
-    // Release previously acquired jobs
+    /// Release previously acquired jobs
     pub async fn release_jobs(&self, jobs: Vec<String>) -> Result<()> {
         self.client
             .conn(move |conn| {
@@ -307,7 +307,7 @@ WHERE name IN rarray(?1)",
         Ok(())
     }
 
-    // Release all previously acquired jobs associated with a port
+    /// Release all previously acquired jobs associated with a port
     pub async fn release_port(&self, port: u16) -> Result<()> {
         self.client
             .conn(move |conn| {

@@ -24,7 +24,7 @@ pub enum ExecStatus {
     Failure,
 }
 
-// Create a mailbox message indicating that the job failed
+/// Create a mailbox message indicating that the job failed
 async fn write_mailbox_message(name: &str, code: i32) -> Result<()> {
     warn!("{name}: failed with exit code {code}");
 
@@ -42,7 +42,7 @@ async fn write_mailbox_message(name: &str, code: i32) -> Result<()> {
     Ok(())
 }
 
-// Helper to execute the specified command without retries
+/// Execute the specified command without retries
 async fn exec_command_once(
     db: &Arc<Database>,
     job: &Arc<Job>,
@@ -152,7 +152,7 @@ async fn exec_command_once(
     })
 }
 
-// Execute the job's command, handling retries
+/// Execute the job's command, handling retries
 pub async fn exec_command(
     db: &Arc<Database>,
     job: &Arc<Job>,

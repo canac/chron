@@ -16,7 +16,7 @@ pub struct JobInfo {
 }
 
 impl JobInfo {
-    // Generate the job info for a job
+    /// Generate the job info for a job
     pub(crate) async fn from_job(name: &str, job: &Job) -> Result<Self> {
         let (status, run_id) = job.running_process.read().await.as_ref().map_or_else(
             || (ProcessStatus::Terminated, None),
