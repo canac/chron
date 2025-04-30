@@ -104,7 +104,7 @@ pub struct Job {
 
 pub struct Task {
     pub job: Arc<Job>,
-    pub handle: JoinHandle<Result<()>>,
+    pub handle: JoinHandle<()>,
 }
 
 pub struct ChronService {
@@ -274,12 +274,10 @@ impl ChronService {
             }
             task.handle.abort();
 
-            match task.handle.await {
-                // The task returned an error result
-                Ok(Err(err)) => debug!("Job {name} failed with error: {err:?}"),
-                // The task panicked
-                Err(err) if err.is_panic() => debug!("Job {name} failed with error: {err:?}"),
-                _ => (),
+            if let Err(err) = task.handle.await {
+                if err.is_panic() {
+                    debug!("{name}: failed with error: {err:?}");
+                }
             }
         }
         if has_jobs {
@@ -315,8 +313,9 @@ impl ChronService {
 
         let db = Arc::clone(&self.db);
         let handle = spawn(async move {
-            exec_command(&db, &job, &options.keep_alive, &Utc::now()).await?;
-            Ok::<(), anyhow::Error>(())
+            if let Err(err) = exec_command(&db, &job, &options.keep_alive, &Utc::now()).await {
+                debug!("{}: failed with error:\n{err:?}", job.name);
+            }
         });
         self.jobs.insert(
             job_copy.name.clone(),
@@ -330,7 +329,6 @@ impl ChronService {
     }
 
     /// Add a new job to be run on the given schedule
-    #[allow(clippy::too_many_lines)]
     async fn schedule(&mut self, name: &str, job: &chronfile::ScheduledJob) -> Result<()> {
         Self::validate_name(name)?;
         if self.jobs.contains_key(name) {
@@ -397,61 +395,21 @@ impl ChronService {
         let name = name.to_owned();
         let handle = spawn(async move {
             loop {
-                let JobType::Scheduled {
-                    ref options,
-                    ref scheduled_job,
-                } = job.r#type
-                else {
-                    continue;
-                };
-
-                // Get the elapsed run since the last tick, if any
-                let mut job_guard = scheduled_job.write().await;
-                let now = Utc::now();
-                let run = job_guard.tick(now);
-
-                let next_run = job_guard.next_run();
-                db.set_job_next_run(name.clone(), next_run.as_ref()).await?;
-
-                // Retry delay defaults to one sixth of the job's period
-                let retry_delay = options.retry.delay.unwrap_or_else(|| {
-                    job_guard
-                        .get_current_period(&now.into())
-                        .unwrap_or_default()
-                        / 6
-                });
-
-                drop(job_guard);
-
-                if let Some(scheduled_time) = run {
-                    let late = HumanTime::from(scheduled_time)
-                        .to_text_en(Accuracy::Precise, Tense::Present);
-                    debug!("{name}: scheduled for {scheduled_time} ({late} late)");
-
-                    exec_command(
-                        &db,
-                        &job,
-                        &RetryConfig {
-                            delay: Some(retry_delay),
-                            ..options.retry
-                        },
-                        &scheduled_time,
-                    )
-                    .await?;
-                    debug!("{name}: updating checkpoint {scheduled_time}");
-                    db.set_checkpoint(name.clone(), &scheduled_time).await?;
+                match Self::exec_scheduled_job(&db, &name, &job).await {
+                    Ok(Some(next_run)) => {
+                        // Wait until the next run before ticking again
+                        sleep_until(next_run).await;
+                    }
+                    Ok(None) => {
+                        debug!("{name}: schedule contains no more future runs");
+                        break;
+                    }
+                    Err(err) => {
+                        debug!("{name}: failed with error:\n{err:?}");
+                        break;
+                    }
                 }
-
-                let Some(next_run) = next_run else {
-                    debug!("{name}: schedule contains no more future runs");
-                    break;
-                };
-
-                // Wait until the next run before ticking again
-                sleep_until(next_run).await;
             }
-
-            Ok(())
         });
 
         self.jobs.insert(
@@ -463,6 +421,62 @@ impl ChronService {
         );
 
         Ok(())
+    }
+
+    /// Execute a scheduled job a single time
+    /// Returns the next time that the job is scheduled to run, if any
+    async fn exec_scheduled_job(
+        db: &Arc<Database>,
+        name: &str,
+        job: &Arc<Job>,
+    ) -> Result<Option<DateTime<Utc>>> {
+        let JobType::Scheduled {
+            ref options,
+            ref scheduled_job,
+        } = job.r#type
+        else {
+            bail!("{name}: job is not a scheduled job");
+        };
+
+        // Get the elapsed run since the last tick, if any
+        let mut job_guard = scheduled_job.write().await;
+        let now = Utc::now();
+        let run = job_guard.tick(now);
+
+        let next_run = job_guard.next_run();
+        db.set_job_next_run(name.to_owned(), next_run.as_ref())
+            .await?;
+
+        // Retry delay defaults to one sixth of the job's period
+        let retry_delay = options.retry.delay.unwrap_or_else(|| {
+            job_guard
+                .get_current_period(&now.into())
+                .unwrap_or_default()
+                / 6
+        });
+
+        drop(job_guard);
+
+        if let Some(scheduled_time) = run {
+            let late =
+                HumanTime::from(scheduled_time).to_text_en(Accuracy::Precise, Tense::Present);
+            debug!("{name}: scheduled for {scheduled_time} ({late} late)");
+
+            exec_command(
+                db,
+                job,
+                &RetryConfig {
+                    delay: Some(retry_delay),
+                    ..options.retry
+                },
+                &scheduled_time,
+            )
+            .await?;
+            debug!("{name}: updating checkpoint {scheduled_time}");
+            db.set_checkpoint(name.to_owned(), &scheduled_time).await?;
+        }
+
+        Ok(next_run)
     }
 
     /// Get the shell to execute commands with
