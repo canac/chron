@@ -6,6 +6,8 @@ use crate::format;
 use crate::http;
 use crate::http::api::JobStatus;
 use anyhow::{Context, Result, bail};
+use chrono::Local;
+use cli_tables::Table;
 use log::{LevelFilter, debug, error, info};
 use notify::RecursiveMode;
 use notify_debouncer_mini::{DebounceEventResult, new_debouncer};
@@ -142,6 +144,32 @@ fn validate_response(job: &str, res: &Response) -> Result<()> {
     Ok(())
 }
 
+/// Implementation for the `jobs` CLI command
+pub async fn jobs(db: Arc<Database>) -> Result<()> {
+    let jobs = db.get_active_jobs(ChronService::check_port_active).await?;
+    if jobs.is_empty() {
+        println!("No jobs are running");
+        return Ok(());
+    }
+    let mut table = Table::new();
+    table.push_row(&vec!["name", "command", "status"])?;
+    for job in jobs {
+        let status = if job.running {
+            "running".to_owned()
+        } else {
+            let next_run = job.next_run.map_or_else(
+                || "never".to_owned(),
+                |next_run| format::relative_date(&next_run.with_timezone(&Local)),
+            );
+            format!("next run {next_run}")
+        };
+        table.push_row_string(&vec![job.name, job.command, status])?;
+    }
+    println!("{}", table.to_string());
+
+    Ok(())
+}
+
 /// Implementation for the `status` CLI command
 pub async fn status(db: Arc<Database>, args: StatusArgs) -> Result<()> {
     let StatusArgs { job } = args;
@@ -165,10 +193,6 @@ pub async fn status(db: Arc<Database>, args: StatusArgs) -> Result<()> {
 
 /// Implementation for the `runs` CLI command
 pub async fn runs(db: Arc<Database>, args: RunsArgs) -> Result<()> {
-    const TIME_WIDTH: usize = 22;
-    const EXECUTION_WIDTH: usize = 18;
-    const STATUS_WIDTH: usize = 12;
-
     let RunsArgs { job } = args;
     let port = get_job_port(&db, job.clone()).await?;
     let origin = format!("http://localhost:{port}");
@@ -186,31 +210,23 @@ pub async fn runs(db: Arc<Database>, args: RunsArgs) -> Result<()> {
         bail!("No runs found for job {job}");
     }
 
-    println!(
-        "{:<TIME_WIDTH$}| {:<EXECUTION_WIDTH$}| {:<STATUS_WIDTH$}",
-        "time", "execution time", "status code"
-    );
-    println!(
-        "{}+-{}+-{}",
-        "-".repeat(TIME_WIDTH),
-        "-".repeat(EXECUTION_WIDTH),
-        "-".repeat(STATUS_WIDTH)
-    );
+    let mut table = Table::new();
+    table.push_row(&vec!["time", "execution time", "status code"])?;
     for run in runs {
         let status = match run.status() {
             RunStatus::Running => "running".to_owned(),
             RunStatus::Completed { status_code } => status_code.to_string(),
             RunStatus::Terminated => "terminated".to_owned(),
         };
-        println!(
-            "{:<TIME_WIDTH$}| {:<EXECUTION_WIDTH$}| {:<STATUS_WIDTH$}",
+        table.push_row_string(&vec![
             format::relative_date(&run.started_at()),
             run.execution_time()
                 .map(|duration| format::duration(&duration))
                 .unwrap_or_default(),
-            status
-        );
+            status,
+        ])?;
     }
+    println!("{}", table.to_string());
 
     Ok(())
 }

@@ -1,17 +1,23 @@
 use async_sqlite::rusqlite::{Result, Row};
-use chrono::{DateTime, Duration, Local, NaiveDateTime, TimeZone};
+use chrono::{DateTime, Duration, Local, NaiveDateTime, TimeZone, Utc};
 
-#[derive(Debug)]
+#[cfg_attr(test, derive(Debug, Eq, PartialEq))]
 pub struct Job {
     pub name: String,
-    pub port: u16,
+    pub command: String,
+    pub next_run: Option<DateTime<Utc>>,
+    pub running: bool,
 }
 
 impl Job {
     pub fn from_row(row: &Row) -> Result<Self> {
         Ok(Self {
             name: row.get("name")?,
-            port: row.get("port")?,
+            command: row.get("command")?,
+            next_run: row
+                .get::<_, Option<NaiveDateTime>>("next_run")?
+                .map(|timestamp| Utc.from_utc_datetime(&timestamp)),
+            running: row.get::<_, Option<bool>>("running")?.unwrap_or_default(),
         })
     }
 }

@@ -52,6 +52,9 @@ pub enum Command {
     /// Run a Chronfile
     Run(RunArgs),
 
+    /// Print the current status of all active jobs
+    Jobs,
+
     /// Print the job's current status
     Status(StatusArgs),
 

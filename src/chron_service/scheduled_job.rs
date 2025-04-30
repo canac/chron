@@ -50,7 +50,7 @@ impl ScheduledJob {
             .map(std::convert::Into::into)
     }
 
-    /// Tick and return the oldest elapsed run since last tick, if any
+    /// Tick and return the oldest elapsed run since the last tick, if any
     pub fn tick(&mut self, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
         let last_tick = self.last_tick;
         self.last_tick = now;

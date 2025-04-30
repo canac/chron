@@ -138,7 +138,7 @@ impl ChronService {
     }
 
     /// Determine whether a port still belongs to any running chron server
-    fn check_port_active(port: u16) -> bool {
+    pub fn check_port_active(port: u16) -> bool {
         let res = reqwest::blocking::get(format!("http://localhost:{port}"));
         match res {
             Ok(res) => {
@@ -234,7 +234,7 @@ impl ChronService {
 
         for (name, job) in startup_jobs {
             debug!("Registering new startup job {name}");
-            self.startup(&name, &job)?;
+            self.startup(&name, &job).await?;
         }
 
         for (name, job) in scheduled_jobs {
@@ -288,7 +288,7 @@ impl ChronService {
     }
 
     /// Add a new job to be run on startup
-    fn startup(&mut self, name: &str, job: &chronfile::StartupJob) -> Result<()> {
+    async fn startup(&mut self, name: &str, job: &chronfile::StartupJob) -> Result<()> {
         Self::validate_name(name)?;
         if self.jobs.contains_key(name) {
             bail!("A job with the name {name} already exists")
@@ -309,6 +309,10 @@ impl ChronService {
         });
         let job_copy = Arc::clone(&job);
 
+        self.db
+            .initialize_job(name.to_owned(), job.command.clone(), None)
+            .await?;
+
         let db = Arc::clone(&self.db);
         let handle = spawn(async move {
             exec_command(&db, &job, &options.keep_alive, &Utc::now()).await?;
@@ -326,6 +330,7 @@ impl ChronService {
     }
 
     /// Add a new job to be run on the given schedule
+    #[allow(clippy::too_many_lines)]
     async fn schedule(&mut self, name: &str, job: &chronfile::ScheduledJob) -> Result<()> {
         Self::validate_name(name)?;
         if self.jobs.contains_key(name) {
@@ -361,13 +366,14 @@ impl ChronService {
             // checkpoint prevents this problem.
             if let Some(start_time) = scheduled_job.prev_run() {
                 debug!("{name}: saving synthetic checkpoint {start_time}");
-                self.db.set_checkpoint(name.to_owned(), start_time).await?;
+                self.db.set_checkpoint(name.to_owned(), &start_time).await?;
             } else {
                 debug!(
                     "{name}: cannot save synthetic checkpoint because schedule has no previous runs"
                 );
             }
         }
+        let next_run = scheduled_job.next_run();
         let job = Arc::new(Job {
             name: name.to_owned(),
             command: job.command.clone(),
@@ -382,6 +388,10 @@ impl ChronService {
             next_attempt: RwLock::new(None),
         });
         let job_copy = Arc::clone(&job);
+
+        self.db
+            .initialize_job(name.to_owned(), job.command.clone(), next_run.as_ref())
+            .await?;
 
         let db = Arc::clone(&self.db);
         let name = name.to_owned();
@@ -400,6 +410,9 @@ impl ChronService {
                 let now = Utc::now();
                 let run = job_guard.tick(now);
 
+                let next_run = job_guard.next_run();
+                db.set_job_next_run(name.clone(), next_run.as_ref()).await?;
+
                 // Retry delay defaults to one sixth of the job's period
                 let retry_delay = options.retry.delay.unwrap_or_else(|| {
                     job_guard
@@ -408,7 +421,6 @@ impl ChronService {
                         / 6
                 });
 
-                let next_run = job_guard.next_run();
                 drop(job_guard);
 
                 if let Some(scheduled_time) = run {
@@ -427,7 +439,7 @@ impl ChronService {
                     )
                     .await?;
                     debug!("{name}: updating checkpoint {scheduled_time}");
-                    db.set_checkpoint(name.clone(), scheduled_time).await?;
+                    db.set_checkpoint(name.clone(), &scheduled_time).await?;
                 }
 
                 let Some(next_run) = next_run else {

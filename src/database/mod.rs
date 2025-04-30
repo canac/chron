@@ -45,7 +45,10 @@ impl Database {
 CREATE TABLE IF NOT EXISTS job (
   name VARCHAR PRIMARY KEY NOT NULL,
   port INTEGER,
-  current_run_id INTEGER REFERENCES run(id)
+  initialized BOOLEAN NOT NULL DEFAULT FALSE,
+  current_run_id INTEGER REFERENCES run(id),
+  command VARCHAR,
+  next_run DATETIME
 );
 
 CREATE TABLE IF NOT EXISTS run (
@@ -168,10 +171,10 @@ WHERE job = ?1",
     }
 
     /// Write the checkpoint time of a job
-    pub async fn set_checkpoint(&self, job: String, timestamp: DateTime<Utc>) -> Result<()> {
+    pub async fn set_checkpoint(&self, job: String, timestamp: &DateTime<Utc>) -> Result<()> {
+        let timestamp = timestamp.naive_utc();
         self.client
             .conn(move |conn| {
-                let timestamp = timestamp.naive_utc();
                 let mut statement = conn.prepare(
                     "INSERT INTO checkpoint (job, timestamp)
 VALUES (?1, ?2)
@@ -183,6 +186,27 @@ ON CONFLICT (job)
             })
             .await
             .context("Failed to save checkpoint time to the database")?;
+        Ok(())
+    }
+
+    /// Write the next run time of a job
+    pub async fn set_job_next_run(
+        &self,
+        job: String,
+        next_run: Option<&DateTime<Utc>>,
+    ) -> Result<()> {
+        let next_run = next_run.map(chrono::DateTime::naive_utc);
+        self.client
+            .conn(move |conn| {
+                let mut statement = conn.prepare(
+                    "UPDATE job
+SET next_run = ?2
+WHERE name = ?1",
+                )?;
+                statement.execute((job, next_run))
+            })
+            .await
+            .context("Failed to set next run time in the database")?;
         Ok(())
     }
 
@@ -210,19 +234,35 @@ WHERE name = ?1 AND port IS NOT NULL",
     /// Successfully acquiring a job will clear the `current_run_id` of the job. Acquired, running jobs are guaranteed
     /// to have accurate current run information. Released jobs make no such guarantees, so callers should verify that
     /// the job is actually running before trusting information from the database about the job's current run.
+    /// Acquired jobs also begin as uninitialized, so the caller should call `initialize_job` shortly thereafter.
     pub async fn acquire_jobs(
         &self,
         jobs: Vec<String>,
         port: u16,
         check_port_active: impl Fn(u16) -> bool + Send + 'static,
     ) -> Result<ReserveResult> {
+        struct Job {
+            name: String,
+            port: u16,
+        }
+
+        impl Job {
+            fn from_row(row: &rusqlite::Row) -> async_sqlite::rusqlite::Result<Self> {
+                Ok(Self {
+                    name: row.get("name")?,
+                    port: row.get("port")?,
+                })
+            }
+        }
+
         let result = self
             .client
             .conn(move |conn| {
                 conn.execute_batch("BEGIN EXCLUSIVE TRANSACTION")?;
 
                 let mut statement = conn.prepare(
-                    "SELECT name, port FROM job
+                    "SELECT name, port
+FROM job
 WHERE name IN rarray(?1) AND port IS NOT NULL AND port != ?2",
                 )?;
                 let conflicting_jobs = statement
@@ -270,13 +310,13 @@ WHERE port IN rarray(?1)",
                     return Ok(ReserveResult::Failed { conflicting_jobs });
                 }
 
-                // If this job already exists it is because it is already acquired by this port, so it can be ignored
+                // If this job already exists, it must be already acquired by this port and is safe to update
                 let mut statement = conn.prepare(
                     "INSERT INTO job (name, port)
 VALUES (?1, ?2)
 ON CONFLICT (name)
     DO UPDATE
-    SET port = ?2, current_run_id = NULL",
+    SET port = ?2, initialized = FALSE, current_run_id = NULL",
                 )?;
                 for job in jobs {
                     statement.execute((job, port))?;
@@ -324,6 +364,82 @@ WHERE port = ?1",
         Ok(())
     }
 
+    /// Record information about a newly-acquired job
+    pub async fn initialize_job(
+        &self,
+        name: String,
+        command: String,
+        next_run: Option<&DateTime<Utc>>,
+    ) -> Result<()> {
+        let next_run = next_run.map(chrono::DateTime::naive_utc);
+        self.client
+            .conn(move |conn| {
+                conn.execute(
+                    "UPDATE job
+SET command = ?2, next_run = ?3, initialized = TRUE
+WHERE name = ?1",
+                    (name, command, next_run),
+                )
+            })
+            .await
+            .context("Failed to release jobs by port in the database")?;
+
+        Ok(())
+    }
+
+    /// Return all running, initialized jobs, including jobs from other processes
+    /// Jobs that have been acquired but not initialized yet are not included
+    pub async fn get_active_jobs(
+        &self,
+        check_port_active: impl Fn(u16) -> bool + Send + 'static,
+    ) -> Result<Vec<Job>> {
+        let jobs = self
+            .client
+            .conn(move |conn| {
+                conn.execute_batch("BEGIN EXCLUSIVE TRANSACTION")?;
+
+                let mut statement = conn.prepare(
+                    "SELECT DISTINCT(port)
+FROM job
+WHERE port IS NOT NULL",
+                )?;
+                let ports = statement
+                    .query_map((), |row| row.get("port"))?
+                    .collect::<rusqlite::Result<Vec<u16>>>()?;
+                let inactive_ports = ports
+                    .into_iter()
+                    .filter(|port| !check_port_active(*port))
+                    .collect::<Vec<_>>();
+                if !inactive_ports.is_empty() {
+                    conn.execute(
+                        "UPDATE job
+SET port = NULL, current_run_id = NULL
+WHERE port IN rarray(?1)",
+                        (Self::make_rarray(inactive_ports),),
+                    )?;
+                }
+
+                let mut statement = conn.prepare(
+                    "SELECT name, command, next_run, run.id = job.current_run_id AS running
+FROM job
+LEFT JOIN run ON run.job_name = job.name AND run.id = job.current_run_id AND run.ended_at IS NULL
+WHERE port IS NOT NULL AND initialized = TRUE
+ORDER BY name",
+                )?;
+                let jobs = statement
+                    .query_map((), Job::from_row)?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+
+                conn.execute_batch("COMMIT")?;
+
+                Ok(jobs)
+            })
+            .await
+            .context("Failed to release jobs by port in the database")?;
+
+        Ok(jobs)
+    }
+
     /// Convert an iterator into an rarray
     fn make_rarray<T, I>(iter: I) -> Rc<Vec<Value>>
     where
@@ -346,6 +462,10 @@ mod tests {
         let db = Database { client };
         db.init().await.unwrap();
         db
+    }
+
+    async fn initialize_job(db: &Database, name: String) {
+        db.initialize_job(name, String::new(), None).await.unwrap();
     }
 
     async fn insert_run(db: &Database, name: String) -> u32 {
@@ -482,6 +602,50 @@ mod tests {
                 .await
                 .unwrap(),
             ReserveResult::Reserved
+        );
+    }
+
+    #[test]
+    async fn test_acquire_jobs_uninitializes() {
+        let db = open_db().await;
+
+        // Seed with an old run and reacquire
+        db.acquire_jobs(vec!["job1".to_owned()], 1000, check_port_active)
+            .await
+            .unwrap();
+        initialize_job(&db, "job1".to_owned()).await;
+        insert_run(&db, "job1".to_owned()).await;
+        db.acquire_jobs(vec!["job1".to_owned()], 1000, check_port_active)
+            .await
+            .unwrap();
+
+        // The job should not active be because it is uninitialized
+        assert!(
+            db.get_active_jobs(check_port_active)
+                .await
+                .unwrap()
+                .is_empty(),
+        );
+    }
+
+    #[test]
+    async fn test_initialize_job() {
+        let db = open_db().await;
+        db.acquire_jobs(vec!["job1".to_owned()], 1000, check_port_active)
+            .await
+            .unwrap();
+        db.initialize_job("job1".to_owned(), "echo Hello".to_owned(), None)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            db.get_active_jobs(check_port_active).await.unwrap(),
+            vec![Job {
+                name: "job1".to_owned(),
+                command: "echo Hello".to_owned(),
+                next_run: None,
+                running: false,
+            }]
         );
     }
 
@@ -641,6 +805,121 @@ mod tests {
                 .await
                 .unwrap(),
             ReserveResult::Reserved
+        );
+    }
+
+    #[test]
+    async fn test_get_active_jobs_uninitialized() {
+        let db = open_db().await;
+        db.acquire_jobs(
+            vec!["job1".to_owned(), "job2".to_owned()],
+            1000,
+            check_port_active,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(db.get_active_jobs(check_port_active).await.unwrap(), vec![]);
+    }
+
+    #[test]
+    async fn test_get_active_jobs_partially_initialized() {
+        let db = open_db().await;
+        db.acquire_jobs(
+            vec!["job1".to_owned(), "job2".to_owned()],
+            1000,
+            check_port_active,
+        )
+        .await
+        .unwrap();
+        initialize_job(&db, "job1".to_owned()).await;
+
+        assert_eq!(
+            db.get_active_jobs(check_port_active)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|job| job.name)
+                .collect::<Vec<_>>(),
+            vec!["job1".to_owned()]
+        );
+    }
+
+    #[test]
+    async fn test_get_active_jobs_released() {
+        let db = open_db().await;
+        db.acquire_jobs(
+            vec!["job1".to_owned(), "job2".to_owned()],
+            1000,
+            check_port_active,
+        )
+        .await
+        .unwrap();
+        initialize_job(&db, "job1".to_owned()).await;
+        db.release_jobs(vec!["job1".to_owned()]).await.unwrap();
+
+        assert_eq!(db.get_active_jobs(check_port_active).await.unwrap(), vec![]);
+    }
+
+    #[test]
+    async fn test_get_active_jobs_inactive() {
+        let db = open_db().await;
+        let jobs = vec!["job1".to_owned(), "job2".to_owned()];
+        db.acquire_jobs(jobs.clone(), 1000, check_port_active)
+            .await
+            .unwrap();
+        db.acquire_jobs(vec!["job3".to_owned()], 1001, check_port_active)
+            .await
+            .unwrap();
+        initialize_job(&db, "job1".to_owned()).await;
+        initialize_job(&db, "job2".to_owned()).await;
+        initialize_job(&db, "job3".to_owned()).await;
+
+        assert_eq!(
+            db.get_active_jobs(|port| port == 1000)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|job| job.name)
+                .collect::<Vec<_>>(),
+            jobs
+        );
+    }
+
+    #[test]
+    async fn test_get_active_jobs_running() {
+        let db = open_db().await;
+
+        db.acquire_jobs(vec!["job1".to_owned()], 1000, check_port_active)
+            .await
+            .unwrap();
+        // The job should not active be because it has not been initialized yet
+        assert!(
+            db.get_active_jobs(check_port_active)
+                .await
+                .unwrap()
+                .is_empty(),
+        );
+
+        initialize_job(&db, "job1".to_owned()).await;
+        // The job should not be running because it does not have an active run yet
+        assert!(
+            !db.get_active_jobs(check_port_active)
+                .await
+                .unwrap()
+                .first()
+                .unwrap()
+                .running
+        );
+
+        insert_run(&db, "job1".to_owned()).await;
+        assert!(
+            db.get_active_jobs(check_port_active)
+                .await
+                .unwrap()
+                .first()
+                .unwrap()
+                .running
         );
     }
 }

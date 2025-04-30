@@ -186,6 +186,8 @@ pub async fn exec_command(
                 .delay
                 .and_then(|delay| chrono::Duration::from_std(delay).ok())
                 .unwrap_or_default();
+        db.set_job_next_run(name.clone(), Some(next_attempt).as_ref())
+            .await?;
         *job.next_attempt.write().await = Some(next_attempt);
 
         sleep_until(next_attempt).await;

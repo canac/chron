@@ -38,6 +38,9 @@ async fn main() -> Result<()> {
         Command::Run(args) => {
             commands::run(db, args).await?;
         }
+        Command::Jobs => {
+            commands::jobs(db).await?;
+        }
         Command::Status(args) => {
             commands::status(db, args).await?;
         }
