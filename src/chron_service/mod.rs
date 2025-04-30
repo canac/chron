@@ -168,7 +168,7 @@ impl ChronService {
                     && same_shell
                     && matches!(&task.job.r#type, JobType::Startup { options } if **options == job.get_options())
                 {
-                    debug!("Reusing existing startup job {name}");
+                    debug!("{name}: reusing existing startup job");
                     self.jobs.insert(name, task);
                     continue;
                 }
@@ -193,7 +193,7 @@ impl ChronService {
                     && same_shell
                     && matches!(&task.job.r#type, JobType::Scheduled { options, scheduled_job } if **options == job.get_options() && scheduled_job.read().await.get_schedule() == job.schedule)
                 {
-                    debug!("Reusing existing scheduled job {name}");
+                    debug!("{name}: reuse existing scheduled job");
                     self.jobs.insert(name, task);
                     continue;
                 }
@@ -233,12 +233,12 @@ impl ChronService {
             .collect::<Vec<_>>();
 
         for (name, job) in startup_jobs {
-            debug!("Registering new startup job {name}");
+            debug!("{name}: registering new startup job");
             self.startup(&name, &job).await?;
         }
 
         for (name, job) in scheduled_jobs {
-            debug!("Registering new scheduled job {name}");
+            debug!("{name}: registering new scheduled job");
             self.schedule(&name, &job).await?;
         }
 
@@ -267,7 +267,7 @@ impl ChronService {
         // Wait for each of the tasks to complete
         let has_jobs = !jobs.is_empty();
         for (name, task) in jobs {
-            debug!("Waiting for job {name} to terminate...");
+            debug!("{name}: waiting for job to terminate...");
             let process = task.job.running_process.write().await.take();
             if let Some(process) = process {
                 process.terminate().await;
