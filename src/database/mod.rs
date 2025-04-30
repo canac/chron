@@ -16,6 +16,19 @@ pub enum ReserveResult {
     Failed { conflicting_jobs: Vec<String> },
 }
 
+/// # Data Integrity
+/// The data model is designed to ensure data integrity and consistency even when used concurrently by multiple chron
+/// processes, even when chron processes are terminated before they can shut down gracefully.
+///
+/// The following invariants are maintained:
+/// * Two processes cannot both acquire a job with a given name at the same time
+/// * Jobs belonging to terminated chron processes are recovered and can be reacquired
+///
+/// The database makes the following assumptions:
+/// * Each chron process is associated with exactly one port
+/// * It is possible to determine whether a chron process is still running by attempting to connect
+///   to its port over HTTP (the exact method used to send the HTTP request and inspect the
+///   response is left to the caller)
 pub struct Database {
     client: Client,
 }
@@ -96,6 +109,8 @@ CREATE TABLE IF NOT EXISTS checkpoint (
         attempt: usize,
         max_attempts: Option<usize>,
     ) -> Result<Run> {
+        // Data integrity: use a transaction to ensure that jobs do not briefly have a null current run even when a
+        // not-yet-terminated run exists
         self.client
             .conn(move |conn| {
                 conn.execute_batch("BEGIN")?;
@@ -138,19 +153,25 @@ WHERE id = ?2",
 
     /// Read the last runs of a job
     pub async fn get_last_runs(&self, name: String, count: u64) -> Result<Vec<Run>> {
-        self.client.conn(move |conn| {
-            let mut statement = conn
-                .prepare("SELECT id, scheduled_at, started_at, ended_at, status_code, attempt, max_attempts, run.id = job.current_run_id AS current
+        self.client
+            .conn(move |conn| {
+                // Data integrity: incomplete runs are ignored
+                let mut statement = conn.prepare(
+                    "SELECT
+    id, scheduled_at, started_at, ended_at,
+    status_code, attempt, max_attempts, run.id = job.current_run_id AS current
 FROM run
 LEFT JOIN job ON run.job_name = job.name AND run.id = job.current_run_id AND run.ended_at IS NULL
 WHERE job_name = ?1
 ORDER BY started_at DESC
-LIMIT ?2")?;
-            statement.query_map(
-                (name, count),
-                Run::from_row,
-            )?.collect::<rusqlite::Result<Vec<_>>>()
-        }).await.context("Failed to load last runs from the database")
+LIMIT ?2",
+                )?;
+                statement
+                    .query_map((name, count), Run::from_row)?
+                    .collect::<rusqlite::Result<Vec<_>>>()
+            })
+            .await
+            .context("Failed to load last runs from the database")
     }
 
     /// Read the checkpoint time of a job
@@ -255,6 +276,8 @@ WHERE name = ?1 AND port IS NOT NULL",
             }
         }
 
+        // Data integrity: use an exclusive transaction to ensure that the job and port associations are not modified
+        // while we are determining which jobs are acquired and/or recoverable
         let result = self
             .client
             .conn(move |conn| {
@@ -294,7 +317,7 @@ WHERE name IN rarray(?1) AND port IS NOT NULL AND port != ?2",
                     );
                 }
 
-                // Whether or not conflicts remain, still release any jobs that could be recovered
+                // Whether or not conflicts remain, release any recoverable jobs
                 conn.execute(
                     "UPDATE job
 SET port = NULL, current_run_id = NULL
@@ -311,6 +334,7 @@ WHERE port IN rarray(?1)",
                 }
 
                 // If this job already exists, it must be already acquired by this port and is safe to update
+                // Data integrity: newly-acquired jobs are uninitialized and have no current run
                 let mut statement = conn.prepare(
                     "INSERT INTO job (name, port)
 VALUES (?1, ?2)
@@ -334,6 +358,7 @@ ON CONFLICT (name)
     pub async fn release_jobs(&self, jobs: Vec<String>) -> Result<()> {
         self.client
             .conn(move |conn| {
+                // Data integrity: released jobs have no current run
                 conn.execute(
                     "UPDATE job
 SET port = NULL, current_run_id = NULL
@@ -351,6 +376,7 @@ WHERE name IN rarray(?1)",
     pub async fn release_port(&self, port: u16) -> Result<()> {
         self.client
             .conn(move |conn| {
+                // Data integrity: released jobs have no current run
                 conn.execute(
                     "UPDATE job
 SET port = NULL, current_run_id = NULL
@@ -393,6 +419,8 @@ WHERE name = ?1",
         &self,
         check_port_active: impl Fn(u16) -> bool + Send + 'static,
     ) -> Result<Vec<Job>> {
+        // Data integrity: use an exclusive transaction to ensure that the job and port associations are not modified
+        // while we are determining which jobs are active and/or recoverable
         let jobs = self
             .client
             .conn(move |conn| {
@@ -411,6 +439,7 @@ WHERE port IS NOT NULL",
                     .filter(|port| !check_port_active(*port))
                     .collect::<Vec<_>>();
                 if !inactive_ports.is_empty() {
+                    // Data integrity: released jobs have no current run
                     conn.execute(
                         "UPDATE job
 SET port = NULL, current_run_id = NULL
@@ -419,6 +448,7 @@ WHERE port IN rarray(?1)",
                     )?;
                 }
 
+                // Data integrity: incomplete runs, released jobs, uninitialized jobs are ignored
                 let mut statement = conn.prepare(
                     "SELECT name, command, next_run, run.id = job.current_run_id AS running
 FROM job
