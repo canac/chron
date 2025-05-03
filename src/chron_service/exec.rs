@@ -15,7 +15,6 @@ use tokio::sync::oneshot::channel;
 pub struct Metadata<'t> {
     pub scheduled_time: &'t DateTime<Utc>,
     pub attempt: usize,
-    pub max_attempts: Option<usize>,
 }
 
 #[derive(Clone, Copy)]
@@ -43,11 +42,13 @@ async fn write_mailbox_message(name: &str, code: i32) -> Result<()> {
 }
 
 /// Execute the specified command without retries
+/// Return its next attempt time, if any
 async fn exec_command_once(
     db: &Arc<Database>,
     job: &Arc<Job>,
+    retry_config: &RetryConfig,
     metadata: &Metadata<'_>,
-) -> Result<ExecStatus> {
+) -> Result<Option<DateTime<Utc>>> {
     let name = job.name.clone();
     info!(
         "{name}: running \"{}\" with shell \"{}\"{}",
@@ -65,7 +66,7 @@ async fn exec_command_once(
             name.clone(),
             metadata.scheduled_time.naive_utc(),
             metadata.attempt,
-            metadata.max_attempts,
+            retry_config.limit,
         )
         .await?;
 
@@ -123,9 +124,21 @@ async fn exec_command_once(
             (status?.code(), false)
         }
     };
+    let exit_status: ExecStatus = match status_code {
+        Some(0) => ExecStatus::Success,
+        _ => ExecStatus::Failure,
+    };
 
     // Update the run status code in the database
-    db.set_run_status_code(run.id, status_code).await?;
+    let next_attempt = retry_config.next_attempt(exit_status, metadata.attempt);
+    *job.next_attempt.write().await = next_attempt;
+    let next_scheduled_run = job.next_scheduled_run().await;
+    db.complete_run(
+        name.clone(),
+        status_code,
+        next_attempt.or(next_scheduled_run).as_ref(),
+    )
+    .await?;
 
     // Wait to clear the process until after saving the run status to the database to avoid a race condition where the
     // process is None because the job terminated, but the most recent run in the database still has a status of None.
@@ -146,10 +159,7 @@ async fn exec_command_once(
         let _ = tx_terminated.send(());
     }
 
-    Ok(match status_code {
-        Some(0) => ExecStatus::Success,
-        _ => ExecStatus::Failure,
-    })
+    Ok(next_attempt)
 }
 
 /// Execute the job's command, handling retries
@@ -171,26 +181,14 @@ pub async fn exec_command(
         let metadata = Metadata {
             scheduled_time,
             attempt,
-            max_attempts: retry_config.limit,
         };
-        let status = exec_command_once(db, job, &metadata).await?;
-        if !retry_config.should_retry(status, attempt) {
-            // We are done retrying so clear the next attempt
-            job.next_attempt.write().await.take();
-            break;
+        let next_attempt = exec_command_once(db, job, retry_config, &metadata).await?;
+        match next_attempt {
+            // Wait until the next attempt before looping again
+            Some(next_attempt) => sleep_until(next_attempt).await,
+            // There are no more attempts
+            None => break,
         }
-
-        // Record the timestamp of the next attempt and wait until then to re-run the job
-        let next_attempt = Utc::now()
-            + retry_config
-                .delay
-                .and_then(|delay| chrono::Duration::from_std(delay).ok())
-                .unwrap_or_default();
-        db.set_job_next_run(name.clone(), Some(next_attempt).as_ref())
-            .await?;
-        *job.next_attempt.write().await = Some(next_attempt);
-
-        sleep_until(next_attempt).await;
     }
 
     Ok(())

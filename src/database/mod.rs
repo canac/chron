@@ -123,7 +123,7 @@ RETURNING *, TRUE as current",
                 )?;
                 conn.execute(
                     "UPDATE job
-SET current_run_id = ?1
+SET current_run_id = ?1, next_run = NULL
 WHERE name = ?2",
                     (run.id, name),
                 )?;
@@ -135,16 +135,39 @@ WHERE name = ?2",
             .context("Failed to save run to the database")
     }
 
-    /// Set the status code of an existing run
-    pub async fn set_run_status_code(&self, run_id: u32, status_code: Option<i32>) -> Result<()> {
+    /// Mark a job's current run as completed with a given status code and set its next run time
+    pub async fn complete_run(
+        &self,
+        job: String,
+        status_code: Option<i32>,
+        next_run: Option<&DateTime<Utc>>,
+    ) -> Result<()> {
+        let next_run = next_run.map(chrono::DateTime::naive_utc);
         self.client
             .conn(move |conn| {
-                conn.execute(
-                    "UPDATE run
+                conn.execute_batch("BEGIN")?;
+
+                let run_id = conn
+                    .prepare(
+                        "UPDATE job
+SET next_run = ?1
+WHERE name = ?2
+RETURNING current_run_id",
+                    )?
+                    .query_row((next_run, job), |row| {
+                        row.get::<_, Option<u32>>("current_run_id")
+                    })?;
+
+                if let Some(run_id) = run_id {
+                    conn.execute(
+                        "UPDATE run
 SET ended_at = STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW'), status_code = ?1
 WHERE id = ?2",
-                    (status_code, run_id),
-                )
+                        (status_code, run_id),
+                    )?;
+                }
+
+                conn.execute_batch("COMMIT")
             })
             .await
             .context("Failed to update run status in the database")?;
@@ -207,27 +230,6 @@ ON CONFLICT (job)
             })
             .await
             .context("Failed to save checkpoint time to the database")?;
-        Ok(())
-    }
-
-    /// Write the next run time of a job
-    pub async fn set_job_next_run(
-        &self,
-        job: String,
-        next_run: Option<&DateTime<Utc>>,
-    ) -> Result<()> {
-        let next_run = next_run.map(chrono::DateTime::naive_utc);
-        self.client
-            .conn(move |conn| {
-                let mut statement = conn.prepare(
-                    "UPDATE job
-SET next_run = ?2
-WHERE name = ?1",
-                )?;
-                statement.execute((job, next_run))
-            })
-            .await
-            .context("Failed to set next run time in the database")?;
         Ok(())
     }
 
@@ -566,7 +568,7 @@ mod tests {
         assert!(runs[0].current);
         assert!(!runs[1].current);
 
-        db.set_run_status_code(runs[0].id, Some(0)).await.unwrap();
+        db.complete_run(name.clone(), Some(0), None).await.unwrap();
         let runs = db.get_last_runs(name, 1).await.unwrap();
         let run = runs.first().unwrap();
         assert_eq!(run.status_code, Some(0));

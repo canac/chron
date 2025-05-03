@@ -46,13 +46,22 @@ pub struct RetryConfig {
 }
 
 impl RetryConfig {
-    /// Determine whether a command with a certain status and a certain number of previous attempts
-    /// should be retried
+    /// Determine whether a command with a certain status and a certain number of previous attempts should be retried
     fn should_retry(&self, exec_status: ExecStatus, attempt: usize) -> bool {
         (match exec_status {
             ExecStatus::Failure => self.failures,
             ExecStatus::Success => self.successes,
         } && self.limit.is_none_or(|limit| attempt < limit))
+    }
+
+    /// Given a command that completed with a certain status after a certain number of attempts, determine when its next
+    /// attempt should be made, if any
+    fn next_attempt(&self, exec_status: ExecStatus, attempt: usize) -> Option<DateTime<Utc>> {
+        if self.should_retry(exec_status, attempt) {
+            Some(Utc::now() + self.delay.unwrap_or_default())
+        } else {
+            None
+        }
     }
 }
 
@@ -100,6 +109,18 @@ pub struct Job {
     pub running_process: RwLock<Option<Process>>,
     pub r#type: JobType,
     pub next_attempt: RwLock<Option<DateTime<Utc>>>,
+}
+
+impl Job {
+    /// Return the time that the job is scheduled to run next
+    pub async fn next_scheduled_run(&self) -> Option<DateTime<Utc>> {
+        match self.r#type {
+            JobType::Startup { .. } => None,
+            JobType::Scheduled {
+                ref scheduled_job, ..
+            } => scheduled_job.read().await.next_run(),
+        }
+    }
 }
 
 pub struct Task {
@@ -308,7 +329,7 @@ impl ChronService {
         let job_copy = Arc::clone(&job);
 
         self.db
-            .initialize_job(name.to_owned(), job.command.clone(), None)
+            .initialize_job(name.to_owned(), job.command.clone(), Some(&Utc::now()))
             .await?;
 
         let db = Arc::clone(&self.db);
@@ -442,10 +463,7 @@ impl ChronService {
         let mut job_guard = scheduled_job.write().await;
         let now = Utc::now();
         let run = job_guard.tick(now);
-
         let next_run = job_guard.next_run();
-        db.set_job_next_run(name.to_owned(), next_run.as_ref())
-            .await?;
 
         // Retry delay defaults to one sixth of the job's period
         let retry_delay = options.retry.delay.unwrap_or_else(|| {
