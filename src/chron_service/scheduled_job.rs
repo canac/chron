@@ -50,12 +50,13 @@ impl ScheduledJob {
             .map(std::convert::Into::into)
     }
 
-    /// Tick and return the oldest elapsed run since the last tick, if any
-    pub fn tick(&mut self, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    /// Tick and return the oldest and newest elapsed runs since the last tick, if any
+    pub fn tick(&mut self, now: DateTime<Utc>) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
         let last_tick = self.last_tick;
         self.last_tick = now;
 
-        self.schedule
+        let mut iter = self
+            .schedule
             // Get the runs from now
             // There is a bug in cron where reverse iterators starts counting
             // from the second rounded down, so add a second to compensate
@@ -64,11 +65,10 @@ impl ScheduledJob {
             // Iterating backwards in time (from newest to oldest)
             .rev()
             // Until the last tick
-            .take_while(|run| run > &last_tick)
-            // Get the oldest run
-            .last()
-            // Convert from local time to UTC
-            .map(std::convert::Into::into)
+            .take_while(|run| run > &last_tick);
+
+        let newest = iter.next().map(std::convert::Into::into);
+        newest.map(|newest| (iter.last().map_or(newest, std::convert::Into::into), newest))
     }
 
     /// Calculate the estimated duration between the last run and the next run
@@ -150,10 +150,11 @@ mod tests {
     fn test_tick_fractional_second() {
         let start_time = now();
         let mut job = ScheduledJob::new(Schedule::from_str("* * * * * *").unwrap(), start_time);
+        let scheduled_time = now().with_second(1).unwrap();
         assert_eq!(
-            job.tick(now().with_second(1).unwrap().with_nanosecond(1).unwrap())
+            job.tick(scheduled_time.with_nanosecond(1).unwrap())
                 .unwrap(),
-            now().with_second(1).unwrap(),
+            (scheduled_time, scheduled_time),
         );
     }
 
@@ -164,7 +165,7 @@ mod tests {
         assert_eq!(job.tick(now()), None);
         assert_eq!(
             job.tick(now().with_second(5).unwrap()).unwrap(),
-            now().with_second(1).unwrap(),
+            (now().with_second(1).unwrap(), now().with_second(5).unwrap()),
         );
     }
 }

@@ -443,7 +443,7 @@ impl ChronService {
         // Get the elapsed run since the last tick, if any
         let mut job_guard = scheduled_job.write().await;
         let now = Utc::now();
-        let run = job_guard.tick(now);
+        let current_run = job_guard.tick(now);
         let next_run = job_guard.next_run();
 
         // Retry delay defaults to one sixth of the job's period
@@ -456,7 +456,9 @@ impl ChronService {
 
         drop(job_guard);
 
-        if let Some(scheduled_time) = run {
+        if let Some((scheduled_time, checkpoint_time)) = current_run {
+            // If multiple runs were skipped over in the schedule since the last tick, scheduled_time will be the oldest
+            // run and checkpoint_time will be the newest run
             let late =
                 HumanTime::from(scheduled_time).to_text_en(Accuracy::Precise, Tense::Present);
             debug!("{name}: scheduled for {scheduled_time} ({late} late)");
@@ -471,8 +473,8 @@ impl ChronService {
                 &scheduled_time,
             )
             .await?;
-            debug!("{name}: updating checkpoint {scheduled_time}");
-            db.set_checkpoint(name.to_owned(), &scheduled_time).await?;
+            debug!("{name}: updating checkpoint {checkpoint_time}");
+            db.set_checkpoint(name.to_owned(), &checkpoint_time).await?;
         }
 
         Ok(next_run)
