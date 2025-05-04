@@ -59,7 +59,6 @@ CREATE TABLE IF NOT EXISTS job (
   name VARCHAR PRIMARY KEY NOT NULL,
   port INTEGER,
   initialized BOOLEAN NOT NULL DEFAULT FALSE,
-  current_run_id INTEGER REFERENCES run(id),
   command VARCHAR,
   next_run DATETIME
 );
@@ -123,9 +122,9 @@ RETURNING *, TRUE as current",
                 )?;
                 conn.execute(
                     "UPDATE job
-SET current_run_id = ?1, next_run = NULL
-WHERE name = ?2",
-                    (run.id, name),
+SET next_run = NULL
+WHERE name = ?1",
+                    (name,),
                 )?;
                 conn.execute_batch("COMMIT")?;
 
@@ -147,25 +146,25 @@ WHERE name = ?2",
             .conn(move |conn| {
                 conn.execute_batch("BEGIN")?;
 
-                let run_id = conn
-                    .prepare(
-                        "UPDATE job
+                conn.execute(
+                    "UPDATE job
 SET next_run = ?1
-WHERE name = ?2
-RETURNING current_run_id",
-                    )?
-                    .query_row((next_run, job), |row| {
-                        row.get::<_, Option<u32>>("current_run_id")
-                    })?;
+WHERE name = ?2",
+                    (next_run, job.clone()),
+                )?;
 
-                if let Some(run_id) = run_id {
-                    conn.execute(
-                        "UPDATE run
+                conn.execute(
+                    "UPDATE run
 SET ended_at = STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW'), status_code = ?1
-WHERE id = ?2",
-                        (status_code, run_id),
-                    )?;
-                }
+WHERE id = (
+    SELECT id
+    FROM run
+    WHERE job_name = ?2
+    ORDER BY id DESC
+    LIMIT 1
+)",
+                    (status_code, job),
+                )?;
 
                 conn.execute_batch("COMMIT")
             })
@@ -180,13 +179,21 @@ WHERE id = ?2",
             .conn(move |conn| {
                 // Data integrity: incomplete runs are ignored
                 let mut statement = conn.prepare(
-                    "SELECT
-    id, scheduled_at, started_at, ended_at,
-    status_code, attempt, max_attempts, run.id = job.current_run_id AS current
+                    "
+WITH current_run AS (
+  SELECT id
+  FROM run
+  WHERE job_name = ?1 AND ended_at IS NULL
+  ORDER BY id DESC
+  LIMIT 1
+)
+SELECT
+    run.id, scheduled_at, started_at, ended_at,
+    status_code, attempt, max_attempts, run.id = current_run.id AS current
 FROM run
-LEFT JOIN job ON run.job_name = job.name AND run.id = job.current_run_id AND run.ended_at IS NULL
+LEFT JOIN current_run
 WHERE job_name = ?1
-ORDER BY started_at DESC
+ORDER BY run.id DESC
 LIMIT ?2",
                 )?;
                 statement
@@ -254,10 +261,10 @@ WHERE name = ?1 AND port IS NOT NULL",
     /// Attempt to associate the given jobs with the current process, identified by its port
     /// Reacquiring jobs already associated with this port is a noop
     /// This will fail if another process has already acquired the jobs
-    /// Successfully acquiring a job will clear the `current_run_id` of the job. Acquired, running jobs are guaranteed
-    /// to have accurate current run information. Released jobs make no such guarantees, so callers should verify that
-    /// the job is actually running before trusting information from the database about the job's current run.
-    /// Acquired jobs also begin as uninitialized, so the caller should call `initialize_job` shortly thereafter.
+    /// Acquired, running jobs are guaranteed to have accurate current run information. Released jobs make no such
+    /// guarantees, so callers should verify that the job is actually running before trusting information from the
+    /// database about the job's current run. Acquired jobs also begin as uninitialized, so the caller should call
+    /// `initialize_job` shortly thereafter.
     pub async fn acquire_jobs(
         &self,
         jobs: Vec<String>,
@@ -322,7 +329,7 @@ WHERE name IN rarray(?1) AND port IS NOT NULL AND port != ?2",
                 // Whether or not conflicts remain, release any recoverable jobs
                 conn.execute(
                     "UPDATE job
-SET port = NULL, current_run_id = NULL
+SET port = NULL
 WHERE port IN rarray(?1)",
                     (Self::make_rarray(recovered_ports),),
                 )?;
@@ -342,7 +349,7 @@ WHERE port IN rarray(?1)",
 VALUES (?1, ?2)
 ON CONFLICT (name)
     DO UPDATE
-    SET port = ?2, initialized = FALSE, current_run_id = NULL",
+    SET port = ?2, initialized = FALSE",
                 )?;
                 for job in jobs {
                     statement.execute((job, port))?;
@@ -363,7 +370,7 @@ ON CONFLICT (name)
                 // Data integrity: released jobs have no current run
                 conn.execute(
                     "UPDATE job
-SET port = NULL, current_run_id = NULL
+SET port = NULL
 WHERE name IN rarray(?1)",
                     (Self::make_rarray(jobs),),
                 )
@@ -381,7 +388,7 @@ WHERE name IN rarray(?1)",
                 // Data integrity: released jobs have no current run
                 conn.execute(
                     "UPDATE job
-SET port = NULL, current_run_id = NULL
+SET port = NULL
 WHERE port = ?1",
                     (port,),
                 )
@@ -444,7 +451,7 @@ WHERE port IS NOT NULL",
                     // Data integrity: released jobs have no current run
                     conn.execute(
                         "UPDATE job
-SET port = NULL, current_run_id = NULL
+SET port = NULL
 WHERE port IN rarray(?1)",
                         (Self::make_rarray(inactive_ports),),
                     )?;
@@ -452,9 +459,20 @@ WHERE port IN rarray(?1)",
 
                 // Data integrity: incomplete runs, released jobs, uninitialized jobs are ignored
                 let mut statement = conn.prepare(
-                    "SELECT name, command, next_run, run.id = job.current_run_id AS running
+                    "
+WITH current_runs AS (
+    SELECT id, job_name
+    FROM run r
+    WHERE ended_at IS NULL
+    AND id = (
+        SELECT MAX(id)
+        FROM run
+        WHERE job_name = r.job_name
+    )
+)
+SELECT name, command, next_run, current_runs.id IS NOT NULL AS running
 FROM job
-LEFT JOIN run ON run.job_name = job.name AND run.id = job.current_run_id AND run.ended_at IS NULL
+LEFT JOIN current_runs ON current_runs.job_name = job.name
 WHERE port IS NOT NULL AND initialized = TRUE
 ORDER BY name",
                 )?;
@@ -484,7 +502,6 @@ ORDER BY name",
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
     use tokio::test;
 
     use super::*;
@@ -505,18 +522,6 @@ mod tests {
             .await
             .unwrap()
             .id
-    }
-
-    async fn get_current_run_ids(db: &Database) -> Vec<Option<u32>> {
-        db.client
-            .conn(move |conn| {
-                let mut statement = conn.prepare("SELECT current_run_id FROM job")?;
-                statement
-                    .query_map((), |row| row.get::<_, Option<u32>>("current_run_id"))?
-                    .collect::<rusqlite::Result<Vec<_>>>()
-            })
-            .await
-            .unwrap()
     }
 
     fn check_port_active(_: u16) -> bool {
@@ -546,8 +551,20 @@ mod tests {
         db.acquire_jobs(vec![name.clone()], 1000, check_port_active)
             .await
             .unwrap();
-        let run_id = insert_run(&db, name.clone()).await;
-        assert_eq!(get_current_run_ids(&db).await, vec![Some(run_id)]);
+        db.initialize_job(name.clone(), String::new(), Some(&Utc::now()))
+            .await
+            .unwrap();
+        insert_run(&db, name.clone()).await;
+
+        assert_eq!(
+            db.get_active_jobs(check_port_active)
+                .await
+                .unwrap()
+                .first()
+                .unwrap()
+                .next_run,
+            None
+        );
     }
 
     #[test]
@@ -585,9 +602,6 @@ mod tests {
         assert_eq!(run.max_attempts, Some(3));
         // The inserted run is the current run
         assert!(run.current);
-
-        // Ensure that the next started_at is different
-        tokio::time::sleep(Duration::from_millis(1)).await;
 
         db.insert_run(name.clone(), Utc::now().naive_utc(), 1, Some(3))
             .await
@@ -739,8 +753,6 @@ mod tests {
             .unwrap(),
             ReserveResult::Reserved
         );
-        // Test that reacquired jobs' current_run_id is cleared
-        assert_eq!(get_current_run_ids(&db).await, vec![None, None, None]);
     }
 
     #[test]
@@ -779,8 +791,6 @@ mod tests {
                 conflicting_jobs: vec!["job1".to_owned(), "job2".to_owned()]
             }
         );
-        // Test that reclaimed jobs' current_run_id is cleared
-        assert_eq!(get_current_run_ids(&db).await, vec![Some(1), Some(2), None]);
 
         assert_eq!(
             db.acquire_jobs(vec!["job3".to_owned()], 1000, check_port_active)

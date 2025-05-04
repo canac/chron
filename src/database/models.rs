@@ -17,7 +17,7 @@ impl Job {
             next_run: row
                 .get::<_, Option<NaiveDateTime>>("next_run")?
                 .map(|timestamp| Utc.from_utc_datetime(&timestamp)),
-            running: row.get::<_, Option<bool>>("running")?.unwrap_or_default(),
+            running: row.get::<_, bool>("running")?,
         })
     }
 }
