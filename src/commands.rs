@@ -1,10 +1,9 @@
 use crate::chron_service::ChronService;
 use crate::chronfile::Chronfile;
 use crate::cli::{KillArgs, LogsArgs, RunArgs, RunsArgs, StatusArgs};
-use crate::database::{Database, RunStatus};
+use crate::database::{Database, JobStatus, RunStatus};
 use crate::format;
-use crate::http;
-use crate::http::api::JobStatus;
+use crate::http::{self, api};
 use anyhow::{Context, Result, bail};
 use chrono::Local;
 use cli_tables::Table;
@@ -154,14 +153,13 @@ pub async fn jobs(db: Arc<Database>) -> Result<()> {
     let mut table = Table::new();
     table.push_row(&vec!["name", "command", "status"])?;
     for job in jobs {
-        let status = if job.running {
-            "running".to_owned()
-        } else {
-            let next_run = job.next_run.map_or_else(
-                || "never".to_owned(),
-                |next_run| format::relative_date(&next_run.with_timezone(&Local)),
-            );
-            format!("next run {next_run}")
+        let status = match job.status {
+            JobStatus::Running => "running".to_owned(),
+            JobStatus::Waiting(next_run) => {
+                let next_run = next_run.with_timezone(&Local);
+                format!("next run {}", format::relative_date(&next_run))
+            }
+            JobStatus::Completed => "next run never".to_owned(),
         };
         table.push_row_string(&vec![job.name, job.command, status])?;
     }
@@ -180,7 +178,7 @@ pub async fn status(db: Arc<Database>, args: StatusArgs) -> Result<()> {
         .context("Failed to connect to chron server")?;
     validate_response(&job, &res)?;
 
-    let status: JobStatus = res.json().await?;
+    let status: api::JobStatus = res.json().await?;
     println!("command: {}", status.command);
     println!("shell: {}", status.shell);
     if let Some(schedule) = status.schedule.as_ref() {

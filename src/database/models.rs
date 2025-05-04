@@ -5,19 +5,37 @@ use chrono::{DateTime, Duration, Local, NaiveDateTime, TimeZone, Utc};
 pub struct Job {
     pub name: String,
     pub command: String,
-    pub next_run: Option<DateTime<Utc>>,
-    pub running: bool,
+    pub status: JobStatus,
+}
+
+#[cfg_attr(test, derive(Debug, Eq, PartialEq))]
+pub enum JobStatus {
+    /// The job is currently running
+    Running,
+
+    /// The job is waiting for its next run at this timestamp
+    Waiting(DateTime<Utc>),
+
+    /// The job is not running and will not run again
+    Completed,
 }
 
 impl Job {
     pub fn from_row(row: &Row) -> Result<Self> {
+        let running: bool = row.get("running")?;
+        let next_run: Option<NaiveDateTime> = row.get("next_run")?;
+        let status = if running {
+            JobStatus::Running
+        } else {
+            next_run.map_or(JobStatus::Completed, |next_run| {
+                JobStatus::Waiting(Utc.from_utc_datetime(&next_run))
+            })
+        };
+
         Ok(Self {
             name: row.get("name")?,
             command: row.get("command")?,
-            next_run: row
-                .get::<_, Option<NaiveDateTime>>("next_run")?
-                .map(|timestamp| Utc.from_utc_datetime(&timestamp)),
-            running: row.get::<_, bool>("running")?,
+            status,
         })
     }
 }

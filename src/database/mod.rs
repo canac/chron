@@ -1,6 +1,6 @@
 mod models;
 
-pub use self::models::{Checkpoint, Job, Run, RunStatus};
+pub use self::models::{Checkpoint, Job, JobStatus, Run, RunStatus};
 use anyhow::{Context, Result};
 use async_sqlite::rusqlite::{self, OptionalExtension, types::Value, vtab::array::load_module};
 use async_sqlite::{Client, ClientBuilder, JournalMode};
@@ -108,27 +108,15 @@ CREATE TABLE IF NOT EXISTS checkpoint (
         attempt: usize,
         max_attempts: Option<usize>,
     ) -> Result<Run> {
-        // Data integrity: use a transaction to ensure that jobs do not briefly have a null current run even when a
-        // not-yet-terminated run exists
         self.client
             .conn(move |conn| {
-                conn.execute_batch("BEGIN")?;
-                let run = conn.query_row(
+                conn.query_row(
                     "INSERT INTO run (job_name, scheduled_at, attempt, max_attempts)
 VALUES (?1, ?2, ?3, ?4)
 RETURNING *, TRUE as current",
                     (name.clone(), scheduled_at, attempt, max_attempts),
                     Run::from_row,
-                )?;
-                conn.execute(
-                    "UPDATE job
-SET next_run = NULL
-WHERE name = ?1",
-                    (name,),
-                )?;
-                conn.execute_batch("COMMIT")?;
-
-                Ok(run)
+                )
             })
             .await
             .context("Failed to save run to the database")
@@ -411,9 +399,9 @@ WHERE port = ?1",
             .conn(move |conn| {
                 conn.execute(
                     "UPDATE job
-SET command = ?2, next_run = ?3, initialized = TRUE
-WHERE name = ?1",
-                    (name, command, next_run),
+SET command = ?1, next_run = ?2, initialized = TRUE
+WHERE name = ?3",
+                    (command, next_run, name),
                 )
             })
             .await
@@ -551,9 +539,20 @@ mod tests {
         db.acquire_jobs(vec![name.clone()], 1000, check_port_active)
             .await
             .unwrap();
-        db.initialize_job(name.clone(), String::new(), Some(&Utc::now()))
+        let next_run = Utc::now();
+        db.initialize_job(name.clone(), String::new(), Some(&next_run))
             .await
             .unwrap();
+        assert_eq!(
+            db.get_active_jobs(check_port_active)
+                .await
+                .unwrap()
+                .first()
+                .unwrap()
+                .status,
+            JobStatus::Waiting(next_run),
+        );
+
         insert_run(&db, name.clone()).await;
 
         assert_eq!(
@@ -562,8 +561,8 @@ mod tests {
                 .unwrap()
                 .first()
                 .unwrap()
-                .next_run,
-            None
+                .status,
+            JobStatus::Running,
         );
     }
 
@@ -574,6 +573,9 @@ mod tests {
         db.acquire_jobs(vec![name.clone()], 1000, check_port_active)
             .await
             .unwrap();
+        db.initialize_job(name.clone(), String::new(), None)
+            .await
+            .unwrap();
         insert_run(&db, name.clone()).await;
         db.complete_run(name.clone(), Some(0), None).await.unwrap();
 
@@ -582,6 +584,16 @@ mod tests {
         assert!(run.ended_at.is_some());
         assert_eq!(run.status_code, Some(0));
         assert!(!run.current);
+
+        assert_eq!(
+            db.get_active_jobs(check_port_active)
+                .await
+                .unwrap()
+                .first()
+                .unwrap()
+                .status,
+            JobStatus::Completed,
+        );
     }
 
     #[test]
@@ -722,8 +734,7 @@ mod tests {
             vec![Job {
                 name: "job1".to_owned(),
                 command: "echo Hello".to_owned(),
-                next_run: None,
-                running: false,
+                status: JobStatus::Completed,
             }]
         );
     }
@@ -978,23 +989,25 @@ mod tests {
 
         initialize_job(&db, "job1".to_owned()).await;
         // The job should not be running because it does not have an active run yet
-        assert!(
-            !db.get_active_jobs(check_port_active)
-                .await
-                .unwrap()
-                .first()
-                .unwrap()
-                .running
-        );
-
-        insert_run(&db, "job1".to_owned()).await;
-        assert!(
+        assert_eq!(
             db.get_active_jobs(check_port_active)
                 .await
                 .unwrap()
                 .first()
                 .unwrap()
-                .running
+                .status,
+            JobStatus::Completed,
+        );
+
+        insert_run(&db, "job1".to_owned()).await;
+        assert_eq!(
+            db.get_active_jobs(check_port_active)
+                .await
+                .unwrap()
+                .first()
+                .unwrap()
+                .status,
+            JobStatus::Running,
         );
     }
 }
