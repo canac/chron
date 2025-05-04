@@ -524,6 +524,22 @@ mod tests {
     }
 
     #[test]
+    async fn test_insert_run() {
+        let db = open_db().await;
+        let name = "job".to_owned();
+        db.acquire_jobs(vec![name.clone()], 1000, check_port_active)
+            .await
+            .unwrap();
+        insert_run(&db, name.clone()).await;
+
+        let runs = db.get_last_runs(name, 1).await.unwrap();
+        let run = runs.first().unwrap();
+        assert_eq!(run.ended_at, None);
+        assert_eq!(run.status_code, None);
+        assert!(run.current);
+    }
+
+    #[test]
     async fn test_insert_run_updates_job() {
         let db = open_db().await;
         let name = "job".to_owned();
@@ -532,6 +548,23 @@ mod tests {
             .unwrap();
         let run_id = insert_run(&db, name.clone()).await;
         assert_eq!(get_current_run_ids(&db).await, vec![Some(run_id)]);
+    }
+
+    #[test]
+    async fn test_complete_run() {
+        let db = open_db().await;
+        let name = "job".to_owned();
+        db.acquire_jobs(vec![name.clone()], 1000, check_port_active)
+            .await
+            .unwrap();
+        insert_run(&db, name.clone()).await;
+        db.complete_run(name.clone(), Some(0), None).await.unwrap();
+
+        let runs = db.get_last_runs(name, 1).await.unwrap();
+        let run = runs.first().unwrap();
+        assert!(run.ended_at.is_some());
+        assert_eq!(run.status_code, Some(0));
+        assert!(!run.current);
     }
 
     #[test]
