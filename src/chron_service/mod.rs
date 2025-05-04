@@ -1,9 +1,10 @@
+mod attempt;
 mod exec;
 mod scheduled_job;
 mod sleep;
 mod working_dir;
 
-use self::exec::{ExecStatus, exec_command};
+use self::exec::exec_command;
 use self::scheduled_job::ScheduledJob;
 use self::sleep::sleep_until;
 use self::working_dir::expand_working_dir;
@@ -43,26 +44,6 @@ pub struct RetryConfig {
     pub successes: bool,
     pub limit: Option<usize>,
     pub delay: Option<Duration>,
-}
-
-impl RetryConfig {
-    /// Determine whether a command with a certain status and a certain number of previous attempts should be retried
-    fn should_retry(&self, exec_status: ExecStatus, attempt: usize) -> bool {
-        (match exec_status {
-            ExecStatus::Failure => self.failures,
-            ExecStatus::Success => self.successes,
-        } && self.limit.is_none_or(|limit| attempt < limit))
-    }
-
-    /// Given a command that completed with a certain status after a certain number of attempts, determine when its next
-    /// attempt should be made, if any
-    fn next_attempt(&self, exec_status: ExecStatus, attempt: usize) -> Option<DateTime<Utc>> {
-        if self.should_retry(exec_status, attempt) {
-            Some(Utc::now() + self.delay.unwrap_or_default())
-        } else {
-            None
-        }
-    }
 }
 
 #[derive(Eq, PartialEq)]
@@ -538,58 +519,6 @@ impl ChronService {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_should_retry() {
-        let no_retries = RetryConfig {
-            failures: false,
-            successes: false,
-            limit: None,
-            delay: None,
-        };
-        let only_failures = RetryConfig {
-            failures: true,
-            successes: false,
-            limit: None,
-            delay: None,
-        };
-        let only_success = RetryConfig {
-            failures: false,
-            successes: true,
-            limit: None,
-            delay: None,
-        };
-        let limited_retries = RetryConfig {
-            failures: true,
-            successes: true,
-            limit: Some(2),
-            delay: None,
-        };
-        let unlimited_retries = RetryConfig {
-            failures: true,
-            successes: true,
-            limit: None,
-            delay: None,
-        };
-
-        assert!(!no_retries.should_retry(ExecStatus::Success, 0));
-        assert!(!no_retries.should_retry(ExecStatus::Failure, 0));
-
-        assert!(!only_failures.should_retry(ExecStatus::Success, 0));
-        assert!(only_failures.should_retry(ExecStatus::Failure, 0));
-
-        assert!(only_success.should_retry(ExecStatus::Success, 0));
-        assert!(!only_success.should_retry(ExecStatus::Failure, 0));
-
-        assert!(limited_retries.should_retry(ExecStatus::Success, 0));
-        assert!(limited_retries.should_retry(ExecStatus::Success, 1));
-        assert!(!limited_retries.should_retry(ExecStatus::Success, 2));
-
-        assert!(unlimited_retries.should_retry(ExecStatus::Success, 0));
-        assert!(unlimited_retries.should_retry(ExecStatus::Success, 1000));
-        assert!(unlimited_retries.should_retry(ExecStatus::Success, 1_000_000));
-        assert!(unlimited_retries.should_retry(ExecStatus::Success, usize::MAX));
-    }
 
     #[test]
     fn test_validate_name() {

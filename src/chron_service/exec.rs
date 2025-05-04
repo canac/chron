@@ -1,3 +1,4 @@
+use super::attempt::Attempt;
 use super::sleep::sleep_until;
 use super::{Job, RetryConfig};
 use crate::chron_service::Process;
@@ -11,17 +12,6 @@ use std::sync::Arc;
 use tokio::fs::{OpenOptions, create_dir_all};
 use tokio::process::Command;
 use tokio::sync::oneshot::channel;
-
-pub struct Metadata<'t> {
-    pub scheduled_time: &'t DateTime<Utc>,
-    pub attempt: usize,
-}
-
-#[derive(Clone, Copy)]
-pub enum ExecStatus {
-    Success,
-    Failure,
-}
 
 /// Create a mailbox message indicating that the job failed
 async fn write_mailbox_message(name: &str, code: i32) -> Result<()> {
@@ -47,7 +37,7 @@ async fn exec_command_once(
     db: &Arc<Database>,
     job: &Arc<Job>,
     retry_config: &RetryConfig,
-    metadata: &Metadata<'_>,
+    attempt: &Attempt<'_>,
 ) -> Result<Option<DateTime<Utc>>> {
     let name = job.name.clone();
     info!(
@@ -64,8 +54,8 @@ async fn exec_command_once(
     let run = db
         .insert_run(
             name.clone(),
-            metadata.scheduled_time.naive_utc(),
-            metadata.attempt,
+            attempt.scheduled_time.naive_utc(),
+            attempt.attempt,
             retry_config.limit,
         )
         .await?;
@@ -124,13 +114,9 @@ async fn exec_command_once(
             (status?.code(), false)
         }
     };
-    let exit_status: ExecStatus = match status_code {
-        Some(0) => ExecStatus::Success,
-        _ => ExecStatus::Failure,
-    };
 
     // Update the run status code in the database
-    let next_attempt = retry_config.next_attempt(exit_status, metadata.attempt);
+    let next_attempt = attempt.next_attempt(status_code, retry_config);
     *job.next_attempt.write().await = next_attempt;
     let next_scheduled_run = job.next_scheduled_run().await;
     db.complete_run(
@@ -178,11 +164,11 @@ pub async fn exec_command(
             debug!("{name}: retry attempt {attempt} of {num_attempts}");
         }
 
-        let metadata = Metadata {
+        let attempt = Attempt {
             scheduled_time,
             attempt,
         };
-        let next_attempt = exec_command_once(db, job, retry_config, &metadata).await?;
+        let next_attempt = exec_command_once(db, job, retry_config, &attempt).await?;
         match next_attempt {
             // Wait until the next attempt before looping again
             Some(next_attempt) => sleep_until(next_attempt).await,
