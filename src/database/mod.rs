@@ -2,11 +2,13 @@ mod models;
 
 pub use self::models::{Checkpoint, Job, JobStatus, Run, RunStatus};
 use anyhow::{Context, Result};
+use async_sqlite::rusqlite::Connection;
 use async_sqlite::rusqlite::{self, OptionalExtension, types::Value, vtab::array::load_module};
 use async_sqlite::{Client, ClientBuilder, JournalMode};
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use log::info;
 use std::collections::HashSet;
+use std::iter::once;
 use std::path::Path;
 use std::rc::Rc;
 
@@ -66,6 +68,7 @@ CREATE TABLE IF NOT EXISTS job (
 CREATE TABLE IF NOT EXISTS run (
   id INTEGER PRIMARY KEY NOT NULL,
   job_name VARCHAR NOT NULL REFERENCES job(name),
+  running BOOLEAN NOT NULL DEFAULT TRUE,
   scheduled_at DATETIME NOT NULL,
   started_at DATETIME NOT NULL DEFAULT (STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW')),
   ended_at DATETIME,
@@ -143,13 +146,11 @@ WHERE name = ?2",
 
                 conn.execute(
                     "UPDATE run
-SET ended_at = STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW'), status_code = ?1
+SET running = FALSE, ended_at = STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW'), status_code = ?1
 WHERE id = (
-    SELECT id
+    SELECT MAX(id)
     FROM run
-    WHERE job_name = ?2
-    ORDER BY id DESC
-    LIMIT 1
+    WHERE job_name = ?2 AND running = TRUE
 )",
                     (status_code, job),
                 )?;
@@ -162,18 +163,16 @@ WHERE id = (
     }
 
     /// Read the last runs of a job
+    /// Data integrity: forcefully terminated runs will still appear as running until the job is acquired again
     pub async fn get_last_runs(&self, name: String, count: u64) -> Result<Vec<Run>> {
         self.client
             .conn(move |conn| {
-                // Data integrity: incomplete runs are ignored
                 let mut statement = conn.prepare(
                     "
 WITH current_run AS (
-  SELECT id
-  FROM run
-  WHERE job_name = ?1 AND ended_at IS NULL
-  ORDER BY id DESC
-  LIMIT 1
+    SELECT MAX(id) as id
+    FROM run
+    WHERE job_name = ?1 AND running = TRUE
 )
 SELECT
     run.id, scheduled_at, started_at, ended_at,
@@ -315,12 +314,7 @@ WHERE name IN rarray(?1) AND port IS NOT NULL AND port != ?2",
                 }
 
                 // Whether or not conflicts remain, release any recoverable jobs
-                conn.execute(
-                    "UPDATE job
-SET port = NULL
-WHERE port IN rarray(?1)",
-                    (Self::make_rarray(recovered_ports),),
-                )?;
+                Self::release_by_ports(conn, recovered_ports)?;
 
                 if !conflicting_jobs.is_empty() {
                     conn.execute_batch("COMMIT")?;
@@ -354,15 +348,7 @@ ON CONFLICT (name)
     /// Release previously acquired jobs
     pub async fn release_jobs(&self, jobs: Vec<String>) -> Result<()> {
         self.client
-            .conn(move |conn| {
-                // Data integrity: released jobs have no current run
-                conn.execute(
-                    "UPDATE job
-SET port = NULL
-WHERE name IN rarray(?1)",
-                    (Self::make_rarray(jobs),),
-                )
-            })
+            .conn(move |conn| Self::release_by_names(conn, jobs))
             .await
             .context("Failed to release jobs by name in the database")?;
 
@@ -372,15 +358,7 @@ WHERE name IN rarray(?1)",
     /// Release all previously acquired jobs associated with a port
     pub async fn release_port(&self, port: u16) -> Result<()> {
         self.client
-            .conn(move |conn| {
-                // Data integrity: released jobs have no current run
-                conn.execute(
-                    "UPDATE job
-SET port = NULL
-WHERE port = ?1",
-                    (port,),
-                )
-            })
+            .conn(move |conn| Self::release_by_ports(conn, once(port)))
             .await
             .context("Failed to release jobs by port in the database")?;
 
@@ -436,7 +414,6 @@ WHERE port IS NOT NULL",
                     .filter(|port| !check_port_active(*port))
                     .collect::<Vec<_>>();
                 if !inactive_ports.is_empty() {
-                    // Data integrity: released jobs have no current run
                     conn.execute(
                         "UPDATE job
 SET port = NULL
@@ -445,13 +422,13 @@ WHERE port IN rarray(?1)",
                     )?;
                 }
 
-                // Data integrity: incomplete runs, released jobs, uninitialized jobs are ignored
+                // Data integrity: released and uninitialized jobs are ignored
                 let mut statement = conn.prepare(
                     "
 WITH current_runs AS (
     SELECT id, job_name
     FROM run r
-    WHERE ended_at IS NULL
+    WHERE running = TRUE
     AND id = (
         SELECT MAX(id)
         FROM run
@@ -476,6 +453,53 @@ ORDER BY name",
             .context("Failed to release jobs by port in the database")?;
 
         Ok(jobs)
+    }
+
+    /// Release the jobs with the given names
+    /// Data integrity: released jobs have no running runs
+    fn release_by_names(conn: &Connection, jobs: Vec<String>) -> rusqlite::Result<()> {
+        let jobs = Self::make_rarray(jobs);
+        conn.execute(
+            "UPDATE job
+SET port = NULL
+WHERE name IN rarray(?1)",
+            (Rc::clone(&jobs),),
+        )?;
+
+        conn.execute(
+            "UPDATE run
+SET running = FALSE
+WHERE job_name IN rarray(?1)",
+            (jobs,),
+        )?;
+
+        Ok(())
+    }
+
+    /// Release the jobs associated with any of the given ports
+    /// Data integrity: released jobs have no running runs
+    fn release_by_ports<I>(conn: &Connection, ports: I) -> rusqlite::Result<()>
+    where
+        I: IntoIterator<Item = u16>,
+    {
+        let jobs = conn
+            .prepare(
+                "UPDATE job
+SET port = NULL
+WHERE port IN rarray(?1)
+RETURNING name",
+            )?
+            .query_map((Self::make_rarray(ports),), |row| row.get("name"))?
+            .collect::<rusqlite::Result<Vec<String>>>()?;
+
+        conn.execute(
+            "UPDATE run
+SET running = FALSE
+WHERE job_name IN rarray(?1)",
+            (Self::make_rarray(jobs),),
+        )?;
+
+        Ok(())
     }
 
     /// Convert an iterator into an rarray
@@ -633,6 +657,21 @@ mod tests {
         assert_eq!(run.status_code, Some(0));
         // The completed run is not the current run
         assert!(!run.current);
+    }
+
+    #[test]
+    async fn test_get_last_runs_incomplete_run() {
+        let db = open_db().await;
+        let name = "job".to_owned();
+        db.acquire_jobs(vec![name.clone()], 1000, check_port_active)
+            .await
+            .unwrap();
+        insert_run(&db, name.clone()).await;
+        // Release the job without completing the run
+        db.release_jobs(vec![name.clone()]).await.unwrap();
+
+        let runs = db.get_last_runs(name.clone(), 1).await.unwrap();
+        assert_eq!(runs[0].status(), RunStatus::Terminated);
     }
 
     #[test]
