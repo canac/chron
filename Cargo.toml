@@ -9,7 +9,7 @@ edition = "2024"
 actix-web = { version = "4.0.1", default-features = false, features = ["compress-brotli", "macros"] }
 async-sqlite = { version = "0.5.0", features = ["array", "chrono"] }
 anyhow = "1.0.56"
-askama = { version = "0.12.1", default-features = false }
+askama = { version = "0.14.0", features = ["derive"] }
 chrono = { version = "0.4.19", default-features = false }
 chrono-humanize = "0.2.2"
 clap = { version = "4.1.6", features = ["derive", "env"] }

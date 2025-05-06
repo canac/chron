@@ -22,7 +22,7 @@
           </tr>
         </thead>
         <tbody>
-          {% for JobInfo { name, command, shell, status, working_dir, run_id, schedule, next_run, log_dir } in jobs %}
+          {% for JobInfo { name, command, status, working_dir, next_run, .. } in jobs %}
           <tr>
             <td class="name">
               <a href="/job/{{ name }}">{{ name }}</a>
@@ -38,7 +38,7 @@
                 <span class="secondary">(pid {{ pid }})</span>
                 {% else %}
                 <span class="status-text">not running</span>
-                <span class="secondary">(next run {% if let Some(next_run) = next_run %}<span aria-label="{{ next_run|date }}" data-balloon-pos="down-right">{{ next_run|relative_date }}</span>{% else %}never{% endif %})</span>
+                <span class="secondary">(next run {% if let Some(next_run) = next_run %}<span aria-label="{{ next_run | date }}" data-balloon-pos="down-right">{{ next_run | relative_date }}</span>{% else %}never{% endif %})</span>
                 {% endmatch %}
               </a>
             </td>
