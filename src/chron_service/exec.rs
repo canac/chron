@@ -4,7 +4,7 @@ use super::{Job, RetryConfig};
 use crate::chron_service::Process;
 use crate::database::Database;
 use crate::result_ext::ResultExt;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Utc};
 use log::{debug, info, warn};
 use std::process::Stdio;
@@ -87,6 +87,12 @@ async fn exec_command_once(
     let mut process = command
         .spawn()
         .with_context(|| format!("Failed to run command {}", job.command))?;
+
+    // Link the process to the database run
+    let pid = process
+        .id()
+        .ok_or_else(|| anyhow!("Process has already exited"))?;
+    db.set_run_pid(name.clone(), pid).await?;
 
     let (tx_terminate, rx_terminate) = channel();
     let (tx_terminated, rx_terminated) = channel();

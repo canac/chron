@@ -1,3 +1,4 @@
+use anyhow::{anyhow, bail};
 use async_sqlite::rusqlite::{Result, Row};
 use chrono::{DateTime, Duration, Local, NaiveDateTime, TimeZone, Utc};
 
@@ -63,7 +64,7 @@ impl Checkpoint {
 
 #[cfg_attr(test, derive(Debug, Eq, PartialEq))]
 pub enum RunStatus {
-    Running,
+    Running { pid: u32 },
     Completed { status_code: i32 },
     Terminated,
 }
@@ -74,10 +75,12 @@ pub struct Run {
     pub scheduled_at: NaiveDateTime,
     pub started_at: NaiveDateTime,
     pub ended_at: Option<NaiveDateTime>,
-    pub status_code: Option<i32>,
     pub attempt: usize,
     pub max_attempts: Option<usize>,
-    pub current: bool,
+
+    state: String,
+    pub status_code: Option<i32>,
+    pid: Option<u32>,
 }
 
 impl Run {
@@ -91,20 +94,27 @@ impl Run {
             status_code: row.get("status_code")?,
             attempt: row.get("attempt")?,
             max_attempts: row.get("max_attempts")?,
-            current: row.get::<_, Option<bool>>("current")?.unwrap_or_default(),
+            state: row.get("state")?,
+            pid: row.get("pid")?,
         })
     }
 
     /// Return the run's status
-    pub fn status(&self) -> RunStatus {
-        if self.current {
-            RunStatus::Running
-        } else {
-            self.status_code
+    pub fn status(&self) -> anyhow::Result<RunStatus> {
+        Ok(match self.state.as_str() {
+            "waiting" => bail!("Run is not running"),
+            "running" => RunStatus::Running {
+                pid: self
+                    .pid
+                    .ok_or_else(|| anyhow!("Run is running but has no pid"))?,
+            },
+            "completed" => self
+                .status_code
                 .map_or(RunStatus::Terminated, |status_code| RunStatus::Completed {
                     status_code,
-                })
-        }
+                }),
+            _ => bail!("Run is in an unknown state: {}", self.state),
+        })
     }
 
     /// Return the run's start time
@@ -114,7 +124,8 @@ impl Run {
 
     /// Return the run's current elapsed execution time
     pub fn execution_time(&self) -> Option<Duration> {
-        let ended_at = if self.current {
+        let status = self.status().ok()?;
+        let ended_at = if matches!(status, RunStatus::Running { .. }) {
             Some(Local::now())
         } else {
             self.ended_at

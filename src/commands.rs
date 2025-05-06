@@ -209,10 +209,10 @@ pub async fn runs(db: Arc<Database>, args: RunsArgs) -> Result<()> {
     }
 
     let mut table = Table::new();
-    table.push_row(&vec!["time", "execution time", "status code"])?;
+    table.push_row(&vec!["time", "execution time", "status"])?;
     for run in runs {
-        let status = match run.status() {
-            RunStatus::Running => "running".to_owned(),
+        let status = match run.status()? {
+            RunStatus::Running { pid } => format!("running (pid {pid})"),
             RunStatus::Completed { status_code } => status_code.to_string(),
             RunStatus::Terminated => "terminated".to_owned(),
         };
