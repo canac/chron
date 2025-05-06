@@ -6,7 +6,7 @@ mod job_info;
 use self::http_error::HttpError;
 use self::job_info::JobInfo;
 use crate::chron_service::{ChronService, ProcessStatus};
-use crate::database::{self, Database};
+use crate::database::{Database, Run, RunStatus};
 use actix_web::dev::Server;
 use actix_web::middleware::DefaultHeaders;
 use actix_web::web::{Data, Json, Path};
@@ -69,20 +69,12 @@ async fn index_handler(data: AppData) -> Result<impl Responder> {
         ))
 }
 
-enum RunStatus {
-    Running,
-    Completed { success: bool, status_code: i32 },
-    Terminated,
-}
-
 struct RunInfo {
-    run_id: u32,
+    run: Run,
     timestamp: DateTime<Local>,
     late: Duration,
-    execution_time: Option<Duration>,
     status: RunStatus,
     log_file: PathBuf,
-    attempt: String,
 }
 
 #[derive(Template)]
@@ -108,29 +100,13 @@ async fn job_handler(name: Path<String>, data: AppData) -> Result<impl Responder
         .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?
         .into_iter()
         .map(|run| {
-            let status = match run.status()? {
-                database::RunStatus::Running { .. } => RunStatus::Running,
-                database::RunStatus::Completed { status_code, .. } => RunStatus::Completed {
-                    status_code,
-                    success: status_code == 0,
-                },
-                database::RunStatus::Terminated => RunStatus::Terminated,
-            };
             let started_at = Local.from_utc_datetime(&run.started_at);
             Ok(RunInfo {
-                run_id: run.id,
                 timestamp: started_at,
                 late: started_at.signed_duration_since(Local.from_utc_datetime(&run.scheduled_at)),
-                execution_time: run.execution_time(),
-                status,
+                status: run.status()?,
                 log_file: job.log_dir.join(format!("{}.log", run.id)),
-                attempt: format!(
-                    "{}{}",
-                    run.attempt + 1,
-                    run.max_attempts
-                        .map(|max_attempts| format!(" of {}", max_attempts + 1))
-                        .unwrap_or_default()
-                ),
+                run,
             })
         })
         .collect::<anyhow::Result<_>>()

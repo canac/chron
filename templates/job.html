@@ -77,7 +77,7 @@
           </tr>
         </thead>
         <tbody>
-          {% for RunInfo { run_id, timestamp, late, execution_time, status, log_file, attempt } in runs %}
+          {% for RunInfo { run, timestamp, late, status, log_file } in runs %}
           <tr>
             <td class="timestamp">
               <span aria-label="{{ timestamp | date }}" data-balloon-pos="down-left">
@@ -86,23 +86,26 @@
               </span>
             </td>
             <td class="execution-time">
-              {% if let Some(execution_time) = execution_time %}
+              {% if let Some(execution_time) = run.execution_time() %}
                 {{ execution_time | duration }}
               {% endif %}
             </td>
             {% match status %}
-            {% when RunStatus::Running %}
+            {% when RunStatus::Running with { .. } %}
             <td class="status-code running">running</td>
-            {% when RunStatus::Completed with { success, status_code } %}
-            <td class="status-code {% if success %}success{% else %}failure{% endif %}">{{ status_code }}</td>
+            {% when RunStatus::Completed with { status_code, .. } %}
+            <td class="status-code {% if *status_code == 0 %}success{% else %}failure{% endif %}">{{ status_code }}</td>
             {% when RunStatus::Terminated %}
             <td class="status-code failure">terminated</td>
             {% endmatch %}
             <td class="log-file">
-              <a href="/job/{{ job.name }}/logs/{{ run_id }}" aria-label="{{ log_file.to_string_lossy() }}" data-balloon-pos="down-right">logs</a>
+              <a href="/job/{{ job.name }}/logs/{{ run.id }}" aria-label="{{ log_file.to_string_lossy() }}" data-balloon-pos="down-right">logs</a>
             </td>
             <td class="attempt">
-              {{ attempt }}
+              {{ run.attempt + 1 }}
+              {% if let Some(max_attempts) = run.max_attempts %}
+                of {{ max_attempts + 1 }}
+              {% endif %}
             </td>
           </tr>
           {% endfor %}
