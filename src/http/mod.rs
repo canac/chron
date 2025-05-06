@@ -6,7 +6,7 @@ mod job_info;
 use self::http_error::HttpError;
 use self::job_info::JobInfo;
 use crate::chron_service::{ChronService, ProcessStatus};
-use crate::database::Database;
+use crate::database::{self, Database};
 use actix_web::dev::Server;
 use actix_web::middleware::DefaultHeaders;
 use actix_web::web::{Data, Json, Path};
@@ -108,33 +108,20 @@ async fn job_handler(name: Path<String>, data: AppData) -> Result<impl Responder
         .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?
         .into_iter()
         .map(|run| {
-            // If the job is currently running, the run in the database will have a status of None,
-            // which is indistinguishable from a run that terminated without a status code. To be
-            // able to show that the current run is running in the runs table, we need to look for a
-            // run matching the jobs run_id. If one is found, it is considered to be running.
-            let status = if job.run_id == Some(run.id) {
-                RunStatus::Running
-            } else if let Some(status_code) = run.status_code {
-                RunStatus::Completed {
-                    success: status_code == 0,
+            let status = match run.status()? {
+                database::RunStatus::Running { .. } => RunStatus::Running,
+                database::RunStatus::Completed { status_code, .. } => RunStatus::Completed {
                     status_code,
-                }
-            } else {
-                RunStatus::Terminated
+                    success: status_code == 0,
+                },
+                database::RunStatus::Terminated => RunStatus::Terminated,
             };
             let started_at = Local.from_utc_datetime(&run.started_at);
-            // If the job is currently running, ended_at will not be set
-            let ended_at = match status {
-                RunStatus::Running => Some(Local::now()),
-                _ => run
-                    .ended_at
-                    .map(|timestamp| Local.from_utc_datetime(&timestamp)),
-            };
-            RunInfo {
+            Ok(RunInfo {
                 run_id: run.id,
                 timestamp: started_at,
                 late: started_at.signed_duration_since(Local.from_utc_datetime(&run.scheduled_at)),
-                execution_time: ended_at.map(|ended_at| ended_at.signed_duration_since(started_at)),
+                execution_time: run.execution_time(),
                 status,
                 log_file: job.log_dir.join(format!("{}.log", run.id)),
                 attempt: format!(
@@ -144,9 +131,10 @@ async fn job_handler(name: Path<String>, data: AppData) -> Result<impl Responder
                         .map(|max_attempts| format!(" of {}", max_attempts + 1))
                         .unwrap_or_default()
                 ),
-            }
+            })
         })
-        .collect();
+        .collect::<anyhow::Result<_>>()
+        .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?;
     drop(data_guard);
 
     let template = JobTemplate { job, runs };

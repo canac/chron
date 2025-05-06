@@ -64,8 +64,13 @@ impl Checkpoint {
 
 #[cfg_attr(test, derive(Debug, Eq, PartialEq))]
 pub enum RunStatus {
-    Running { pid: u32 },
-    Completed { status_code: i32 },
+    Running {
+        pid: u32,
+    },
+    Completed {
+        status_code: i32,
+        ended_at: NaiveDateTime,
+    },
     Terminated,
 }
 
@@ -74,12 +79,12 @@ pub struct Run {
     pub id: u32,
     pub scheduled_at: NaiveDateTime,
     pub started_at: NaiveDateTime,
-    pub ended_at: Option<NaiveDateTime>,
     pub attempt: usize,
     pub max_attempts: Option<usize>,
 
     state: String,
-    pub status_code: Option<i32>,
+    status_code: Option<i32>,
+    ended_at: Option<NaiveDateTime>,
     pid: Option<u32>,
 }
 
@@ -108,11 +113,13 @@ impl Run {
                     .pid
                     .ok_or_else(|| anyhow!("Run is running but has no pid"))?,
             },
-            "completed" => self
-                .status_code
-                .map_or(RunStatus::Terminated, |status_code| RunStatus::Completed {
+            "completed" => match (self.status_code, self.ended_at) {
+                (Some(status_code), Some(ended_at)) => RunStatus::Completed {
                     status_code,
-                }),
+                    ended_at,
+                },
+                _ => RunStatus::Terminated,
+            },
             _ => bail!("Run is in an unknown state: {}", self.state),
         })
     }
@@ -124,13 +131,11 @@ impl Run {
 
     /// Return the run's current elapsed execution time
     pub fn execution_time(&self) -> Option<Duration> {
-        let status = self.status().ok()?;
-        let ended_at = if matches!(status, RunStatus::Running { .. }) {
-            Some(Local::now())
-        } else {
-            self.ended_at
-                .map(|timestamp| Local.from_utc_datetime(&timestamp))
+        let ended_at = match self.status().ok()? {
+            RunStatus::Running { .. } => Local::now(),
+            RunStatus::Completed { ended_at, .. } => Local.from_utc_datetime(&ended_at),
+            RunStatus::Terminated => return None,
         };
-        ended_at.map(|ended_at| ended_at.signed_duration_since(self.started_at()))
+        Some(ended_at.signed_duration_since(self.started_at()))
     }
 }

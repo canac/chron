@@ -528,6 +528,7 @@ WHERE job_name IN rarray(?1)",
 
 #[cfg(test)]
 mod tests {
+    use assert_matches::assert_matches;
     use tokio::test;
 
     use super::*;
@@ -568,7 +569,6 @@ mod tests {
 
         let runs = db.get_last_runs(name, 1).await.unwrap();
         let run = runs.first().unwrap();
-        assert_eq!(run.ended_at, None);
         assert_eq!(run.status().unwrap(), RunStatus::Running { pid: 0 });
     }
 
@@ -621,10 +621,9 @@ mod tests {
 
         let runs = db.get_last_runs(name, 1).await.unwrap();
         let run = runs.first().unwrap();
-        assert!(run.ended_at.is_some());
-        assert_eq!(
+        assert_matches!(
             run.status().unwrap(),
-            RunStatus::Completed { status_code: 0 },
+            RunStatus::Completed { status_code: 0, .. }
         );
 
         assert_eq!(
@@ -675,9 +674,9 @@ mod tests {
         assert_eq!(runs[1].id, 1);
         // The newly-inserted run is the current run and the old insert run is not the current
         assert_eq!(runs[0].status().unwrap(), RunStatus::Running { pid: 1 });
-        assert_eq!(
+        assert_matches!(
             runs[1].status().unwrap(),
-            RunStatus::Completed { status_code: 0 },
+            RunStatus::Completed { status_code: 0, .. }
         );
 
         db.complete_run(name.clone(), None, None).await.unwrap();

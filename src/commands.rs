@@ -213,7 +213,7 @@ pub async fn runs(db: Arc<Database>, args: RunsArgs) -> Result<()> {
     for run in runs {
         let status = match run.status()? {
             RunStatus::Running { pid } => format!("running (pid {pid})"),
-            RunStatus::Completed { status_code } => status_code.to_string(),
+            RunStatus::Completed { status_code, .. } => status_code.to_string(),
             RunStatus::Terminated => "terminated".to_owned(),
         };
         table.push_row_string(&vec![
