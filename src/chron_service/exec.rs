@@ -63,14 +63,14 @@ async fn exec_command_once(
     // Open the log file, creating the directory if necessary
     create_dir_all(&job.log_dir)
         .await
-        .with_context(|| format!("Failed to create log dir {:?}", job.log_dir))?;
+        .with_context(|| format!("Failed to create log dir {}", job.log_dir.display()))?;
     let log_path = job.log_dir.join(format!("{}.log", run.id));
     let log_file = OpenOptions::new()
         .create(true)
         .append(true)
         .open(&log_path)
         .await
-        .with_context(|| format!("Failed to open log file {log_path:?}"))?
+        .with_context(|| format!("Failed to open log file {}", log_path.display()))?
         .into_std()
         .await;
 

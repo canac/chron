@@ -30,9 +30,9 @@ impl Chronfile {
     pub async fn load(path: &PathBuf) -> Result<Self> {
         let toml_str = read_to_string(path)
             .await
-            .with_context(|| format!("Failed to read chronfile {path:?}"))?;
+            .with_context(|| format!("Failed to read chronfile {}", path.display()))?;
         toml::from_str(&toml_str)
-            .with_context(|| format!("Failed to deserialize TOML chronfile {path:?}"))
+            .with_context(|| format!("Failed to deserialize TOML chronfile {}", path.display()))
     }
 }
 

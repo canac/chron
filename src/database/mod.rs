@@ -44,7 +44,7 @@ impl Database {
             .journal_mode(JournalMode::Wal)
             .open()
             .await
-            .with_context(|| format!("Failed to open SQLite database {db_path:?}"))?;
+            .with_context(|| format!("Failed to open SQLite database {}", db_path.display()))?;
 
         let db = Self { client };
         db.init().await?;
