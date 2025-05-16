@@ -3,6 +3,15 @@ use chrono::{DateTime, Local, Timelike, Utc};
 use cron::Schedule;
 use std::time::Duration;
 
+#[cfg_attr(test, derive(Debug, Eq, PartialEq))]
+pub struct ElapsedRuns {
+    /// The oldest (i.e. furthest in the past) elapsed run
+    pub oldest: DateTime<Utc>,
+
+    /// The newest (i.e. closest to the present) elapsed run
+    pub newest: DateTime<Utc>,
+}
+
 // Tracks when a job should run over time based on its schedule
 // The schedule is interpreted in local time, but all ScheduledJob methods
 // return Utc times
@@ -50,8 +59,8 @@ impl ScheduledJob {
             .map(std::convert::Into::into)
     }
 
-    /// Tick and return the oldest and newest elapsed runs since the last tick, if any
-    pub fn tick(&mut self, now: DateTime<Utc>) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
+    /// Tick and return the elapsed runs since the last tick, if any
+    pub fn tick(&mut self, now: DateTime<Utc>) -> Option<ElapsedRuns> {
         let last_tick = self.last_tick;
         self.last_tick = now;
 
@@ -68,7 +77,10 @@ impl ScheduledJob {
             .take_while(|run| run > &last_tick);
 
         let newest = iter.next().map(std::convert::Into::into);
-        newest.map(|newest| (iter.last().map_or(newest, std::convert::Into::into), newest))
+        newest.map(|newest| ElapsedRuns {
+            oldest: iter.last().map_or(newest, std::convert::Into::into),
+            newest,
+        })
     }
 
     /// Calculate the estimated duration between the last run and the next run
@@ -154,7 +166,10 @@ mod tests {
         assert_eq!(
             job.tick(scheduled_time.with_nanosecond(1).unwrap())
                 .unwrap(),
-            (scheduled_time, scheduled_time),
+            ElapsedRuns {
+                oldest: scheduled_time,
+                newest: scheduled_time,
+            },
         );
     }
 
@@ -165,7 +180,10 @@ mod tests {
         assert_eq!(job.tick(now()), None);
         assert_eq!(
             job.tick(now().with_second(5).unwrap()).unwrap(),
-            (now().with_second(1).unwrap(), now().with_second(5).unwrap()),
+            ElapsedRuns {
+                oldest: now().with_second(1).unwrap(),
+                newest: now().with_second(5).unwrap()
+            },
         );
     }
 }

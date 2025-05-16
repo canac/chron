@@ -453,9 +453,8 @@ impl ChronService {
 
         drop(job_guard);
 
-        if let Some((scheduled_time, resume_time)) = current_run {
-            // If multiple runs were skipped over in the schedule since the last tick, scheduled_time will be the oldest
-            // run and resume_time will be the newest run
+        if let Some(elapsed_runs) = current_run {
+            let scheduled_time = elapsed_runs.oldest;
             let late =
                 HumanTime::from(scheduled_time).to_text_en(Accuracy::Precise, Tense::Present);
             debug!("{name}: scheduled for {scheduled_time} ({late} late)");
@@ -470,6 +469,7 @@ impl ChronService {
                 &scheduled_time,
             )
             .await?;
+            let resume_time = elapsed_runs.newest;
             debug!("{name}: updating resume time {resume_time}");
             db.set_resume_time(name.to_owned(), &resume_time).await?;
         }
