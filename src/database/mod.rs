@@ -285,12 +285,12 @@ WHERE name = ?1 AND port IS NOT NULL",
             }
         }
 
-        // Data integrity: use an exclusive transaction to ensure that the job and port associations are not modified
+        // Data integrity: use an immediate transaction to ensure that the job and port associations are not modified
         // while we are determining which jobs are acquired and/or recoverable
         let result = self
             .client
             .conn(move |conn| {
-                conn.execute_batch("BEGIN EXCLUSIVE TRANSACTION")?;
+                conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")?;
 
                 let mut statement = conn.prepare(
                     "SELECT name, port
@@ -407,12 +407,10 @@ WHERE name = ?3",
         &self,
         check_port_active: impl Fn(u16) -> bool + Send + 'static,
     ) -> Result<Vec<Job>> {
-        // Data integrity: use an exclusive transaction to ensure that the job and port associations are not modified
-        // while we are determining which jobs are active and/or recoverable
         let jobs = self
             .client
             .conn(move |conn| {
-                conn.execute_batch("BEGIN EXCLUSIVE TRANSACTION")?;
+                conn.execute_batch("BEGIN TRANSACTION")?;
 
                 let mut statement = conn.prepare(
                     "SELECT DISTINCT(port)
