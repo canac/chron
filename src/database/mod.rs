@@ -1,6 +1,6 @@
 mod models;
 
-pub use self::models::{Checkpoint, Job, JobStatus, Run, RunStatus};
+pub use self::models::{Job, JobStatus, Run, RunStatus};
 use anyhow::{Context, Result};
 use async_sqlite::rusqlite::Connection;
 use async_sqlite::rusqlite::{self, OptionalExtension, types::Value, vtab::array::load_module};
@@ -62,6 +62,7 @@ CREATE TABLE IF NOT EXISTS job (
   port INTEGER,
   initialized BOOLEAN NOT NULL DEFAULT FALSE,
   command VARCHAR,
+  resume_at DATETIME,
   next_run DATETIME
 );
 
@@ -76,12 +77,6 @@ CREATE TABLE IF NOT EXISTS run (
   status_code INTEGER,
   attempt INTEGER NOT NULL DEFAULT 0,
   max_attempts INTEGER
-);
-
-CREATE TABLE IF NOT EXISTS checkpoint (
-  id INTEGER PRIMARY KEY,
-  job VARCHAR NOT NULL UNIQUE,
-  timestamp DATETIME NOT NULL
 );",
                 )?;
 
@@ -205,39 +200,43 @@ LIMIT ?2",
             .context("Failed to load last runs from the database")
     }
 
-    /// Read the checkpoint time of a job
-    pub async fn get_checkpoint(&self, job: String) -> Result<Option<DateTime<Utc>>> {
-        let checkpoint = self
+    /// Read the resume time of a job
+    /// The resume time records the last time that a scheduled job successfully completed. It is used to calculated
+    /// missed job runs between runs of chron itself. The timestamp It is the time that the run was originally scheduled
+    /// for, not the time that it actually ran. The resume time is only updated after completed runs, not runs that were
+    /// configured to be retried.
+    pub async fn get_resume_time(&self, job: String) -> Result<Option<DateTime<Utc>>> {
+        let resume_at = self
             .client
             .conn(|conn| {
                 let mut statement = conn.prepare(
-                    "SELECT timestamp
-FROM checkpoint
-WHERE job = ?1",
+                    "SELECT resume_at
+FROM job
+WHERE name = ?1",
                 )?;
-                statement.query_row((job,), Checkpoint::from_row).optional()
+                statement.query_row((job,), |row| {
+                    row.get::<_, Option<NaiveDateTime>>("resume_at")
+                })
             })
             .await
-            .context("Failed to save run to the database")?;
-        Ok(checkpoint.map(|checkpoint| Utc.from_utc_datetime(&checkpoint.timestamp)))
+            .context("Failed to load resume time from the database")?;
+        Ok(resume_at.map(|resume_at| Utc.from_utc_datetime(&resume_at)))
     }
 
-    /// Write the checkpoint time of a job
-    pub async fn set_checkpoint(&self, job: String, timestamp: &DateTime<Utc>) -> Result<()> {
+    /// Write the resume time of a job
+    pub async fn set_resume_time(&self, job: String, timestamp: &DateTime<Utc>) -> Result<()> {
         let timestamp = timestamp.naive_utc();
         self.client
             .conn(move |conn| {
                 let mut statement = conn.prepare(
-                    "INSERT INTO checkpoint (job, timestamp)
-VALUES (?1, ?2)
-ON CONFLICT (job)
-    DO UPDATE
-    SET timestamp = (?2)",
+                    "UPDATE job
+SET resume_at = ?1
+WHERE name = ?2",
                 )?;
-                statement.execute((job, timestamp))
+                statement.execute((timestamp, job))
             })
             .await
-            .context("Failed to save checkpoint time to the database")?;
+            .context("Failed to save resume time to the database")?;
         Ok(())
     }
 

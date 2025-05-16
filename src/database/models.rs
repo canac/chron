@@ -41,27 +41,6 @@ impl Job {
     }
 }
 
-/*
- * The checkpoint table records the last time that a job completed. This
- * information is used to correctly calculate missed job runs between runs
- * of chron itself. The timestamp column is the time that the job was
- * originally scheduled for, not the time that it actually ran. The timestamp
- * is only updated after completed runs, which is defined as runs don't need to
- * be retried according to the retry config.
- */
-pub struct Checkpoint {
-    pub timestamp: NaiveDateTime,
-}
-
-impl Checkpoint {
-    /// Create a Checkpoint model from a database row
-    pub fn from_row(row: &Row) -> Result<Self> {
-        Ok(Self {
-            timestamp: row.get("timestamp")?,
-        })
-    }
-}
-
 #[cfg_attr(test, derive(Debug, Eq, PartialEq))]
 pub enum RunStatus {
     Running {

@@ -337,12 +337,11 @@ impl ChronService {
             bail!("A job with the name {name} already exists")
         }
 
-        // Resume the job scheduler from the checkpoint time, which is the
-        // scheduled time of the last successful (i.e. not retried) run
-        // However, jobs that don't make up missed runs resume now, not in the past
+        // Resume the job scheduler from the saved resume time, which is the scheduled time of the last successful (i.e.
+        // not retried) run. However, jobs that don't make up missed runs resume now, not in the past.
         let options = job.get_options();
         let resume_time = if options.make_up_missed_run {
-            self.db.get_checkpoint(name.to_owned()).await?
+            self.db.get_resume_time(name.to_owned()).await?
         } else {
             None
         };
@@ -355,21 +354,19 @@ impl ChronService {
         })?;
         let scheduled_job = ScheduledJob::new(schedule, resume_time.unwrap_or_else(Utc::now));
         if resume_time.is_none() {
-            // If the job doesn't have a checkpoint, estimate one based on the
-            // schedule extrapolated backwards in time. This is to prevent jobs
-            // with a long period from never running if chron isn't running
-            // when they are scheduled to run. For example, assume a job is
-            // scheduled to run on Sundays at midnight, and chron is stopped on
-            // Saturday and restarted on Monday. When it restarts, because
-            // there isn't a checkpoint, it won't be able to resume and will
-            // schedule the backup for the next Sunday. Eagerly saving a
-            // checkpoint prevents this problem.
+            // If the job doesn't have a saved resume time yet, estimate one by extrapolating the schedule backwards in
+            // time. This is to prevent jobs with a long period from never running if chron isn't running when they are
+            // scheduled to run. For example, assume a job is scheduled to run on Sundays at midnight, and chron is
+            // stopped on Saturday and restarted on Monday. When it restarts, because there isn't a resume time, it will
+            // schedule the backup for the next Sunday. Eagerly saving a resume time prevents this problem.
             if let Some(start_time) = scheduled_job.prev_run() {
-                debug!("{name}: saving synthetic checkpoint {start_time}");
-                self.db.set_checkpoint(name.to_owned(), &start_time).await?;
+                debug!("{name}: saving synthetic resume time {start_time}");
+                self.db
+                    .set_resume_time(name.to_owned(), &start_time)
+                    .await?;
             } else {
                 debug!(
-                    "{name}: cannot save synthetic checkpoint because schedule has no previous runs"
+                    "{name}: cannot save synthetic resume time because schedule has no previous runs"
                 );
             }
         }
@@ -456,9 +453,9 @@ impl ChronService {
 
         drop(job_guard);
 
-        if let Some((scheduled_time, checkpoint_time)) = current_run {
+        if let Some((scheduled_time, resume_time)) = current_run {
             // If multiple runs were skipped over in the schedule since the last tick, scheduled_time will be the oldest
-            // run and checkpoint_time will be the newest run
+            // run and resume_time will be the newest run
             let late =
                 HumanTime::from(scheduled_time).to_text_en(Accuracy::Precise, Tense::Present);
             debug!("{name}: scheduled for {scheduled_time} ({late} late)");
@@ -473,8 +470,8 @@ impl ChronService {
                 &scheduled_time,
             )
             .await?;
-            debug!("{name}: updating checkpoint {checkpoint_time}");
-            db.set_checkpoint(name.to_owned(), &checkpoint_time).await?;
+            debug!("{name}: updating resume time {resume_time}");
+            db.set_resume_time(name.to_owned(), &resume_time).await?;
         }
 
         Ok(next_run)
