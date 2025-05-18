@@ -61,25 +61,18 @@ impl ScheduledJob {
 
     /// Tick and return the elapsed runs since the last tick, if any
     pub fn tick(&mut self, now: DateTime<Utc>) -> Option<ElapsedRuns> {
-        let last_tick = self.last_tick;
-        self.last_tick = now;
+        let last_tick = std::mem::replace(&mut self.last_tick, now);
 
+        // Get all the runs from the last tick until now
         let mut iter = self
             .schedule
-            // Get the runs from now
-            // There is a bug in cron where reverse iterators starts counting
-            // from the second rounded down, so add a second to compensate
-            // https://github.com/zslayton/cron/issues/108
-            .after::<Local>(&now.checked_add_signed(chrono::Duration::seconds(1))?.into())
-            // Iterating backwards in time (from newest to oldest)
-            .rev()
-            // Until the last tick
-            .take_while(|run| run > &last_tick);
+            .after::<Local>(&last_tick.into())
+            .take_while(|run| run <= &now);
 
-        let newest = iter.next().map(std::convert::Into::into);
-        newest.map(|newest| ElapsedRuns {
-            oldest: iter.last().map_or(newest, std::convert::Into::into),
-            newest,
+        let oldest = iter.next().map(std::convert::Into::into);
+        oldest.map(|oldest| ElapsedRuns {
+            oldest,
+            newest: iter.last().map_or(oldest, std::convert::Into::into),
         })
     }
 
