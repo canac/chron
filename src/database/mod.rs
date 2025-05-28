@@ -200,27 +200,34 @@ LIMIT ?2",
             .context("Failed to load last runs from the database")
     }
 
-    /// Read the resume time of a job
+    /// Read the resume time of a job, setting it to the current time if it isn't set
     /// The resume time records the last time that a scheduled job successfully completed. It is used to calculated
     /// missed job runs between runs of chron itself. The timestamp It is the time that the run was originally scheduled
     /// for, not the time that it actually ran. The resume time is only updated after completed runs, not runs that were
     /// configured to be retried.
-    pub async fn get_resume_time(&self, job: String) -> Result<Option<DateTime<Utc>>> {
+    pub async fn get_resume_time(&self, job: String) -> Result<DateTime<Utc>> {
         let resume_at = self
             .client
             .conn(|conn| {
+                // If the job doesn't have a saved resume time yet, set it to the current time. This is to prevent jobs
+                // with a long period from never running if chron isn't running when they are scheduled to run. For
+                // example, assume the following scenario:
+                // * A job is scheduled to run on Sundays at midnight
+                // * chron is stopped on Saturday before the job runs
+                // * chron is restarted on Monday after the job was scheduled
+                // When it restarts on Monday, because there isn't a resume time, it will schedule the job for the next
+                // Sunday. Eagerly, saving a resume time prevents this problem.
                 let mut statement = conn.prepare(
-                    "SELECT resume_at
-FROM job
-WHERE name = ?1",
+                    "UPDATE job
+SET resume_at = COALESCE(resume_at, STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW'))
+WHERE name = ?1
+RETURNING resume_at",
                 )?;
-                statement.query_row((job,), |row| {
-                    row.get::<_, Option<NaiveDateTime>>("resume_at")
-                })
+                statement.query_row((job,), |row| row.get::<_, NaiveDateTime>("resume_at"))
             })
             .await
             .context("Failed to load resume time from the database")?;
-        Ok(resume_at.map(|resume_at| Utc.from_utc_datetime(&resume_at)))
+        Ok(Utc.from_utc_datetime(&resume_at))
     }
 
     /// Write the resume time of a job
@@ -379,20 +386,22 @@ ON CONFLICT (name)
     }
 
     /// Record information about a newly-acquired job
+    /// The job's resume time is set to NULL unless `preserve_resume_time` is true.
     pub async fn initialize_job(
         &self,
         name: String,
         command: String,
         next_run: Option<&DateTime<Utc>>,
+        preserve_resume_time: bool,
     ) -> Result<()> {
         let next_run = next_run.map(chrono::DateTime::naive_utc);
         self.client
             .conn(move |conn| {
                 conn.execute(
                     "UPDATE job
-SET command = ?1, next_run = ?2, initialized = TRUE
-WHERE name = ?3",
-                    (command, next_run, name),
+SET command = ?1, next_run = ?2, initialized = TRUE, resume_at = CASE WHEN ?3 THEN resume_at ELSE NULL END
+WHERE name = ?4",
+                    (command, next_run, preserve_resume_time, name),
                 )
             })
             .await
@@ -526,6 +535,7 @@ WHERE job_name IN rarray(?1)",
 #[cfg(test)]
 mod tests {
     use assert_matches::assert_matches;
+    use chrono::Days;
     use tokio::test;
 
     use super::*;
@@ -538,7 +548,9 @@ mod tests {
     }
 
     async fn initialize_job(db: &Database, name: String) {
-        db.initialize_job(name, String::new(), None).await.unwrap();
+        db.initialize_job(name, String::new(), None, false)
+            .await
+            .unwrap();
     }
 
     async fn insert_run(db: &Database, name: String) -> u32 {
@@ -577,7 +589,7 @@ mod tests {
             .await
             .unwrap();
         let next_run = Utc::now();
-        db.initialize_job(name.clone(), String::new(), Some(&next_run))
+        db.initialize_job(name.clone(), String::new(), Some(&next_run), false)
             .await
             .unwrap();
         assert_eq!(
@@ -610,7 +622,7 @@ mod tests {
         db.acquire_jobs(vec![name.clone()], 1000, check_port_active)
             .await
             .unwrap();
-        db.initialize_job(name.clone(), String::new(), None)
+        db.initialize_job(name.clone(), String::new(), None, false)
             .await
             .unwrap();
         insert_run(&db, name.clone()).await;
@@ -698,6 +710,25 @@ mod tests {
     }
 
     #[test]
+    async fn test_get_resume_time_sets_to_now() {
+        let db = open_db().await;
+        db.acquire_jobs(vec!["job1".to_owned()], 1000, check_port_active)
+            .await
+            .unwrap();
+        db.initialize_job("job1".to_owned(), "echo Hello".to_owned(), None, false)
+            .await
+            .unwrap();
+
+        let resume_time = db.get_resume_time("job1".to_owned()).await.unwrap();
+        assert_eq!(
+            resume_time,
+            db.get_resume_time("job1".to_owned()).await.unwrap(),
+            "Resume time does not change"
+        );
+        assert_eq!((Utc::now() - resume_time).num_seconds(), 0);
+    }
+
+    #[test]
     async fn get_acquired_job_port() {
         let db = open_db().await;
         db.acquire_jobs(vec!["job1".to_owned()], 1000, check_port_active)
@@ -772,7 +803,7 @@ mod tests {
             .await
             .unwrap();
 
-        // The job should not active be because it is uninitialized
+        // The job should not be active because it is uninitialized
         assert!(
             db.get_active_jobs(check_port_active)
                 .await
@@ -787,7 +818,7 @@ mod tests {
         db.acquire_jobs(vec!["job1".to_owned()], 1000, check_port_active)
             .await
             .unwrap();
-        db.initialize_job("job1".to_owned(), "echo Hello".to_owned(), None)
+        db.initialize_job("job1".to_owned(), "echo Hello".to_owned(), None, false)
             .await
             .unwrap();
 
@@ -798,6 +829,46 @@ mod tests {
                 command: "echo Hello".to_owned(),
                 status: JobStatus::Completed,
             }]
+        );
+    }
+
+    #[test]
+    async fn test_initialize_job_preserve_resume_time() {
+        let db = open_db().await;
+        db.acquire_jobs(vec!["job1".to_owned()], 1000, check_port_active)
+            .await
+            .unwrap();
+        let resume_time = Utc::now().checked_sub_days(Days::new(1)).unwrap();
+        db.set_resume_time("job1".to_owned(), &resume_time)
+            .await
+            .unwrap();
+        db.initialize_job("job1".to_owned(), "echo Hello".to_owned(), None, true)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            db.get_resume_time("job1".to_owned()).await.unwrap(),
+            resume_time,
+        );
+    }
+
+    #[test]
+    async fn test_initialize_job_clear_resume_time() {
+        let db = open_db().await;
+        db.acquire_jobs(vec!["job1".to_owned()], 1000, check_port_active)
+            .await
+            .unwrap();
+        let resume_time = Utc::now();
+        db.set_resume_time("job1".to_owned(), &resume_time)
+            .await
+            .unwrap();
+        db.initialize_job("job1".to_owned(), "echo Hello".to_owned(), None, false)
+            .await
+            .unwrap();
+
+        assert_ne!(
+            db.get_resume_time("job1".to_owned()).await.unwrap(),
+            resume_time,
         );
     }
 

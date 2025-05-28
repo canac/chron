@@ -310,7 +310,12 @@ impl ChronService {
         let job_copy = Arc::clone(&job);
 
         self.db
-            .initialize_job(name.to_owned(), job.command.clone(), Some(&Utc::now()))
+            .initialize_job(
+                name.to_owned(),
+                job.command.clone(),
+                Some(&Utc::now()),
+                false,
+            )
             .await?;
 
         let db = Arc::clone(&self.db);
@@ -341,7 +346,7 @@ impl ChronService {
         // not retried) run. However, jobs that don't make up missed runs resume now, not in the past.
         let options = job.get_options();
         let resume_time = if options.make_up_missed_run {
-            self.db.get_resume_time(name.to_owned()).await?
+            Some(self.db.get_resume_time(name.to_owned()).await?)
         } else {
             None
         };
@@ -352,25 +357,9 @@ impl ChronService {
                 job.schedule
             )
         })?;
-        let scheduled_job = ScheduledJob::new(schedule, resume_time.unwrap_or_else(Utc::now));
-        if resume_time.is_none() {
-            // If the job doesn't have a saved resume time yet, estimate one by extrapolating the schedule backwards in
-            // time. This is to prevent jobs with a long period from never running if chron isn't running when they are
-            // scheduled to run. For example, assume a job is scheduled to run on Sundays at midnight, and chron is
-            // stopped on Saturday and restarted on Monday. When it restarts, because there isn't a resume time, it will
-            // schedule the backup for the next Sunday. Eagerly saving a resume time prevents this problem.
-            if let Some(start_time) = scheduled_job.prev_run() {
-                debug!("{name}: saving synthetic resume time {start_time}");
-                self.db
-                    .set_resume_time(name.to_owned(), &start_time)
-                    .await?;
-            } else {
-                debug!(
-                    "{name}: cannot save synthetic resume time because schedule has no previous runs"
-                );
-            }
-        }
+        let scheduled_job = ScheduledJob::new(schedule, resume_time);
         let next_run = scheduled_job.next_run();
+        let preserve_resume_time = options.make_up_missed_run;
         let job = Arc::new(Job {
             name: name.to_owned(),
             command: job.command.clone(),
@@ -387,7 +376,12 @@ impl ChronService {
         let job_copy = Arc::clone(&job);
 
         self.db
-            .initialize_job(name.to_owned(), job.command.clone(), next_run.as_ref())
+            .initialize_job(
+                name.to_owned(),
+                job.command.clone(),
+                next_run.as_ref(),
+                preserve_resume_time,
+            )
             .await?;
 
         let db = Arc::clone(&self.db);
