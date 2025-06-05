@@ -1,13 +1,19 @@
+mod job_config;
 mod models;
 
+use crate::database::models::RawJob;
+
+pub use self::job_config::JobConfig;
 pub use self::models::{Job, JobStatus, Run, RunStatus};
 use anyhow::{Context, Result};
-use async_sqlite::rusqlite::Connection;
-use async_sqlite::rusqlite::{self, OptionalExtension, types::Value, vtab::array::load_module};
+use async_sqlite::rusqlite::{
+    self, Connection, OptionalExtension, named_params, types::Value, vtab::array::load_module,
+};
 use async_sqlite::{Client, ClientBuilder, JournalMode};
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use log::info;
 use std::collections::HashSet;
+use std::convert::TryInto;
 use std::iter::once;
 use std::path::Path;
 use std::rc::Rc;
@@ -61,7 +67,7 @@ CREATE TABLE IF NOT EXISTS job (
   name VARCHAR PRIMARY KEY NOT NULL,
   port INTEGER,
   initialized BOOLEAN NOT NULL DEFAULT FALSE,
-  command VARCHAR,
+  config JSON,
   resume_at DATETIME,
   next_run DATETIME
 );
@@ -390,18 +396,19 @@ ON CONFLICT (name)
     pub async fn initialize_job(
         &self,
         name: String,
-        command: String,
+        job_config: JobConfig,
         next_run: Option<&DateTime<Utc>>,
         preserve_resume_time: bool,
     ) -> Result<()> {
+        let serialized_config = serde_json::to_string(&job_config)?;
         let next_run = next_run.map(chrono::DateTime::naive_utc);
         self.client
             .conn(move |conn| {
                 conn.execute(
                     "UPDATE job
-SET command = ?1, next_run = ?2, initialized = TRUE, resume_at = CASE WHEN ?3 THEN resume_at ELSE NULL END
+SET config = ?1, next_run = ?2, initialized = TRUE, resume_at = CASE WHEN ?3 THEN resume_at ELSE NULL END
 WHERE name = ?4",
-                    (command, next_run, preserve_resume_time, name),
+                    (serialized_config, next_run, preserve_resume_time, name),
                 )
             })
             .await
@@ -416,18 +423,51 @@ WHERE name = ?4",
         &self,
         check_port_active: impl Fn(u16) -> bool + Send + 'static,
     ) -> Result<Vec<Job>> {
+        self.internal_get_active_jobs(None, check_port_active).await
+    }
+
+    /// Return a running, initialized job, a including job from other processes by its name
+    /// A job that has been acquired but not initialized yet is not included
+    pub async fn get_active_job(
+        &self,
+        job: String,
+        check_port_active: impl Fn(u16) -> bool + Send + 'static,
+    ) -> Result<Option<Job>> {
         let jobs = self
-            .client
+            .internal_get_active_jobs(Some(job), check_port_active)
+            .await?;
+        Ok(jobs.into_iter().next())
+    }
+
+    /// Internal implementation of `get_active_jobs` and `get_active_job`
+    /// Supports optionally filtering down to a single active job
+    async fn internal_get_active_jobs(
+        &self,
+        job: Option<String>,
+        check_port_active: impl Fn(u16) -> bool + Send + 'static,
+    ) -> Result<Vec<Job>> {
+        self.client
             .conn(move |conn| {
                 conn.execute_batch("BEGIN TRANSACTION")?;
 
+                // produces false positives
+                #[allow(clippy::option_if_let_else, clippy::redundant_clone)]
+                let (name_field, params) = if let Some(job) = job {
+                    (":name", named_params! { ":name": job.clone() })
+                } else {
+                    // Make the WHERE constraint a no-op
+                    ("name", named_params! {})
+                };
                 let mut statement = conn.prepare(
-                    "SELECT DISTINCT(port)
+                    format!(
+                        "SELECT DISTINCT(port)
 FROM job
-WHERE port IS NOT NULL",
+WHERE name = {name_field} AND port IS NOT NULL",
+                    )
+                    .as_str(),
                 )?;
                 let ports = statement
-                    .query_map((), |row| row.get("port"))?
+                    .query_map(params, |row| row.get("port"))?
                     .collect::<rusqlite::Result<Vec<u16>>>()?;
                 let inactive_ports = ports
                     .into_iter()
@@ -444,9 +484,10 @@ WHERE port IN rarray(?1)",
 
                 // Data integrity: released and uninitialized jobs are ignored
                 let mut statement = conn.prepare(
-                    "
+                    format!(
+                        "
 WITH current_runs AS (
-    SELECT id, job_name
+    SELECT job_name, pid
     FROM run r
     WHERE state = 'running'
     AND id = (
@@ -455,14 +496,16 @@ WITH current_runs AS (
         WHERE job_name = r.job_name
     )
 )
-SELECT name, command, next_run, current_runs.id IS NOT NULL AS running
+SELECT name, config, next_run, current_runs.pid AS pid
 FROM job
 LEFT JOIN current_runs ON current_runs.job_name = job.name
-WHERE port IS NOT NULL AND initialized = TRUE
+WHERE name = {name_field} AND port IS NOT NULL AND initialized = TRUE
 ORDER BY name",
+                    )
+                    .as_str(),
                 )?;
                 let jobs = statement
-                    .query_map((), Job::from_row)?
+                    .query_map(params, RawJob::from_row)?
                     .collect::<rusqlite::Result<Vec<_>>>()?;
 
                 conn.execute_batch("COMMIT")?;
@@ -470,9 +513,10 @@ ORDER BY name",
                 Ok(jobs)
             })
             .await
-            .context("Failed to release jobs by port in the database")?;
-
-        Ok(jobs)
+            .context("Failed to release jobs by port in the database")?
+            .into_iter()
+            .map(TryInto::try_into)
+            .collect()
     }
 
     /// Release the jobs with the given names
@@ -548,7 +592,7 @@ mod tests {
     }
 
     async fn initialize_job(db: &Database, name: String) {
-        db.initialize_job(name, String::new(), None, false)
+        db.initialize_job(name, JobConfig::default(), None, false)
             .await
             .unwrap();
     }
@@ -589,7 +633,7 @@ mod tests {
             .await
             .unwrap();
         let next_run = Utc::now();
-        db.initialize_job(name.clone(), String::new(), Some(&next_run), false)
+        db.initialize_job(name.clone(), JobConfig::default(), Some(&next_run), false)
             .await
             .unwrap();
         assert_eq!(
@@ -599,7 +643,7 @@ mod tests {
                 .first()
                 .unwrap()
                 .status,
-            JobStatus::Waiting(next_run),
+            JobStatus::Waiting { next_run },
         );
 
         insert_run(&db, name.clone()).await;
@@ -611,7 +655,7 @@ mod tests {
                 .first()
                 .unwrap()
                 .status,
-            JobStatus::Running,
+            JobStatus::Running { pid: 0 },
         );
     }
 
@@ -622,7 +666,7 @@ mod tests {
         db.acquire_jobs(vec![name.clone()], 1000, check_port_active)
             .await
             .unwrap();
-        db.initialize_job(name.clone(), String::new(), None, false)
+        db.initialize_job(name.clone(), JobConfig::default(), None, false)
             .await
             .unwrap();
         insert_run(&db, name.clone()).await;
@@ -715,7 +759,7 @@ mod tests {
         db.acquire_jobs(vec!["job1".to_owned()], 1000, check_port_active)
             .await
             .unwrap();
-        db.initialize_job("job1".to_owned(), "echo Hello".to_owned(), None, false)
+        db.initialize_job("job1".to_owned(), JobConfig::default(), None, false)
             .await
             .unwrap();
 
@@ -803,13 +847,8 @@ mod tests {
             .await
             .unwrap();
 
-        // The job should not be active because it is uninitialized
-        assert!(
-            db.get_active_jobs(check_port_active)
-                .await
-                .unwrap()
-                .is_empty(),
-        );
+        // The job should not be active be because it is uninitialized
+        assert_eq!(db.get_active_jobs(check_port_active).await.unwrap(), vec![]);
     }
 
     #[test]
@@ -818,7 +857,12 @@ mod tests {
         db.acquire_jobs(vec!["job1".to_owned()], 1000, check_port_active)
             .await
             .unwrap();
-        db.initialize_job("job1".to_owned(), "echo Hello".to_owned(), None, false)
+        let make_config = || JobConfig {
+            command: "echo 'Hello, World!'".to_owned(),
+            ..JobConfig::default()
+        };
+
+        db.initialize_job("job1".to_owned(), make_config(), None, false)
             .await
             .unwrap();
 
@@ -826,7 +870,7 @@ mod tests {
             db.get_active_jobs(check_port_active).await.unwrap(),
             vec![Job {
                 name: "job1".to_owned(),
-                command: "echo Hello".to_owned(),
+                config: make_config(),
                 status: JobStatus::Completed,
             }]
         );
@@ -842,7 +886,7 @@ mod tests {
         db.set_resume_time("job1".to_owned(), &resume_time)
             .await
             .unwrap();
-        db.initialize_job("job1".to_owned(), "echo Hello".to_owned(), None, true)
+        db.initialize_job("job1".to_owned(), JobConfig::default(), None, true)
             .await
             .unwrap();
 
@@ -862,7 +906,7 @@ mod tests {
         db.set_resume_time("job1".to_owned(), &resume_time)
             .await
             .unwrap();
-        db.initialize_job("job1".to_owned(), "echo Hello".to_owned(), None, false)
+        db.initialize_job("job1".to_owned(), JobConfig::default(), None, false)
             .await
             .unwrap();
 
@@ -1113,12 +1157,7 @@ mod tests {
             .await
             .unwrap();
         // The job should not active be because it has not been initialized yet
-        assert!(
-            db.get_active_jobs(check_port_active)
-                .await
-                .unwrap()
-                .is_empty(),
-        );
+        assert_eq!(db.get_active_jobs(check_port_active).await.unwrap(), vec![]);
 
         initialize_job(&db, "job1".to_owned()).await;
         // The job should not be running because it does not have an active run yet
@@ -1140,7 +1179,26 @@ mod tests {
                 .first()
                 .unwrap()
                 .status,
-            JobStatus::Running,
+            JobStatus::Running { pid: 0 },
+        );
+    }
+
+    #[test]
+    async fn test_get_active_job() {
+        let db = open_db().await;
+
+        db.acquire_jobs(vec!["job1".to_owned()], 1000, check_port_active)
+            .await
+            .unwrap();
+        initialize_job(&db, "job1".to_owned()).await;
+        insert_run(&db, "job1".to_owned()).await;
+        assert_eq!(
+            db.get_active_job("job1".to_owned(), check_port_active)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            JobStatus::Running { pid: 0 },
         );
     }
 }

@@ -11,15 +11,14 @@ pub struct JobInfo {
     pub(crate) working_dir: Option<PathBuf>,
     pub(crate) next_run: Option<DateTime<Local>>,
     pub(crate) status: ProcessStatus,
-    pub(crate) run_id: Option<u32>,
     pub(crate) log_dir: PathBuf,
 }
 
 impl JobInfo {
     /// Generate the job info for a job
     pub(crate) async fn from_job(name: &str, job: &Job) -> Result<Self> {
-        let (status, run_id) = job.running_process.read().await.as_ref().map_or_else(
-            || (ProcessStatus::Terminated, None),
+        let (status, run_id) = job.running_process.read().await.as_ref().map_or(
+            (ProcessStatus::Terminated, None),
             |process| {
                 (
                     ProcessStatus::Running { pid: process.pid },
@@ -60,7 +59,6 @@ impl JobInfo {
             working_dir: job.working_dir.clone(),
             next_run,
             status,
-            run_id,
             log_dir: job.log_dir.clone(),
         })
     }

@@ -3,7 +3,7 @@ use crate::chronfile::Chronfile;
 use crate::cli::{KillArgs, LogsArgs, RunArgs, RunsArgs, StatusArgs};
 use crate::database::{Database, JobStatus, RunStatus};
 use crate::format;
-use crate::http::{self, api};
+use crate::http;
 use anyhow::{Context, Result, bail};
 use chrono::Local;
 use cli_tables::Table;
@@ -154,14 +154,14 @@ pub async fn jobs(db: Arc<Database>) -> Result<()> {
     table.push_row(&vec!["name", "command", "status"])?;
     for job in jobs {
         let status = match job.status {
-            JobStatus::Running => "running".to_owned(),
-            JobStatus::Waiting(next_run) => {
+            JobStatus::Running { .. } => "running".to_owned(),
+            JobStatus::Waiting { next_run } => {
                 let next_run = next_run.with_timezone(&Local);
                 format!("next run {}", format::relative_date(&next_run))
             }
             JobStatus::Completed => "next run never".to_owned(),
         };
-        table.push_row_string(&vec![job.name, job.command, status])?;
+        table.push_row_string(&vec![job.name, job.config.command, status])?;
     }
     println!("{}", table.to_string());
 
@@ -171,20 +171,27 @@ pub async fn jobs(db: Arc<Database>) -> Result<()> {
 /// Implementation for the `status` CLI command
 pub async fn status(db: Arc<Database>, args: StatusArgs) -> Result<()> {
     let StatusArgs { job } = args;
-    let port = get_job_port(&db, job.clone()).await?;
-    let origin = format!("http://localhost:{port}");
-    let res = reqwest::get(format!("{origin}/api/job/{job}/status"))
-        .await
-        .context("Failed to connect to chron server")?;
-    validate_response(&job, &res)?;
+    let Some(job) = db
+        .get_active_job(job.clone(), ChronService::check_port_active)
+        .await?
+    else {
+        bail!("Job {job} is not running");
+    };
 
-    let status: api::JobStatus = res.json().await?;
-    println!("command: {}", status.command);
-    println!("shell: {}", status.shell);
-    if let Some(schedule) = status.schedule.as_ref() {
+    println!("command: {}", job.config.command);
+    if let Some(working_dir) = job.config.working_dir {
+        println!("working directory: {}", working_dir.display());
+    }
+    if let Some(schedule) = job.config.schedule {
         println!("schedule: {schedule}");
     }
-    println!("status: {}", status.status);
+
+    let status = match job.status {
+        JobStatus::Running { pid } => format!("running (pid {pid})"),
+        JobStatus::Completed => "not running".to_owned(),
+        JobStatus::Waiting { next_run } => format!("not running (next run at {next_run})"),
+    };
+    println!("status: {status}");
 
     Ok(())
 }

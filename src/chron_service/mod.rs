@@ -9,7 +9,7 @@ use self::scheduled_job::ScheduledJob;
 use self::sleep::sleep_until;
 use self::working_dir::expand_working_dir;
 use crate::chronfile::{self, Chronfile};
-use crate::database::{Database, ReserveResult};
+use crate::database::{Database, JobConfig, ReserveResult};
 use anyhow::Result;
 use anyhow::{Context, bail};
 use chrono::{DateTime, Utc};
@@ -17,6 +17,7 @@ use chrono_humanize::{Accuracy, HumanTime, Tense};
 use cron::Schedule;
 use log::debug;
 use reqwest::header::HeaderValue;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::mem::take;
 use std::path::{Path, PathBuf};
@@ -38,7 +39,7 @@ pub enum JobType {
     },
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RetryConfig {
     pub failures: bool,
     pub successes: bool,
@@ -312,7 +313,7 @@ impl ChronService {
         self.db
             .initialize_job(
                 name.to_owned(),
-                job.command.clone(),
+                JobConfig::from_job(&job).await,
                 Some(&Utc::now()),
                 false,
             )
@@ -378,7 +379,7 @@ impl ChronService {
         self.db
             .initialize_job(
                 name.to_owned(),
-                job.command.clone(),
+                JobConfig::from_job(&job).await,
                 next_run.as_ref(),
                 preserve_resume_time,
             )

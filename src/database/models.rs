@@ -1,42 +1,65 @@
-use anyhow::{anyhow, bail};
+use super::JobConfig;
+use anyhow::{Context, anyhow, bail};
 use async_sqlite::rusqlite::{Result, Row};
 use chrono::{DateTime, Duration, Local, NaiveDateTime, TimeZone, Utc};
 
 #[cfg_attr(test, derive(Debug, Eq, PartialEq))]
-pub struct Job {
-    pub name: String,
-    pub command: String,
-    pub status: JobStatus,
-}
-
-#[cfg_attr(test, derive(Debug, Eq, PartialEq))]
 pub enum JobStatus {
-    /// The job is currently running
-    Running,
+    /// The job is currently running with this process id
+    Running { pid: u32 },
 
     /// The job is waiting for its next run at this timestamp
-    Waiting(DateTime<Utc>),
+    Waiting { next_run: DateTime<Utc> },
 
     /// The job is not running and will not run again
     Completed,
 }
 
-impl Job {
-    pub fn from_row(row: &Row) -> Result<Self> {
-        let running: bool = row.get("running")?;
-        let next_run: Option<NaiveDateTime> = row.get("next_run")?;
-        let status = if running {
-            JobStatus::Running
-        } else {
-            next_run.map_or(JobStatus::Completed, |next_run| {
-                JobStatus::Waiting(Utc.from_utc_datetime(&next_run))
-            })
-        };
+#[cfg_attr(test, derive(Debug, Eq, PartialEq))]
+pub struct Job {
+    pub name: String,
+    pub config: JobConfig,
+    pub status: JobStatus,
+}
 
-        Ok(Self {
+pub struct RawJob {
+    name: String,
+    config: String,
+    status: JobStatus,
+}
+
+impl RawJob {
+    /// Convert an SQLite row into a Job model
+    pub fn from_row(row: &Row) -> Result<Self> {
+        let pid: Option<u32> = row.get("pid")?;
+        let next_run: Option<NaiveDateTime> = row.get("next_run")?;
+        let status = pid.map_or_else(
+            || {
+                next_run.map_or(JobStatus::Completed, |next_run| JobStatus::Waiting {
+                    next_run: Utc.from_utc_datetime(&next_run),
+                })
+            },
+            |pid| JobStatus::Running { pid },
+        );
+
+        Result::Ok(Self {
             name: row.get("name")?,
-            command: row.get("command")?,
+            config: row.get("config")?,
             status,
+        })
+    }
+}
+
+impl TryFrom<RawJob> for Job {
+    type Error = anyhow::Error;
+
+    /// Convert a `RawJob` model into a `Job` model
+    /// This conversion will fail if the JSON job config cannot be parsed
+    fn try_from(raw: RawJob) -> anyhow::Result<Self> {
+        Ok(Self {
+            name: raw.name,
+            config: serde_json::from_str(&raw.config).context("Failed to parse job config")?,
+            status: raw.status,
         })
     }
 }
