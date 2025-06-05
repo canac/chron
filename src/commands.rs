@@ -308,7 +308,7 @@ pub async fn kill(db: Arc<Database>, args: KillArgs) -> Result<()> {
         .context("Failed to connect to chron server")?;
     validate_response(&job, &res)?;
 
-    let pid: i32 = res.json().await?;
+    let pid = res.text().await?;
     println!("Terminated process {pid}");
 
     Ok(())
