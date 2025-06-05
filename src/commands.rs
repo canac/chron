@@ -10,8 +10,7 @@ use cli_tables::Table;
 use log::{LevelFilter, debug, error, info};
 use notify::RecursiveMode;
 use notify_debouncer_mini::{DebounceEventResult, new_debouncer};
-use reqwest::header::HeaderValue;
-use reqwest::{Client, Response, StatusCode};
+use reqwest::{Client, StatusCode, header::HeaderValue};
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, BufWriter, IsTerminal, Read, Write, stdin};
 use std::path::PathBuf;
@@ -128,21 +127,6 @@ pub async fn run(db: Arc<Database>, args: RunArgs) -> Result<()> {
     Ok(())
 }
 
-fn validate_response(job: &str, res: &Response) -> Result<()> {
-    if res.headers().get("x-powered-by") != Some(&HeaderValue::from_static("chron")) {
-        bail!(
-            "Server at {} is not a chron server",
-            res.url().origin().ascii_serialization()
-        );
-    }
-
-    if res.status() == StatusCode::NOT_FOUND {
-        bail!("Job {job} is not running");
-    }
-
-    Ok(())
-}
-
 /// Implementation for the `jobs` CLI command
 pub async fn jobs(db: Arc<Database>) -> Result<()> {
     let jobs = db.get_active_jobs(ChronService::check_port_active).await?;
@@ -198,21 +182,17 @@ pub async fn status(db: Arc<Database>, args: StatusArgs) -> Result<()> {
 
 /// Implementation for the `runs` CLI command
 pub async fn runs(db: Arc<Database>, args: RunsArgs) -> Result<()> {
-    let RunsArgs { job } = args;
-    let port = get_job_port(&db, job.clone()).await?;
-    let origin = format!("http://localhost:{port}");
-    let res = Client::builder()
-        .build()?
-        .head(format!("{origin}/api/job/{job}"))
-        .send()
-        .await
-        .context("Failed to connect to chron server")?;
-    validate_response(&job, &res)?;
-
-    let runs = db.get_last_runs(job.clone(), 10).await?;
-
+    let name = args.job;
+    if db
+        .get_active_job(name.clone(), ChronService::check_port_active)
+        .await?
+        .is_none()
+    {
+        bail!("Job {name} is not running")
+    }
+    let runs = db.get_last_runs(name.clone(), 10).await?;
     if runs.is_empty() {
-        bail!("No runs found for job {job}");
+        bail!("No runs found for job {name}");
     }
 
     let mut table = Table::new();
@@ -299,14 +279,21 @@ pub async fn logs(db: Arc<Database>, args: LogsArgs) -> Result<()> {
 pub async fn kill(db: Arc<Database>, args: KillArgs) -> Result<()> {
     let KillArgs { job } = args;
     let port = get_job_port(&db, job.clone()).await?;
-    let origin = format!("http://localhost:{port}");
     let res = Client::builder()
         .build()?
-        .post(format!("{origin}/api/job/{job}/terminate"))
+        .post(format!("http://localhost:{port}/api/job/{job}/terminate"))
         .send()
         .await
         .context("Failed to connect to chron server")?;
-    validate_response(&job, &res)?;
+    if res.headers().get("x-powered-by") != Some(&HeaderValue::from_static("chron")) {
+        bail!(
+            "Server at {} is not a chron server",
+            res.url().origin().ascii_serialization()
+        );
+    }
+    if res.status() == StatusCode::NOT_FOUND {
+        bail!("Job {job} is not running");
+    }
 
     let pid = res.text().await?;
     println!("Terminated process {pid}");

@@ -154,17 +154,6 @@ async fn job_logs_handler(path: Path<(String, String)>, data: AppData) -> Result
         .streaming(ReaderStream::new(file)))
 }
 
-#[head("/job/{job}")]
-async fn job_exists_handler(name: Path<String>, data: AppData) -> Result<impl Responder> {
-    let chron_guard = data.chron.read().await;
-    if chron_guard.get_job(name.as_str()).is_none() {
-        return Err(HttpError::from_status_code(StatusCode::NOT_FOUND).into());
-    }
-    drop(chron_guard);
-
-    Ok(HttpResponse::Ok())
-}
-
 #[post("/job/{name}/terminate")]
 async fn job_terminate_handler(name: Path<String>, data: AppData) -> Result<impl Responder> {
     let data_guard = data.chron.read().await;
@@ -210,11 +199,7 @@ pub fn create_server(
                     db: Arc::clone(&db),
                 }))
                 .wrap(DefaultHeaders::new().add(("X-Powered-By", "chron")))
-                .service(
-                    actix_web::web::scope("/api")
-                        .service(job_exists_handler)
-                        .service(job_terminate_handler),
-                )
+                .service(actix_web::web::scope("/api").service(job_terminate_handler))
                 .service(styles)
                 .service(index_handler)
                 .service(head_handler)
