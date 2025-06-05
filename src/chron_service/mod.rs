@@ -129,11 +129,6 @@ impl ChronService {
         self.jobs.get(name).map(|task| &task.job)
     }
 
-    /// Return an iterator of the jobs
-    pub fn get_jobs_iter(&self) -> impl Iterator<Item = (&String, &Arc<Job>)> {
-        self.jobs.iter().map(|(name, task)| (name, &task.job))
-    }
-
     /// Determine whether a port still belongs to any running chron server
     pub fn check_port_active(port: u16) -> bool {
         let res = reqwest::blocking::get(format!("http://localhost:{port}"));

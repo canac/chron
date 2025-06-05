@@ -22,17 +22,17 @@
           </tr>
         </thead>
         <tbody>
-          {% for JobInfo { name, command, status, working_dir, .. } in jobs %}
+          {% for job in jobs %}
           <tr>
             <td class="name">
-              <a href="/job/{{ name }}">{{ name }}</a>
+              <a href="/job/{{ job.name }}">{{ job.name }}</a>
             </td>
             <td class="command">
-              <a href="/job/{{ name }}">{{ command }}</a>
+              <a href="/job/{{ job.name }}">{{ job.config.command }}</a>
             </td>
             <td class="status">
-              <a href="/job/{{ name }}">
-                {% match status %}
+              <a href="/job/{{ job.name }}">
+                {% match job.status %}
                 {% when JobStatus::Running { pid } %}
                 <span class="status-text running">running</span>
                 <span class="secondary">(pid {{ pid }})</span>

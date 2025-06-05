@@ -18,7 +18,6 @@ cron = "0.12.0"
 ctrlc = "3.4.5"
 directories = "5.0.1"
 dirs = "5.0.1"
-futures = { version = "0.3.31", default-features = false }
 humantime-serde = "1.1.1"
 log = "0.4.17"
 notify = { version = "6.1.1", default-features = false, features = ["macos_fsevent"] }

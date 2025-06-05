@@ -6,8 +6,9 @@ use crate::database::models::RawJob;
 pub use self::job_config::JobConfig;
 pub use self::models::{Job, JobStatus, Run, RunStatus};
 use anyhow::{Context, Result};
+use async_sqlite::rusqlite::ToSql;
 use async_sqlite::rusqlite::{
-    self, Connection, OptionalExtension, named_params, types::Value, vtab::array::load_module,
+    self, Connection, OptionalExtension, types::Value, vtab::array::load_module,
 };
 use async_sqlite::{Client, ClientBuilder, JournalMode};
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
@@ -417,24 +418,37 @@ WHERE name = ?4",
         Ok(())
     }
 
-    /// Return all running, initialized jobs, including jobs from other processes
-    /// Jobs that have been acquired but not initialized yet are not included
+    /// Return all running, initialized jobs from any process
     pub async fn get_active_jobs(
         &self,
         check_port_active: impl Fn(u16) -> bool + Send + 'static,
     ) -> Result<Vec<Job>> {
-        self.internal_get_active_jobs(None, check_port_active).await
+        self.internal_get_active_jobs(None, None, Some(check_port_active))
+            .await
     }
 
-    /// Return a running, initialized job, a including job from other processes by its name
-    /// A job that has been acquired but not initialized yet is not included
+    /// Return a running, initialized job from any process by its name
     pub async fn get_active_job(
         &self,
         job: String,
         check_port_active: impl Fn(u16) -> bool + Send + 'static,
     ) -> Result<Option<Job>> {
         let jobs = self
-            .internal_get_active_jobs(Some(job), check_port_active)
+            .internal_get_active_jobs(Some(job), None, Some(check_port_active))
+            .await?;
+        Ok(jobs.into_iter().next())
+    }
+
+    /// Return all running, initialized jobs from this process
+    pub async fn get_own_active_jobs(&self, port: u16) -> Result<Vec<Job>> {
+        self.internal_get_active_jobs(None, Some(port), Option::<fn(u16) -> bool>::None)
+            .await
+    }
+
+    /// Return a running, initialized job from this process by its name
+    pub async fn get_own_active_job(&self, job: String, port: u16) -> Result<Option<Job>> {
+        let jobs = self
+            .internal_get_active_jobs(Some(job), Some(port), Option::<fn(u16) -> bool>::None)
             .await?;
         Ok(jobs.into_iter().next())
     }
@@ -444,42 +458,53 @@ WHERE name = ?4",
     async fn internal_get_active_jobs(
         &self,
         job: Option<String>,
-        check_port_active: impl Fn(u16) -> bool + Send + 'static,
+        port: Option<u16>,
+        check_port_active: Option<impl Fn(u16) -> bool + Send + 'static>,
     ) -> Result<Vec<Job>> {
         self.client
             .conn(move |conn| {
                 conn.execute_batch("BEGIN TRANSACTION")?;
 
-                // produces false positives
-                #[allow(clippy::option_if_let_else, clippy::redundant_clone)]
-                let (name_field, params) = if let Some(job) = job {
-                    (":name", named_params! { ":name": job.clone() })
+                let mut params: Vec<(&str, &dyn ToSql)> = vec![];
+                let name_field = if job.is_some() {
+                    params.push((":name", &job));
+                    ":name"
                 } else {
                     // Make the WHERE constraint a no-op
-                    ("name", named_params! {})
+                    "name"
                 };
-                let mut statement = conn.prepare(
-                    format!(
-                        "SELECT DISTINCT(port)
+                let port_field = if port.is_some() {
+                    params.push((":port", &port));
+                    ":port"
+                } else {
+                    // Make the WHERE constraint a no-op
+                    "port"
+                };
+
+                if let Some(check_port_active) = check_port_active {
+                    let mut statement = conn.prepare(
+                        format!(
+                            "SELECT DISTINCT(port)
 FROM job
-WHERE name = {name_field} AND port IS NOT NULL",
-                    )
-                    .as_str(),
-                )?;
-                let ports = statement
-                    .query_map(params, |row| row.get("port"))?
-                    .collect::<rusqlite::Result<Vec<u16>>>()?;
-                let inactive_ports = ports
-                    .into_iter()
-                    .filter(|port| !check_port_active(*port))
-                    .collect::<Vec<_>>();
-                if !inactive_ports.is_empty() {
-                    conn.execute(
-                        "UPDATE job
+WHERE name = {name_field} AND port = {port_field} AND port IS NOT NULL",
+                        )
+                        .as_str(),
+                    )?;
+                    let ports = statement
+                        .query_map(params.as_slice(), |row| row.get("port"))?
+                        .collect::<rusqlite::Result<Vec<u16>>>()?;
+                    let inactive_ports = ports
+                        .into_iter()
+                        .filter(|port| !check_port_active(*port))
+                        .collect::<Vec<_>>();
+                    if !inactive_ports.is_empty() {
+                        conn.execute(
+                            "UPDATE job
 SET port = NULL
 WHERE port IN rarray(?1)",
-                        (Self::make_rarray(inactive_ports),),
-                    )?;
+                            (Self::make_rarray(inactive_ports),),
+                        )?;
+                    }
                 }
 
                 // Data integrity: released and uninitialized jobs are ignored
@@ -499,13 +524,13 @@ WITH current_runs AS (
 SELECT name, config, next_run, current_runs.pid AS pid
 FROM job
 LEFT JOIN current_runs ON current_runs.job_name = job.name
-WHERE name = {name_field} AND port IS NOT NULL AND initialized = TRUE
+WHERE name = {name_field} AND port = {port_field} AND port IS NOT NULL AND initialized = TRUE
 ORDER BY name",
                     )
                     .as_str(),
                 )?;
                 let jobs = statement
-                    .query_map(params, RawJob::from_row)?
+                    .query_map(params.as_slice(), RawJob::from_row)?
                     .collect::<rusqlite::Result<Vec<_>>>()?;
 
                 conn.execute_batch("COMMIT")?;
@@ -1199,6 +1224,64 @@ mod tests {
                 .unwrap()
                 .status,
             JobStatus::Running { pid: 0 },
+        );
+    }
+
+    #[test]
+    async fn test_get_own_active_job() {
+        let db = open_db().await;
+
+        db.acquire_jobs(vec!["job1".to_owned()], 1000, check_port_active)
+            .await
+            .unwrap();
+        initialize_job(&db, "job1".to_owned()).await;
+        insert_run(&db, "job1".to_owned()).await;
+        assert_eq!(
+            db.get_own_active_job("job1".to_owned(), 1000)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            JobStatus::Running { pid: 0 },
+        );
+        assert_eq!(
+            db.get_own_active_job("job1".to_owned(), 1001)
+                .await
+                .unwrap(),
+            None,
+        );
+    }
+
+    #[test]
+    async fn test_get_own_active_jobs() {
+        let db = open_db().await;
+
+        db.acquire_jobs(vec!["job1".to_owned()], 1000, check_port_active)
+            .await
+            .unwrap();
+        initialize_job(&db, "job1".to_owned()).await;
+        insert_run(&db, "job1".to_owned()).await;
+
+        db.acquire_jobs(vec!["job2".to_owned()], 1000, check_port_active)
+            .await
+            .unwrap();
+        initialize_job(&db, "job2".to_owned()).await;
+        insert_run(&db, "job2".to_owned()).await;
+
+        db.acquire_jobs(vec!["job3".to_owned()], 1001, check_port_active)
+            .await
+            .unwrap();
+        initialize_job(&db, "job3".to_owned()).await;
+        insert_run(&db, "job3".to_owned()).await;
+
+        assert_eq!(
+            db.get_own_active_jobs(1000)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|job| job.name)
+                .collect::<Vec<_>>(),
+            vec!["job1".to_owned(), "job2".to_owned()],
         );
     }
 }

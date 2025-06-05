@@ -17,19 +17,19 @@
       <table class="overview">
         <tr>
           <th scope="row">command</th>
-          <td class="command">{{ job.command }}</td>
+          <td class="command">{{ job.config.command }}</td>
         </tr>
         <tr>
           <th scope="row">shell</th>
-          <td class="shell">{{ job.shell }}</td>
+          <td class="shell">{{ job.config.shell }}</td>
         </tr>
-        {% if let Some(schedule) = job.schedule %}
+        {% if let Some(schedule) = job.config.schedule %}
         <tr>
           <th scope="row">schedule</th>
           <td class="schedule">{{ schedule }}</td>
         </tr>
         {% endif %}
-        {% if let Some(working_dir) = job.working_dir %}
+        {% if let Some(working_dir) = job.config.working_dir %}
         <tr>
           <th scope="row">working dir</th>
           <td class="working-dir">{{ working_dir.to_string_lossy() }}</td>
@@ -60,7 +60,7 @@
         <tr>
           <th scope="row">log directory</th>
           <td class="log-dir">
-            {{ job.log_dir.to_string_lossy() }}
+            {{ job.config.log_dir.to_string_lossy() }}
           </td>
         </tr>
       </table>

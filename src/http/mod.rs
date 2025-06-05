@@ -1,11 +1,9 @@
 mod filters;
 mod http_error;
-mod job_info;
 
 use self::http_error::HttpError;
-use self::job_info::JobInfo;
 use crate::chron_service::ChronService;
-use crate::database::{Database, JobStatus, Run, RunStatus};
+use crate::database::{Database, Job, JobStatus, Run, RunStatus};
 use actix_web::dev::Server;
 use actix_web::middleware::DefaultHeaders;
 use actix_web::web::{Data, Path};
@@ -14,7 +12,6 @@ use actix_web::{
 };
 use askama::Template;
 use chrono::{DateTime, Duration, Local, TimeZone};
-use futures::future::join_all;
 use log::info;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -23,6 +20,7 @@ use tokio::sync::RwLock;
 use tokio_util::io::ReaderStream;
 
 struct AppState {
+    port: u16,
     chron: Arc<RwLock<ChronService>>,
     db: Arc<Database>,
 }
@@ -32,7 +30,7 @@ type AppData = Data<AppState>;
 #[derive(Template)]
 #[template(path = "index.html")]
 struct IndexTemplate {
-    jobs: Vec<JobInfo>,
+    jobs: Vec<Job>,
 }
 
 #[get("/static/styles.css")]
@@ -44,18 +42,11 @@ async fn styles() -> Result<impl Responder> {
 
 #[get("/")]
 async fn index_handler(data: AppData) -> Result<impl Responder> {
-    let mut jobs = join_all(
-        data.chron
-            .read()
-            .await
-            .get_jobs_iter()
-            .map(|(name, job)| JobInfo::from_job(name, job)),
-    )
-    .await
-    .into_iter()
-    .collect::<anyhow::Result<Vec<_>>>()
-    .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?;
-    jobs.sort_by(|job1, job2| job1.name.cmp(&job2.name));
+    let jobs = data
+        .db
+        .get_own_active_jobs(data.port)
+        .await
+        .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?;
 
     let template = IndexTemplate { jobs };
     Ok(HttpResponse::Ok()
@@ -78,22 +69,25 @@ struct RunInfo {
 #[derive(Template)]
 #[template(path = "job.html")]
 struct JobTemplate {
-    job: JobInfo,
+    job: Job,
     runs: Vec<RunInfo>,
 }
 
 #[get("/job/{name}")]
 async fn job_handler(name: Path<String>, data: AppData) -> Result<impl Responder> {
     let data_guard = data.chron.read().await;
-    let job = data_guard
-        .get_job(&name)
-        .ok_or_else(|| HttpError::from_status_code(StatusCode::NOT_FOUND))?;
-    let job = JobInfo::from_job(&name, job)
+
+    let name = name.into_inner();
+    let job = data
+        .db
+        .get_own_active_job(name.clone(), data.port)
         .await
-        .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?;
+        .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?
+        .ok_or_else(|| HttpError::from_status_code(StatusCode::NOT_FOUND))?;
+
     let runs = data
         .db
-        .get_last_runs(name.into_inner(), 20)
+        .get_last_runs(name, 20)
         .await
         .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?
         .into_iter()
@@ -103,7 +97,7 @@ async fn job_handler(name: Path<String>, data: AppData) -> Result<impl Responder
                 timestamp: started_at,
                 late: started_at.signed_duration_since(Local.from_utc_datetime(&run.scheduled_at)),
                 status: run.status()?,
-                log_file: job.log_dir.join(format!("{}.log", run.id)),
+                log_file: job.config.log_dir.join(format!("{}.log", run.id)),
                 run,
             })
         })
@@ -231,6 +225,7 @@ pub fn create_server(
         let result = HttpServer::new(move || {
             App::new()
                 .app_data(Data::new(AppState {
+                    port,
                     chron: Arc::clone(&chron),
                     db: Arc::clone(&db),
                 }))
