@@ -238,18 +238,27 @@ pub async fn runs(db: Arc<Database>, args: RunsArgs) -> Result<()> {
 
 /// Implementation for the `logs` CLI command
 pub async fn logs(db: Arc<Database>, args: LogsArgs) -> Result<()> {
-    let LogsArgs { job, lines, follow } = args;
-    let port = get_job_port(&db, job.clone()).await?;
-    let origin = format!("http://localhost:{port}");
-    let res = reqwest::get(format!("{origin}/api/job/{job}/log_path"))
-        .await
-        .context("Failed to connect to chron server")?;
-    validate_response(&job, &res)?;
+    let LogsArgs {
+        job: name,
+        lines,
+        follow,
+    } = args;
 
-    let log_path = res.text().await?;
+    let job = db
+        .get_active_job(name.clone(), ChronService::check_port_active)
+        .await?;
+    let run_id = db
+        .get_last_runs(name.clone(), 1)
+        .await?
+        .first()
+        .map(|run| run.id);
+    let (Some(job), Some(run_id)) = (job, run_id) else {
+        bail!("Job {name} is not running")
+    };
+
     let file = OpenOptions::new()
         .read(true)
-        .open(&log_path)
+        .open(job.config.log_dir.join(format!("{run_id}.log")))
         .context("Failed to open log file")?;
     let mut reader = BufReader::new(file);
 
