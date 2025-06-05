@@ -1,6 +1,5 @@
-use std::cmp::max;
-
 use chrono::{DateTime, Duration, Local};
+use std::cmp::max;
 
 // Number of milliseconds in various time periods
 const MS_SECOND: u64 = 1000;
@@ -11,8 +10,8 @@ const MS_WEEK: u64 = MS_DAY * 7;
 const MS_MONTH: u64 = MS_DAY * 30;
 const MS_YEAR: u64 = MS_DAY * 365;
 
-// Format a duration as a human-readable string
-// Inspired by chrono-humanize (https://github.com/imp/chrono-humanize-rs)
+/// Format a duration as a human-readable string
+/// Inspired by [chrono-humanize](https://github.com/imp/chrono-humanize-rs)
 pub fn duration(duration: &Duration) -> String {
     match duration.num_milliseconds().unsigned_abs() {
         n if n > MS_YEAR * 3 / 2 => format!("{} years", max(n / MS_YEAR, 2)),
@@ -34,7 +33,7 @@ pub fn duration(duration: &Duration) -> String {
     }
 }
 
-// Format a date relative to now
+/// Format a date relative to now
 pub fn relative_date(date: &DateTime<Local>) -> String {
     let ago = Local::now().signed_duration_since(*date);
     if ago.is_zero() {

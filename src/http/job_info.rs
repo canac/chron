@@ -1,6 +1,7 @@
-use crate::chron_service::{Job, JobType, ProcessStatus};
+use crate::chron_service::{Job, JobType};
+use crate::database::JobStatus;
 use anyhow::Result;
-use chrono::{DateTime, Local, Timelike};
+use chrono::Timelike;
 use std::path::PathBuf;
 
 pub struct JobInfo {
@@ -9,24 +10,13 @@ pub struct JobInfo {
     pub(crate) shell: String,
     pub(crate) schedule: Option<String>,
     pub(crate) working_dir: Option<PathBuf>,
-    pub(crate) next_run: Option<DateTime<Local>>,
-    pub(crate) status: ProcessStatus,
+    pub(crate) status: JobStatus,
     pub(crate) log_dir: PathBuf,
 }
 
 impl JobInfo {
     /// Generate the job info for a job
     pub(crate) async fn from_job(name: &str, job: &Job) -> Result<Self> {
-        let (status, run_id) = job.running_process.read().await.as_ref().map_or(
-            (ProcessStatus::Terminated, None),
-            |process| {
-                (
-                    ProcessStatus::Running { pid: process.pid },
-                    Some(process.run_id),
-                )
-            },
-        );
-
         let (schedule, next_run) = match job.r#type {
             JobType::Scheduled {
                 ref scheduled_job, ..
@@ -38,26 +28,29 @@ impl JobInfo {
         };
 
         // Wait to calculate the next run until current run finishes
-        let next_run = if run_id.is_none() {
+        let next_run =
             // Use the next retry attempt if it is set, falling back to the next scheduled run
             job.next_attempt
                 .read()
                 .await
                 // Clear any fractional seconds
                 .and_then(|timestamp| timestamp.with_nanosecond(0))
-                .or(next_run)
-                .map(DateTime::from)
-        } else {
-            None
-        };
+                .or(next_run);
 
+        let status = job.running_process.read().await.as_ref().map_or_else(
+            || {
+                next_run.map_or(JobStatus::Completed, |next_run| JobStatus::Waiting {
+                    next_run,
+                })
+            },
+            |process| JobStatus::Running { pid: process.pid },
+        );
         Ok(Self {
             name: name.to_owned(),
             command: job.command.clone(),
             shell: job.shell.clone(),
             schedule,
             working_dir: job.working_dir.clone(),
-            next_run,
             status,
             log_dir: job.log_dir.clone(),
         })

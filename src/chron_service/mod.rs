@@ -60,7 +60,6 @@ pub struct ScheduledJobOptions {
 
 pub struct Process {
     pub pid: u32,
-    pub run_id: u32,
 
     /// A oneshot channel to terminate the process and receive a response when the process had finished terminating
     terminate: Option<(Sender<()>, Receiver<()>)>,
@@ -75,11 +74,6 @@ impl Process {
         };
         tx_terminate.send(()).is_ok() && rx_terminated.await.is_ok()
     }
-}
-
-pub enum ProcessStatus {
-    Running { pid: u32 },
-    Terminated,
 }
 
 pub struct Job {

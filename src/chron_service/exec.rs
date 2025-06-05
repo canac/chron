@@ -98,7 +98,6 @@ async fn exec_command_once(
     let (tx_terminated, rx_terminated) = channel();
     *job.running_process.write().await = process.id().map(|pid| Process {
         pid,
-        run_id: run.id,
         terminate: Some((tx_terminate, rx_terminated)),
     });
 

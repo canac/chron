@@ -4,8 +4,8 @@ mod job_info;
 
 use self::http_error::HttpError;
 use self::job_info::JobInfo;
-use crate::chron_service::{ChronService, ProcessStatus};
-use crate::database::{Database, Run, RunStatus};
+use crate::chron_service::ChronService;
+use crate::database::{Database, JobStatus, Run, RunStatus};
 use actix_web::dev::Server;
 use actix_web::middleware::DefaultHeaders;
 use actix_web::web::{Data, Path};
