@@ -131,7 +131,9 @@ impl ChronService {
 
     /// Determine whether a port still belongs to any running chron server
     pub fn check_port_active(port: u16) -> bool {
-        let res = reqwest::blocking::get(format!("http://localhost:{port}"));
+        let res = reqwest::blocking::Client::builder()
+            .build()
+            .and_then(|client| client.head(format!("http://localhost:{port}")).send());
         match res {
             Ok(res) => {
                 res.headers().get("x-powered-by") == Some(&HeaderValue::from_static("chron"))

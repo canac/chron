@@ -58,6 +58,11 @@ async fn index_handler(data: AppData) -> Result<impl Responder> {
         ))
 }
 
+#[head("/")]
+async fn head_handler() -> Result<impl Responder> {
+    Ok(HttpResponse::Ok())
+}
+
 struct RunInfo {
     run: Run,
     timestamp: DateTime<Local>,
@@ -212,6 +217,7 @@ pub fn create_server(
                 )
                 .service(styles)
                 .service(index_handler)
+                .service(head_handler)
                 .service(job_handler)
                 .service(job_logs_handler)
         })
