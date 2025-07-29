@@ -52,10 +52,7 @@ pub async fn run(db: Arc<Database>, args: RunArgs) -> Result<()> {
     let chron = ChronService::new(&get_data_dir()?, Arc::clone(&db))?;
     let chron_lock = Arc::new(RwLock::new(chron));
     let (server, port) = http::create_server(&chron_lock, &db, port)?;
-    // Release any jobs associated with an old chron process using this port. The fact that we bound to the port is
-    // proof that the old process is no longer running.
-    db.release_port(port).await?;
-    chron_lock.write().await.start(chronfile, port).await?;
+    chron_lock.write().await.start(chronfile).await?;
 
     let watcher_chron = Arc::clone(&chron_lock);
     let watch_path = chronfile_path.clone();
@@ -69,7 +66,7 @@ pub async fn run(db: Arc<Database>, args: RunArgs) -> Result<()> {
             match Chronfile::load(&watch_path).await {
                 Ok(chronfile) => {
                     debug!("Reloading chronfile {}", watch_path.to_string_lossy());
-                    if let Err(err) = watcher_chron.write().await.start(chronfile, port).await {
+                    if let Err(err) = watcher_chron.write().await.start(chronfile).await {
                         error!("Failed to start chron\n{err:?}");
                     }
                 }
@@ -129,7 +126,7 @@ pub async fn run(db: Arc<Database>, args: RunArgs) -> Result<()> {
 
 /// Implementation for the `jobs` CLI command
 pub async fn jobs(db: Arc<Database>) -> Result<()> {
-    let jobs = db.get_active_jobs(ChronService::check_port_active).await?;
+    let jobs = db.get_active_jobs().await?;
     if jobs.is_empty() {
         println!("No jobs are running");
         return Ok(());
@@ -155,10 +152,7 @@ pub async fn jobs(db: Arc<Database>) -> Result<()> {
 /// Implementation for the `status` CLI command
 pub async fn status(db: Arc<Database>, args: StatusArgs) -> Result<()> {
     let StatusArgs { job } = args;
-    let Some(job) = db
-        .get_active_job(job.clone(), ChronService::check_port_active)
-        .await?
-    else {
+    let Some(job) = db.get_active_job(job.clone()).await? else {
         bail!("Job {job} is not running");
     };
 
@@ -183,11 +177,7 @@ pub async fn status(db: Arc<Database>, args: StatusArgs) -> Result<()> {
 /// Implementation for the `runs` CLI command
 pub async fn runs(db: Arc<Database>, args: RunsArgs) -> Result<()> {
     let name = args.job;
-    if db
-        .get_active_job(name.clone(), ChronService::check_port_active)
-        .await?
-        .is_none()
-    {
+    if db.get_active_job(name.clone()).await?.is_none() {
         bail!("Job {name} is not running")
     }
     let runs = db.get_last_runs(name.clone(), 10).await?;
@@ -224,9 +214,7 @@ pub async fn logs(db: Arc<Database>, args: LogsArgs) -> Result<()> {
         follow,
     } = args;
 
-    let job = db
-        .get_active_job(name.clone(), ChronService::check_port_active)
-        .await?;
+    let job = db.get_active_job(name.clone()).await?;
     let run_id = db
         .get_last_runs(name.clone(), 1)
         .await?
@@ -278,7 +266,11 @@ pub async fn logs(db: Arc<Database>, args: LogsArgs) -> Result<()> {
 /// Implementation for the `kill` CLI command
 pub async fn kill(db: Arc<Database>, args: KillArgs) -> Result<()> {
     let KillArgs { job } = args;
-    let port = get_job_port(&db, job.clone()).await?;
+    // let port = match db.get_port().await? {
+    //     Some(port) => port,
+    //     None => bail!("Job {job} is not running"),
+    // };
+    let port = 1000;
     let res = Client::builder()
         .build()?
         .post(format!("http://localhost:{port}/api/job/{job}/terminate"))
@@ -299,12 +291,4 @@ pub async fn kill(db: Arc<Database>, args: KillArgs) -> Result<()> {
     println!("Terminated process {pid}");
 
     Ok(())
-}
-
-/// Get the port of a job, returning an error if it is not running
-async fn get_job_port(db: &Arc<Database>, job: String) -> Result<u16> {
-    match db.get_job_port(job.clone()).await? {
-        Some(port) => Ok(port),
-        None => bail!("Job {job} is not running"),
-    }
 }

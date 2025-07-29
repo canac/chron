@@ -7,23 +7,11 @@ pub use self::job_config::JobConfig;
 pub use self::models::{Job, JobStatus, Run, RunStatus};
 use anyhow::{Context, Result};
 use async_sqlite::rusqlite::ToSql;
-use async_sqlite::rusqlite::{
-    self, Connection, OptionalExtension, types::Value, vtab::array::load_module,
-};
+use async_sqlite::rusqlite::{self, vtab::array::load_module};
 use async_sqlite::{Client, ClientBuilder, JournalMode};
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
-use log::info;
-use std::collections::HashSet;
 use std::convert::TryInto;
-use std::iter::once;
 use std::path::Path;
-use std::rc::Rc;
-
-#[cfg_attr(test, derive(Debug, Eq, PartialEq))]
-pub enum ReserveResult {
-    Reserved,
-    Failed { conflicting_jobs: Vec<String> },
-}
 
 /// # Data Integrity
 /// The data model is designed to ensure data integrity and consistency even when used concurrently by multiple chron
@@ -66,7 +54,6 @@ impl Database {
                     "
 CREATE TABLE IF NOT EXISTS job (
   name VARCHAR PRIMARY KEY NOT NULL,
-  port INTEGER,
   initialized BOOLEAN NOT NULL DEFAULT FALSE,
   config JSON,
   resume_at DATETIME,
@@ -254,140 +241,26 @@ WHERE name = ?2",
         Ok(())
     }
 
-    /// Get the port currently associated with a job, if any
-    pub async fn get_job_port(&self, job: String) -> Result<Option<u16>> {
-        let port = self
-            .client
+    /// Create new, uninitialized jobs
+    /// The caller should call `initialize_job` shortly thereafter
+    pub async fn create_jobs(&self, jobs: Vec<String>) -> Result<()> {
+        self.client
             .conn(move |conn| {
+                // Data integrity: newly-created jobs are uninitialized and have no current run
                 let mut statement = conn.prepare(
-                    "SELECT port
-FROM job
-WHERE name = ?1 AND port IS NOT NULL",
-                )?;
-                statement
-                    .query_row((job,), |row| row.get("port"))
-                    .optional()
-            })
-            .await?;
-        Ok(port)
-    }
-
-    /// Attempt to associate the given jobs with the current process, identified by its port
-    /// Reacquiring jobs already associated with this port is a noop
-    /// This will fail if another process has already acquired the jobs
-    /// Acquired, running jobs are guaranteed to have accurate current run information. Released jobs make no such
-    /// guarantees, so callers should verify that the job is actually running before trusting information from the
-    /// database about the job's current run. Acquired jobs also begin as uninitialized, so the caller should call
-    /// `initialize_job` shortly thereafter.
-    pub async fn acquire_jobs(
-        &self,
-        jobs: Vec<String>,
-        port: u16,
-        check_port_active: impl Fn(u16) -> bool + Send + 'static,
-    ) -> Result<ReserveResult> {
-        struct Job {
-            name: String,
-            port: u16,
-        }
-
-        impl Job {
-            fn from_row(row: &rusqlite::Row) -> async_sqlite::rusqlite::Result<Self> {
-                Ok(Self {
-                    name: row.get("name")?,
-                    port: row.get("port")?,
-                })
-            }
-        }
-
-        // Data integrity: use an immediate transaction to ensure that the job and port associations are not modified
-        // while we are determining which jobs are acquired and/or recoverable
-        let result = self
-            .client
-            .conn(move |conn| {
-                conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")?;
-
-                let mut statement = conn.prepare(
-                    "SELECT name, port
-FROM job
-WHERE name IN rarray(?1) AND port IS NOT NULL AND port != ?2",
-                )?;
-                let conflicting_jobs = statement
-                    .query_map((Self::make_rarray(jobs.clone()), port), Job::from_row)?
-                    .collect::<rusqlite::Result<Vec<_>>>()?;
-
-                // Given the jobs that are already in use, determine which ports they are associated and check whether
-                // those ports still belong to a running chron server. Then use that information to determine which
-                // conflicting jobs can be automatically released and which are still in use.
-                let ports = conflicting_jobs
-                    .iter()
-                    .map(|job| job.port)
-                    .collect::<HashSet<_>>();
-                let recovered_ports = ports
-                    .into_iter()
-                    .filter(|job_port| !check_port_active(*job_port))
-                    .collect::<HashSet<_>>();
-                let (released_jobs, conflicting_jobs) = conflicting_jobs
-                    .into_iter()
-                    .partition::<Vec<_>, _>(|job| recovered_ports.contains(&job.port));
-                if !released_jobs.is_empty() {
-                    info!(
-                        "Recovered jobs: {}",
-                        released_jobs
-                            .iter()
-                            .map(|job| job.name.clone())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    );
-                }
-
-                // Whether or not conflicts remain, release any recoverable jobs
-                Self::release_by_ports(conn, recovered_ports)?;
-
-                if !conflicting_jobs.is_empty() {
-                    conn.execute_batch("COMMIT")?;
-
-                    let conflicting_jobs =
-                        conflicting_jobs.into_iter().map(|job| job.name).collect();
-                    return Ok(ReserveResult::Failed { conflicting_jobs });
-                }
-
-                // If this job already exists, it must be already acquired by this port and is safe to update
-                // Data integrity: newly-acquired jobs are uninitialized and have no current run
-                let mut statement = conn.prepare(
-                    "INSERT INTO job (name, port)
-VALUES (?1, ?2)
+                    "INSERT INTO job (name)
+VALUES (?1)
 ON CONFLICT (name)
     DO UPDATE
-    SET port = ?2, initialized = FALSE",
+    SET initialized = FALSE",
                 )?;
                 for job in jobs {
-                    statement.execute((job, port))?;
+                    statement.execute((job,))?;
                 }
-                conn.execute_batch("COMMIT")?;
-                Ok(ReserveResult::Reserved)
+                Ok(())
             })
             .await
             .context("Failed to acquire jobs in the database")?;
-
-        Ok(result)
-    }
-
-    /// Release previously acquired jobs
-    pub async fn release_jobs(&self, jobs: Vec<String>) -> Result<()> {
-        self.client
-            .conn(move |conn| Self::release_by_names(conn, jobs))
-            .await
-            .context("Failed to release jobs by name in the database")?;
-
-        Ok(())
-    }
-
-    /// Release all previously acquired jobs associated with a port
-    pub async fn release_port(&self, port: u16) -> Result<()> {
-        self.client
-            .conn(move |conn| Self::release_by_ports(conn, once(port)))
-            .await
-            .context("Failed to release jobs by port in the database")?;
 
         Ok(())
     }
@@ -413,54 +286,25 @@ WHERE name = ?4",
                 )
             })
             .await
-            .context("Failed to release jobs by port in the database")?;
+            .context("Failed to initialize jobs in the database")?;
 
         Ok(())
     }
 
-    /// Return all running, initialized jobs from any process
-    pub async fn get_active_jobs(
-        &self,
-        check_port_active: impl Fn(u16) -> bool + Send + 'static,
-    ) -> Result<Vec<Job>> {
-        self.internal_get_active_jobs(None, None, Some(check_port_active))
-            .await
+    /// Return all running, initialized jobs
+    pub async fn get_active_jobs(&self) -> Result<Vec<Job>> {
+        self.internal_get_active_jobs(None).await
     }
 
-    /// Return a running, initialized job from any process by its name
-    pub async fn get_active_job(
-        &self,
-        job: String,
-        check_port_active: impl Fn(u16) -> bool + Send + 'static,
-    ) -> Result<Option<Job>> {
-        let jobs = self
-            .internal_get_active_jobs(Some(job), None, Some(check_port_active))
-            .await?;
-        Ok(jobs.into_iter().next())
-    }
-
-    /// Return all running, initialized jobs from this process
-    pub async fn get_own_active_jobs(&self, port: u16) -> Result<Vec<Job>> {
-        self.internal_get_active_jobs(None, Some(port), Option::<fn(u16) -> bool>::None)
-            .await
-    }
-
-    /// Return a running, initialized job from this process by its name
-    pub async fn get_own_active_job(&self, job: String, port: u16) -> Result<Option<Job>> {
-        let jobs = self
-            .internal_get_active_jobs(Some(job), Some(port), Option::<fn(u16) -> bool>::None)
-            .await?;
+    /// Return a running, initialized job by its name
+    pub async fn get_active_job(&self, job: String) -> Result<Option<Job>> {
+        let jobs = self.internal_get_active_jobs(Some(job)).await?;
         Ok(jobs.into_iter().next())
     }
 
     /// Internal implementation of `get_active_jobs` and `get_active_job`
     /// Supports optionally filtering down to a single active job
-    async fn internal_get_active_jobs(
-        &self,
-        job: Option<String>,
-        port: Option<u16>,
-        check_port_active: Option<impl Fn(u16) -> bool + Send + 'static>,
-    ) -> Result<Vec<Job>> {
+    async fn internal_get_active_jobs(&self, job: Option<String>) -> Result<Vec<Job>> {
         self.client
             .conn(move |conn| {
                 conn.execute_batch("BEGIN TRANSACTION")?;
@@ -473,39 +317,6 @@ WHERE name = ?4",
                     // Make the WHERE constraint a no-op
                     "name"
                 };
-                let port_field = if port.is_some() {
-                    params.push((":port", &port));
-                    ":port"
-                } else {
-                    // Make the WHERE constraint a no-op
-                    "port"
-                };
-
-                if let Some(check_port_active) = check_port_active {
-                    let mut statement = conn.prepare(
-                        format!(
-                            "SELECT DISTINCT(port)
-FROM job
-WHERE name = {name_field} AND port = {port_field} AND port IS NOT NULL",
-                        )
-                        .as_str(),
-                    )?;
-                    let ports = statement
-                        .query_map(params.as_slice(), |row| row.get("port"))?
-                        .collect::<rusqlite::Result<Vec<u16>>>()?;
-                    let inactive_ports = ports
-                        .into_iter()
-                        .filter(|port| !check_port_active(*port))
-                        .collect::<Vec<_>>();
-                    if !inactive_ports.is_empty() {
-                        conn.execute(
-                            "UPDATE job
-SET port = NULL
-WHERE port IN rarray(?1)",
-                            (Self::make_rarray(inactive_ports),),
-                        )?;
-                    }
-                }
 
                 // Data integrity: released and uninitialized jobs are ignored
                 let mut statement = conn.prepare(
@@ -524,7 +335,7 @@ WITH current_runs AS (
 SELECT name, config, next_run, current_runs.pid AS pid
 FROM job
 LEFT JOIN current_runs ON current_runs.job_name = job.name
-WHERE name = {name_field} AND port = {port_field} AND port IS NOT NULL AND initialized = TRUE
+WHERE name = {name_field} AND initialized = TRUE
 ORDER BY name",
                     )
                     .as_str(),
@@ -538,66 +349,10 @@ ORDER BY name",
                 Ok(jobs)
             })
             .await
-            .context("Failed to release jobs by port in the database")?
+            .context("Failed to get active jobs in the database")?
             .into_iter()
             .map(TryInto::try_into)
             .collect()
-    }
-
-    /// Release the jobs with the given names
-    /// Data integrity: released jobs have no running runs
-    fn release_by_names(conn: &Connection, jobs: Vec<String>) -> rusqlite::Result<()> {
-        let jobs = Self::make_rarray(jobs);
-        conn.execute(
-            "UPDATE job
-SET port = NULL
-WHERE name IN rarray(?1)",
-            (Rc::clone(&jobs),),
-        )?;
-
-        conn.execute(
-            "UPDATE run
-SET state = 'completed'
-WHERE job_name IN rarray(?1)",
-            (jobs,),
-        )?;
-
-        Ok(())
-    }
-
-    /// Release the jobs associated with any of the given ports
-    /// Data integrity: released jobs have no running runs
-    fn release_by_ports<I>(conn: &Connection, ports: I) -> rusqlite::Result<()>
-    where
-        I: IntoIterator<Item = u16>,
-    {
-        let jobs = conn
-            .prepare(
-                "UPDATE job
-SET port = NULL
-WHERE port IN rarray(?1)
-RETURNING name",
-            )?
-            .query_map((Self::make_rarray(ports),), |row| row.get("name"))?
-            .collect::<rusqlite::Result<Vec<String>>>()?;
-
-        conn.execute(
-            "UPDATE run
-SET state = 'completed'
-WHERE job_name IN rarray(?1)",
-            (Self::make_rarray(jobs),),
-        )?;
-
-        Ok(())
-    }
-
-    /// Convert an iterator into an rarray
-    fn make_rarray<T, I>(iter: I) -> Rc<Vec<Value>>
-    where
-        I: IntoIterator<Item = T>,
-        T: Into<Value>,
-    {
-        Rc::new(iter.into_iter().map(Into::into).collect::<Vec<_>>())
     }
 }
 
@@ -632,17 +387,11 @@ mod tests {
         id
     }
 
-    fn check_port_active(_: u16) -> bool {
-        true
-    }
-
     #[test]
     async fn test_insert_run() {
         let db = open_db().await;
         let name = "job".to_owned();
-        db.acquire_jobs(vec![name.clone()], 1000, check_port_active)
-            .await
-            .unwrap();
+        db.create_jobs(vec![name.clone()]).await.unwrap();
         insert_run(&db, name.clone()).await;
 
         let runs = db.get_last_runs(name, 1).await.unwrap();
@@ -654,32 +403,20 @@ mod tests {
     async fn test_insert_run_updates_job() {
         let db = open_db().await;
         let name = "job".to_owned();
-        db.acquire_jobs(vec![name.clone()], 1000, check_port_active)
-            .await
-            .unwrap();
+        db.create_jobs(vec![name.clone()]).await.unwrap();
         let next_run = Utc::now();
         db.initialize_job(name.clone(), JobConfig::default(), Some(&next_run), false)
             .await
             .unwrap();
         assert_eq!(
-            db.get_active_jobs(check_port_active)
-                .await
-                .unwrap()
-                .first()
-                .unwrap()
-                .status,
+            db.get_active_jobs().await.unwrap().first().unwrap().status,
             JobStatus::Waiting { next_run },
         );
 
         insert_run(&db, name.clone()).await;
 
         assert_eq!(
-            db.get_active_jobs(check_port_active)
-                .await
-                .unwrap()
-                .first()
-                .unwrap()
-                .status,
+            db.get_active_jobs().await.unwrap().first().unwrap().status,
             JobStatus::Running { pid: 0 },
         );
     }
@@ -688,9 +425,7 @@ mod tests {
     async fn test_complete_run() {
         let db = open_db().await;
         let name = "job".to_owned();
-        db.acquire_jobs(vec![name.clone()], 1000, check_port_active)
-            .await
-            .unwrap();
+        db.create_jobs(vec![name.clone()]).await.unwrap();
         db.initialize_job(name.clone(), JobConfig::default(), None, false)
             .await
             .unwrap();
@@ -705,12 +440,7 @@ mod tests {
         );
 
         assert_eq!(
-            db.get_active_jobs(check_port_active)
-                .await
-                .unwrap()
-                .first()
-                .unwrap()
-                .status,
+            db.get_active_jobs().await.unwrap().first().unwrap().status,
             JobStatus::Completed,
         );
     }
@@ -719,9 +449,7 @@ mod tests {
     async fn test_get_last_runs() {
         let db = open_db().await;
         let name = "job".to_owned();
-        db.acquire_jobs(vec![name.clone()], 1000, check_port_active)
-            .await
-            .unwrap();
+        db.create_jobs(vec![name.clone()]).await.unwrap();
         db.insert_run(name.clone(), Utc::now().naive_utc(), 2, Some(3))
             .await
             .unwrap();
@@ -763,27 +491,23 @@ mod tests {
         assert_eq!(run.status().unwrap(), RunStatus::Terminated);
     }
 
-    #[test]
-    async fn test_get_last_runs_incomplete_run() {
-        let db = open_db().await;
-        let name = "job".to_owned();
-        db.acquire_jobs(vec![name.clone()], 1000, check_port_active)
-            .await
-            .unwrap();
-        insert_run(&db, name.clone()).await;
-        // Release the job without completing the run
-        db.release_jobs(vec![name.clone()]).await.unwrap();
+    // #[test]
+    // async fn test_get_last_runs_incomplete_run() {
+    //     let db = open_db().await;
+    //     let name = "job".to_owned();
+    //     db.create_jobs(vec![name.clone()]).await.unwrap();
+    //     insert_run(&db, name.clone()).await;
+    //     // Release the job without completing the run
+    //     db.release_jobs(vec![name.clone()]).await.unwrap();
 
-        let runs = db.get_last_runs(name.clone(), 1).await.unwrap();
-        assert_eq!(runs[0].status().unwrap(), RunStatus::Terminated);
-    }
+    //     let runs = db.get_last_runs(name.clone(), 1).await.unwrap();
+    //     assert_eq!(runs[0].status().unwrap(), RunStatus::Terminated);
+    // }
 
     #[test]
     async fn test_get_resume_time_sets_to_now() {
         let db = open_db().await;
-        db.acquire_jobs(vec!["job1".to_owned()], 1000, check_port_active)
-            .await
-            .unwrap();
+        db.create_jobs(vec!["job1".to_owned()]).await.unwrap();
         db.initialize_job("job1".to_owned(), JobConfig::default(), None, false)
             .await
             .unwrap();
@@ -798,90 +522,23 @@ mod tests {
     }
 
     #[test]
-    async fn get_acquired_job_port() {
-        let db = open_db().await;
-        db.acquire_jobs(vec!["job1".to_owned()], 1000, check_port_active)
-            .await
-            .unwrap();
-        assert_eq!(
-            db.get_job_port("job1".to_owned()).await.unwrap(),
-            Some(1000),
-        );
-    }
-
-    #[test]
-    async fn get_released_job_port() {
-        let db = open_db().await;
-        db.acquire_jobs(vec!["job1".to_owned()], 1000, check_port_active)
-            .await
-            .unwrap();
-        db.release_jobs(vec!["job1".to_owned()]).await.unwrap();
-        assert_eq!(db.get_job_port("job1".to_owned()).await.unwrap(), None);
-    }
-
-    #[test]
-    async fn get_unknown_job_port() {
-        let db = open_db().await;
-        assert_eq!(db.get_job_port("job1".to_owned()).await.unwrap(), None);
-    }
-
-    #[test]
-    async fn test_acquire_jobs() {
-        let db = open_db().await;
-        assert_eq!(
-            db.acquire_jobs(
-                vec!["job1".to_owned(), "job2".to_owned()],
-                1000,
-                check_port_active,
-            )
-            .await
-            .unwrap(),
-            ReserveResult::Reserved
-        );
-        assert_eq!(
-            db.acquire_jobs(
-                vec!["job1".to_owned(), "job2".to_owned(), "job3".to_owned()],
-                1001,
-                check_port_active
-            )
-            .await
-            .unwrap(),
-            ReserveResult::Failed {
-                conflicting_jobs: vec!["job1".to_owned(), "job2".to_owned()]
-            }
-        );
-        assert_eq!(
-            db.acquire_jobs(vec!["job3".to_owned()], 1000, check_port_active)
-                .await
-                .unwrap(),
-            ReserveResult::Reserved
-        );
-    }
-
-    #[test]
     async fn test_acquire_jobs_uninitializes() {
         let db = open_db().await;
 
         // Seed with an old run and reacquire
-        db.acquire_jobs(vec!["job1".to_owned()], 1000, check_port_active)
-            .await
-            .unwrap();
+        db.create_jobs(vec!["job1".to_owned()]).await.unwrap();
         initialize_job(&db, "job1".to_owned()).await;
         insert_run(&db, "job1".to_owned()).await;
-        db.acquire_jobs(vec!["job1".to_owned()], 1000, check_port_active)
-            .await
-            .unwrap();
+        db.create_jobs(vec!["job1".to_owned()]).await.unwrap();
 
         // The job should not be active be because it is uninitialized
-        assert_eq!(db.get_active_jobs(check_port_active).await.unwrap(), vec![]);
+        assert_eq!(db.get_active_jobs().await.unwrap(), vec![]);
     }
 
     #[test]
     async fn test_initialize_job() {
         let db = open_db().await;
-        db.acquire_jobs(vec!["job1".to_owned()], 1000, check_port_active)
-            .await
-            .unwrap();
+        db.create_jobs(vec!["job1".to_owned()]).await.unwrap();
         let make_config = || JobConfig {
             command: "echo 'Hello, World!'".to_owned(),
             ..JobConfig::default()
@@ -892,7 +549,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            db.get_active_jobs(check_port_active).await.unwrap(),
+            db.get_active_jobs().await.unwrap(),
             vec![Job {
                 name: "job1".to_owned(),
                 config: make_config(),
@@ -904,9 +561,7 @@ mod tests {
     #[test]
     async fn test_initialize_job_preserve_resume_time() {
         let db = open_db().await;
-        db.acquire_jobs(vec!["job1".to_owned()], 1000, check_port_active)
-            .await
-            .unwrap();
+        db.create_jobs(vec!["job1".to_owned()]).await.unwrap();
         let resume_time = Utc::now().checked_sub_days(Days::new(1)).unwrap();
         db.set_resume_time("job1".to_owned(), &resume_time)
             .await
@@ -924,9 +579,7 @@ mod tests {
     #[test]
     async fn test_initialize_job_clear_resume_time() {
         let db = open_db().await;
-        db.acquire_jobs(vec!["job1".to_owned()], 1000, check_port_active)
-            .await
-            .unwrap();
+        db.create_jobs(vec!["job1".to_owned()]).await.unwrap();
         let resume_time = Utc::now();
         db.set_resume_time("job1".to_owned(), &resume_time)
             .await
@@ -942,188 +595,31 @@ mod tests {
     }
 
     #[test]
-    async fn test_reacquire_jobs() {
-        let db = open_db().await;
-        assert_eq!(
-            db.acquire_jobs(
-                vec!["job1".to_owned(), "job2".to_owned()],
-                1000,
-                check_port_active,
-            )
-            .await
-            .unwrap(),
-            ReserveResult::Reserved
-        );
-        insert_run(&db, "job1".to_owned()).await;
-        insert_run(&db, "job2".to_owned()).await;
-        assert_eq!(
-            db.acquire_jobs(
-                vec!["job1".to_owned(), "job2".to_owned(), "job3".to_owned()],
-                1000,
-                check_port_active
-            )
-            .await
-            .unwrap(),
-            ReserveResult::Reserved
-        );
-    }
-
-    #[test]
-    async fn test_acquire_recoverable_jobs() {
-        let db = open_db().await;
-        assert_eq!(
-            db.acquire_jobs(
-                vec!["job1".to_owned(), "job2".to_owned()],
-                1000,
-                check_port_active,
-            )
-            .await
-            .unwrap(),
-            ReserveResult::Reserved
-        );
-        assert_eq!(
-            db.acquire_jobs(vec!["job3".to_owned()], 1001, check_port_active)
-                .await
-                .unwrap(),
-            ReserveResult::Reserved
-        );
-        insert_run(&db, "job1".to_owned()).await;
-        insert_run(&db, "job2".to_owned()).await;
-        insert_run(&db, "job3".to_owned()).await;
-
-        // Port 1001 is inactive and job 3 is released
-        assert_eq!(
-            db.acquire_jobs(
-                vec!["job1".to_owned(), "job2".to_owned(), "job3".to_owned()],
-                1002,
-                |port| port == 1000
-            )
-            .await
-            .unwrap(),
-            ReserveResult::Failed {
-                conflicting_jobs: vec!["job1".to_owned(), "job2".to_owned()]
-            }
-        );
-
-        assert_eq!(
-            db.acquire_jobs(vec!["job3".to_owned()], 1000, check_port_active)
-                .await
-                .unwrap(),
-            ReserveResult::Reserved
-        );
-    }
-
-    #[test]
-    async fn test_acquire_released_jobs() {
-        let db = open_db().await;
-        let jobs = vec!["job1".to_owned(), "job2".to_owned()];
-        assert_eq!(
-            db.acquire_jobs(jobs.clone(), 1000, check_port_active)
-                .await
-                .unwrap(),
-            ReserveResult::Reserved
-        );
-        db.release_jobs(jobs.clone()).await.unwrap();
-        assert_eq!(
-            db.acquire_jobs(jobs, 1000, check_port_active)
-                .await
-                .unwrap(),
-            ReserveResult::Reserved
-        );
-    }
-
-    #[test]
     async fn test_acquire_jobs_empty() {
         let db = open_db().await;
-        assert_eq!(
-            db.acquire_jobs(Vec::new(), 1000, check_port_active)
-                .await
-                .unwrap(),
-            ReserveResult::Reserved
-        );
-    }
-
-    #[test]
-    async fn test_release_jobs() {
-        let db = open_db().await;
-        assert_eq!(
-            db.acquire_jobs(
-                vec!["job1".to_owned(), "job2".to_owned()],
-                1000,
-                check_port_active,
-            )
-            .await
-            .unwrap(),
-            ReserveResult::Reserved
-        );
-        db.release_jobs(vec!["job2".to_owned()]).await.unwrap();
-        assert_eq!(
-            db.acquire_jobs(
-                vec!["job2".to_owned(), "job3".to_owned()],
-                1000,
-                check_port_active,
-            )
-            .await
-            .unwrap(),
-            ReserveResult::Reserved
-        );
-    }
-
-    #[test]
-    async fn test_release_jobs_empty() {
-        let db = open_db().await;
-        db.release_jobs(Vec::new()).await.unwrap();
-    }
-
-    #[test]
-    async fn test_release_port() {
-        let db = open_db().await;
-        let jobs = vec!["job1".to_owned(), "job2".to_owned()];
-        assert_eq!(
-            db.acquire_jobs(jobs.clone(), 1000, check_port_active)
-                .await
-                .unwrap(),
-            ReserveResult::Reserved
-        );
-
-        db.release_port(1000).await.unwrap();
-
-        assert_eq!(
-            db.acquire_jobs(jobs, 1001, check_port_active)
-                .await
-                .unwrap(),
-            ReserveResult::Reserved
-        );
+        db.create_jobs(Vec::new()).await.unwrap();
     }
 
     #[test]
     async fn test_get_active_jobs_uninitialized() {
         let db = open_db().await;
-        db.acquire_jobs(
-            vec!["job1".to_owned(), "job2".to_owned()],
-            1000,
-            check_port_active,
-        )
-        .await
-        .unwrap();
+        db.create_jobs(vec!["job1".to_owned(), "job2".to_owned()])
+            .await
+            .unwrap();
 
-        assert_eq!(db.get_active_jobs(check_port_active).await.unwrap(), vec![]);
+        assert_eq!(db.get_active_jobs().await.unwrap(), vec![]);
     }
 
     #[test]
     async fn test_get_active_jobs_partially_initialized() {
         let db = open_db().await;
-        db.acquire_jobs(
-            vec!["job1".to_owned(), "job2".to_owned()],
-            1000,
-            check_port_active,
-        )
-        .await
-        .unwrap();
+        db.create_jobs(vec!["job1".to_owned(), "job2".to_owned()])
+            .await
+            .unwrap();
         initialize_job(&db, "job1".to_owned()).await;
 
         assert_eq!(
-            db.get_active_jobs(check_port_active)
+            db.get_active_jobs()
                 .await
                 .unwrap()
                 .into_iter()
@@ -1134,37 +630,16 @@ mod tests {
     }
 
     #[test]
-    async fn test_get_active_jobs_released() {
-        let db = open_db().await;
-        db.acquire_jobs(
-            vec!["job1".to_owned(), "job2".to_owned()],
-            1000,
-            check_port_active,
-        )
-        .await
-        .unwrap();
-        initialize_job(&db, "job1".to_owned()).await;
-        db.release_jobs(vec!["job1".to_owned()]).await.unwrap();
-
-        assert_eq!(db.get_active_jobs(check_port_active).await.unwrap(), vec![]);
-    }
-
-    #[test]
     async fn test_get_active_jobs_inactive() {
         let db = open_db().await;
         let jobs = vec!["job1".to_owned(), "job2".to_owned()];
-        db.acquire_jobs(jobs.clone(), 1000, check_port_active)
-            .await
-            .unwrap();
-        db.acquire_jobs(vec!["job3".to_owned()], 1001, check_port_active)
-            .await
-            .unwrap();
+        db.create_jobs(jobs.clone()).await.unwrap();
+        db.create_jobs(vec!["job3".to_owned()]).await.unwrap();
         initialize_job(&db, "job1".to_owned()).await;
         initialize_job(&db, "job2".to_owned()).await;
-        initialize_job(&db, "job3".to_owned()).await;
 
         assert_eq!(
-            db.get_active_jobs(|port| port == 1000)
+            db.get_active_jobs()
                 .await
                 .unwrap()
                 .into_iter()
@@ -1178,32 +653,20 @@ mod tests {
     async fn test_get_active_jobs_running() {
         let db = open_db().await;
 
-        db.acquire_jobs(vec!["job1".to_owned()], 1000, check_port_active)
-            .await
-            .unwrap();
+        db.create_jobs(vec!["job1".to_owned()]).await.unwrap();
         // The job should not active be because it has not been initialized yet
-        assert_eq!(db.get_active_jobs(check_port_active).await.unwrap(), vec![]);
+        assert_eq!(db.get_active_jobs().await.unwrap(), vec![]);
 
         initialize_job(&db, "job1".to_owned()).await;
         // The job should not be running because it does not have an active run yet
         assert_eq!(
-            db.get_active_jobs(check_port_active)
-                .await
-                .unwrap()
-                .first()
-                .unwrap()
-                .status,
+            db.get_active_jobs().await.unwrap().first().unwrap().status,
             JobStatus::Completed,
         );
 
         insert_run(&db, "job1".to_owned()).await;
         assert_eq!(
-            db.get_active_jobs(check_port_active)
-                .await
-                .unwrap()
-                .first()
-                .unwrap()
-                .status,
+            db.get_active_jobs().await.unwrap().first().unwrap().status,
             JobStatus::Running { pid: 0 },
         );
     }
@@ -1212,76 +675,16 @@ mod tests {
     async fn test_get_active_job() {
         let db = open_db().await;
 
-        db.acquire_jobs(vec!["job1".to_owned()], 1000, check_port_active)
-            .await
-            .unwrap();
+        db.create_jobs(vec!["job1".to_owned()]).await.unwrap();
         initialize_job(&db, "job1".to_owned()).await;
         insert_run(&db, "job1".to_owned()).await;
         assert_eq!(
-            db.get_active_job("job1".to_owned(), check_port_active)
+            db.get_active_job("job1".to_owned())
                 .await
                 .unwrap()
                 .unwrap()
                 .status,
             JobStatus::Running { pid: 0 },
-        );
-    }
-
-    #[test]
-    async fn test_get_own_active_job() {
-        let db = open_db().await;
-
-        db.acquire_jobs(vec!["job1".to_owned()], 1000, check_port_active)
-            .await
-            .unwrap();
-        initialize_job(&db, "job1".to_owned()).await;
-        insert_run(&db, "job1".to_owned()).await;
-        assert_eq!(
-            db.get_own_active_job("job1".to_owned(), 1000)
-                .await
-                .unwrap()
-                .unwrap()
-                .status,
-            JobStatus::Running { pid: 0 },
-        );
-        assert_eq!(
-            db.get_own_active_job("job1".to_owned(), 1001)
-                .await
-                .unwrap(),
-            None,
-        );
-    }
-
-    #[test]
-    async fn test_get_own_active_jobs() {
-        let db = open_db().await;
-
-        db.acquire_jobs(vec!["job1".to_owned()], 1000, check_port_active)
-            .await
-            .unwrap();
-        initialize_job(&db, "job1".to_owned()).await;
-        insert_run(&db, "job1".to_owned()).await;
-
-        db.acquire_jobs(vec!["job2".to_owned()], 1000, check_port_active)
-            .await
-            .unwrap();
-        initialize_job(&db, "job2".to_owned()).await;
-        insert_run(&db, "job2".to_owned()).await;
-
-        db.acquire_jobs(vec!["job3".to_owned()], 1001, check_port_active)
-            .await
-            .unwrap();
-        initialize_job(&db, "job3".to_owned()).await;
-        insert_run(&db, "job3".to_owned()).await;
-
-        assert_eq!(
-            db.get_own_active_jobs(1000)
-                .await
-                .unwrap()
-                .into_iter()
-                .map(|job| job.name)
-                .collect::<Vec<_>>(),
-            vec!["job1".to_owned(), "job2".to_owned()],
         );
     }
 }

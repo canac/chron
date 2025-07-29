@@ -9,14 +9,13 @@ use self::scheduled_job::ScheduledJob;
 use self::sleep::sleep_until;
 use self::working_dir::expand_working_dir;
 use crate::chronfile::{self, Chronfile};
-use crate::database::{Database, JobConfig, ReserveResult};
+use crate::database::{Database, JobConfig};
 use anyhow::Result;
 use anyhow::{Context, bail};
 use chrono::{DateTime, Utc};
 use chrono_humanize::{Accuracy, HumanTime, Tense};
 use cron::Schedule;
 use log::debug;
-use reqwest::header::HeaderValue;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::mem::take;
@@ -129,21 +128,8 @@ impl ChronService {
         self.jobs.get(name).map(|task| &task.job)
     }
 
-    /// Determine whether a port still belongs to any running chron server
-    pub fn check_port_active(port: u16) -> bool {
-        let res = reqwest::blocking::Client::builder()
-            .build()
-            .and_then(|client| client.head(format!("http://localhost:{port}")).send());
-        match res {
-            Ok(res) => {
-                res.headers().get("x-powered-by") == Some(&HeaderValue::from_static("chron"))
-            }
-            Err(err) => !err.is_connect(),
-        }
-    }
-
     /// Start or start the chron service using the jobs defined in the provided chronfile
-    pub async fn start(&mut self, chronfile: Chronfile, port: u16) -> Result<()> {
+    pub async fn start(&mut self, chronfile: Chronfile) -> Result<()> {
         let same_shell = self.shell == chronfile.config.shell;
         self.shell = chronfile.config.shell;
 
@@ -200,31 +186,15 @@ impl ChronService {
         }
 
         // Determine any newly added jobs and lock them in the database
-        let acquired_jobs = startup_jobs
+        let created_jobs = startup_jobs
             .keys()
             .cloned()
             .chain(scheduled_jobs.keys().cloned())
             .collect::<Vec<_>>();
-        if !acquired_jobs.is_empty() {
-            debug!("Acquiring jobs: {}...", acquired_jobs.join(", "));
-            match self
-                .db
-                .acquire_jobs(acquired_jobs, port, Self::check_port_active)
-                .await?
-            {
-                ReserveResult::Reserved => {}
-                ReserveResult::Failed { conflicting_jobs } => bail!(
-                    "The following jobs are in use by another chron process: {}",
-                    conflicting_jobs.join(", ")
-                ),
-            }
+        if !created_jobs.is_empty() {
+            debug!("Creating jobs: {}...", created_jobs.join(", "));
+            self.db.create_jobs(created_jobs).await?;
         }
-
-        let unlocked_jobs = existing_jobs
-            .keys()
-            .filter(|job| !startup_jobs.contains_key(*job) && !scheduled_jobs.contains_key(*job))
-            .cloned()
-            .collect::<Vec<_>>();
 
         for (name, job) in startup_jobs {
             debug!("{name}: registering new startup job");
@@ -238,21 +208,13 @@ impl ChronService {
 
         // Terminate all existing jobs that weren't reused
         Self::terminate_jobs(existing_jobs).await;
-        if !unlocked_jobs.is_empty() {
-            debug!("Releasing jobs: {}", unlocked_jobs.join(", "));
-            self.db.release_jobs(unlocked_jobs).await?;
-        }
 
         Ok(())
     }
 
     /// Start or start the chron service using the jobs defined in the provided chronfile
     pub async fn stop(&mut self) -> Result<()> {
-        let jobs = take(&mut self.jobs);
-
-        let unlocked_jobs = jobs.keys().cloned().collect();
-        Self::terminate_jobs(jobs).await;
-        self.db.release_jobs(unlocked_jobs).await?;
+        Self::terminate_jobs(take(&mut self.jobs)).await;
         Ok(())
     }
 

@@ -20,7 +20,6 @@ use tokio::sync::RwLock;
 use tokio_util::io::ReaderStream;
 
 struct AppState {
-    port: u16,
     chron: Arc<RwLock<ChronService>>,
     db: Arc<Database>,
 }
@@ -44,7 +43,7 @@ async fn styles() -> Result<impl Responder> {
 async fn index_handler(data: AppData) -> Result<impl Responder> {
     let jobs = data
         .db
-        .get_own_active_jobs(data.port)
+        .get_active_jobs()
         .await
         .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?;
 
@@ -85,7 +84,7 @@ async fn job_handler(name: Path<String>, data: AppData) -> Result<impl Responder
     let name = name.into_inner();
     let job = data
         .db
-        .get_own_active_job(name.clone(), data.port)
+        .get_active_job(name.clone())
         .await
         .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?
         .ok_or_else(|| HttpError::from_status_code(StatusCode::NOT_FOUND))?;
@@ -194,7 +193,6 @@ pub fn create_server(
         let result = HttpServer::new(move || {
             App::new()
                 .app_data(Data::new(AppState {
-                    port,
                     chron: Arc::clone(&chron),
                     db: Arc::clone(&db),
                 }))
