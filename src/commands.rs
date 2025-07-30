@@ -1,7 +1,7 @@
 use crate::chron_service::ChronService;
 use crate::chronfile::Chronfile;
 use crate::cli::{KillArgs, LogsArgs, RunArgs, RunsArgs, StatusArgs};
-use crate::database::{Database, JobStatus, RunStatus};
+use crate::database::{ClientDatabase, HostDatabase, JobStatus, RunStatus};
 use crate::format;
 use crate::http;
 use anyhow::{Context, Result, bail};
@@ -13,7 +13,7 @@ use notify_debouncer_mini::{DebounceEventResult, new_debouncer};
 use reqwest::{Client, StatusCode, header::HeaderValue};
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, BufWriter, IsTerminal, Read, Write, stdin};
-use std::path::PathBuf;
+use std::path::Path;
 use std::process::exit;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -22,15 +22,8 @@ use tokio::runtime::Handle;
 use tokio::sync::RwLock;
 use tokio::sync::oneshot::channel;
 
-/// Return the directory where chron will store application data
-pub fn get_data_dir() -> Result<PathBuf> {
-    let project_dirs = directories::ProjectDirs::from("com", "canac", "chron")
-        .context("Failed to determine application directories")?;
-    Ok(project_dirs.data_local_dir().to_owned())
-}
-
 /// Implementation for the `run` CLI command
-pub async fn run(db: Arc<Database>, args: RunArgs) -> Result<()> {
+pub async fn run(chron_dir: &Path, args: RunArgs) -> Result<()> {
     let RunArgs {
         port,
         quiet,
@@ -49,10 +42,14 @@ pub async fn run(db: Arc<Database>, args: RunArgs) -> Result<()> {
 
     let chronfile = Chronfile::load(&chronfile_path).await?;
 
-    let chron = ChronService::new(&get_data_dir()?, Arc::clone(&db))?;
+    let (listener, port) = http::select_port(port).await?;
+    let db = Arc::new(HostDatabase::open(chron_dir, port).await?);
+    let chron = ChronService::new(chron_dir, Arc::clone(&db))?;
     let chron_lock = Arc::new(RwLock::new(chron));
-    let (server, port) = http::create_server(&chron_lock, &db, port)?;
     chron_lock.write().await.start(chronfile).await?;
+
+    let client_db = Arc::new(ClientDatabase::open(chron_dir).await?);
+    let server = http::create_server(&chron_lock, &client_db, listener)?;
 
     let watcher_chron = Arc::clone(&chron_lock);
     let watch_path = chronfile_path.clone();
@@ -121,11 +118,13 @@ pub async fn run(db: Arc<Database>, args: RunArgs) -> Result<()> {
         },
     }
 
+    db.close().await?;
+
     Ok(())
 }
 
 /// Implementation for the `jobs` CLI command
-pub async fn jobs(db: Arc<Database>) -> Result<()> {
+pub async fn jobs(db: Arc<ClientDatabase>) -> Result<()> {
     let jobs = db.get_active_jobs().await?;
     if jobs.is_empty() {
         println!("No jobs are running");
@@ -150,7 +149,7 @@ pub async fn jobs(db: Arc<Database>) -> Result<()> {
 }
 
 /// Implementation for the `status` CLI command
-pub async fn status(db: Arc<Database>, args: StatusArgs) -> Result<()> {
+pub async fn status(db: Arc<ClientDatabase>, args: StatusArgs) -> Result<()> {
     let StatusArgs { job } = args;
     let Some(job) = db.get_active_job(job.clone()).await? else {
         bail!("Job {job} is not running");
@@ -175,7 +174,7 @@ pub async fn status(db: Arc<Database>, args: StatusArgs) -> Result<()> {
 }
 
 /// Implementation for the `runs` CLI command
-pub async fn runs(db: Arc<Database>, args: RunsArgs) -> Result<()> {
+pub async fn runs(db: Arc<ClientDatabase>, args: RunsArgs) -> Result<()> {
     let name = args.job;
     if db.get_active_job(name.clone()).await?.is_none() {
         bail!("Job {name} is not running")
@@ -207,7 +206,7 @@ pub async fn runs(db: Arc<Database>, args: RunsArgs) -> Result<()> {
 }
 
 /// Implementation for the `logs` CLI command
-pub async fn logs(db: Arc<Database>, args: LogsArgs) -> Result<()> {
+pub async fn logs(db: Arc<ClientDatabase>, args: LogsArgs) -> Result<()> {
     let LogsArgs {
         job: name,
         lines,
@@ -264,13 +263,9 @@ pub async fn logs(db: Arc<Database>, args: LogsArgs) -> Result<()> {
 }
 
 /// Implementation for the `kill` CLI command
-pub async fn kill(db: Arc<Database>, args: KillArgs) -> Result<()> {
+pub async fn kill(db: Arc<ClientDatabase>, args: KillArgs) -> Result<()> {
     let KillArgs { job } = args;
-    // let port = match db.get_port().await? {
-    //     Some(port) => port,
-    //     None => bail!("Job {job} is not running"),
-    // };
-    let port = 1000;
+    let port = db.get_port();
     let res = Client::builder()
         .build()?
         .post(format!("http://localhost:{port}/api/job/{job}/terminate"))

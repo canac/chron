@@ -9,7 +9,7 @@ use self::scheduled_job::ScheduledJob;
 use self::sleep::sleep_until;
 use self::working_dir::expand_working_dir;
 use crate::chronfile::{self, Chronfile};
-use crate::database::{Database, JobConfig};
+use crate::database::{HostDatabase, JobConfig};
 use anyhow::Result;
 use anyhow::{Context, bail};
 use chrono::{DateTime, Utc};
@@ -105,7 +105,7 @@ pub struct Task {
 
 pub struct ChronService {
     log_dir: PathBuf,
-    db: Arc<Database>,
+    db: Arc<HostDatabase>,
     jobs: HashMap<String, Task>,
     default_shell: String,
     shell: Option<String>,
@@ -113,7 +113,7 @@ pub struct ChronService {
 
 impl ChronService {
     /// Create a new `ChronService` instance
-    pub fn new(data_dir: &Path, db: Arc<Database>) -> Result<Self> {
+    pub fn new(data_dir: &Path, db: Arc<HostDatabase>) -> Result<Self> {
         Ok(Self {
             log_dir: data_dir.join("logs"),
             db,
@@ -373,7 +373,7 @@ impl ChronService {
     /// Execute a scheduled job a single time
     /// Returns the next time that the job is scheduled to run, if any
     async fn exec_scheduled_job(
-        db: &Arc<Database>,
+        db: &Arc<HostDatabase>,
         name: &str,
         job: &Arc<Job>,
     ) -> Result<Option<DateTime<Utc>>> {

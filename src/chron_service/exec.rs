@@ -2,7 +2,7 @@ use super::attempt::Attempt;
 use super::sleep::sleep_until;
 use super::{Job, RetryConfig};
 use crate::chron_service::Process;
-use crate::database::Database;
+use crate::database::HostDatabase;
 use crate::result_ext::ResultExt;
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Utc};
@@ -34,7 +34,7 @@ async fn write_mailbox_message(name: &str, code: i32) -> Result<()> {
 /// Execute the specified command without retries
 /// Return its next attempt time, if any
 async fn exec_command_once(
-    db: &Arc<Database>,
+    db: &Arc<HostDatabase>,
     job: &Arc<Job>,
     retry_config: &RetryConfig,
     attempt: &Attempt<'_>,
@@ -155,7 +155,7 @@ async fn exec_command_once(
 
 /// Execute the job's command, handling retries
 pub async fn exec_command(
-    db: &Arc<Database>,
+    db: &Arc<HostDatabase>,
     job: &Arc<Job>,
     retry_config: &RetryConfig,
     scheduled_time: &DateTime<Utc>,

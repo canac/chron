@@ -71,6 +71,10 @@ pub enum Command {
 #[derive(Parser)]
 #[clap(about, version, author)]
 pub struct Cli {
+    /// The directory to store state and logs (defaults to a platform-specific data directory)
+    #[clap(short = 'd', long, env = "CHRON_DATA_DIR")]
+    pub data_dir: Option<PathBuf>,
+
     #[clap(subcommand)]
     pub command: Command,
 }

@@ -3,7 +3,7 @@ mod http_error;
 
 use self::http_error::HttpError;
 use crate::chron_service::ChronService;
-use crate::database::{Database, Job, JobStatus, Run, RunStatus};
+use crate::database::{ClientDatabase, Job, JobStatus, Run, RunStatus};
 use actix_web::dev::Server;
 use actix_web::middleware::DefaultHeaders;
 use actix_web::web::{Data, Path};
@@ -16,12 +16,13 @@ use log::info;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs::File;
+use tokio::net::TcpListener;
 use tokio::sync::RwLock;
 use tokio_util::io::ReaderStream;
 
 struct AppState {
     chron: Arc<RwLock<ChronService>>,
-    db: Arc<Database>,
+    db: Arc<ClientDatabase>,
 }
 
 type AppData = Data<AppState>;
@@ -179,39 +180,12 @@ async fn job_terminate_handler(name: Path<String>, data: AppData) -> Result<impl
         .body("Not Running"))
 }
 
-/// Create a new chron HTTP server on the provided port. If the port is unavailable, try ascending ports until one can
-/// successfully connect.
-/// Returns the server and the port it is bound to.
-pub fn create_server(
-    chron: &Arc<RwLock<ChronService>>,
-    db: &Arc<Database>,
-    mut port: u16,
-) -> Result<(Server, u16), std::io::Error> {
+/// Select a port for the HTTP server to listen on
+/// The provided port is tried first, but if it is unavailable, other ports are tried until one can successfully connect.
+pub async fn select_port(mut port: u16) -> Result<(TcpListener, u16), std::io::Error> {
     loop {
-        let chron = Arc::clone(chron);
-        let db = Arc::clone(db);
-        let result = HttpServer::new(move || {
-            App::new()
-                .app_data(Data::new(AppState {
-                    chron: Arc::clone(&chron),
-                    db: Arc::clone(&db),
-                }))
-                .wrap(DefaultHeaders::new().add(("X-Powered-By", "chron")))
-                .service(actix_web::web::scope("/api").service(job_terminate_handler))
-                .service(styles)
-                .service(index_handler)
-                .service(head_handler)
-                .service(job_handler)
-                .service(job_logs_handler)
-        })
-        .disable_signals()
-        .bind(("localhost", port));
-
-        match result {
-            Ok(server) => {
-                info!("Starting HTTP server on port {}", port);
-                return Ok((server.run(), port));
-            }
+        match TcpListener::bind(("localhost", port)).await {
+            Ok(listener) => return Ok((listener, port)),
             Err(err) if err.kind() == std::io::ErrorKind::AddrInUse && port != u16::MAX => {
                 let next_port = port.saturating_add(1);
                 info!("Port {port} is unavailable, trying port {next_port}...");
@@ -220,4 +194,35 @@ pub fn create_server(
             Err(err) => return Err(err),
         }
     }
+}
+
+/// Create a new chron HTTP server on the provided TCP listener
+pub fn create_server(
+    chron: &Arc<RwLock<ChronService>>,
+    db: &Arc<ClientDatabase>,
+    listener: TcpListener,
+) -> Result<Server, std::io::Error> {
+    let port = listener.local_addr()?.port();
+
+    let chron = Arc::clone(chron);
+    let db = Arc::clone(db);
+    let server = HttpServer::new(move || {
+        App::new()
+            .app_data(Data::new(AppState {
+                chron: Arc::clone(&chron),
+                db: Arc::clone(&db),
+            }))
+            .wrap(DefaultHeaders::new().add(("X-Powered-By", "chron")))
+            .service(actix_web::web::scope("/api").service(job_terminate_handler))
+            .service(styles)
+            .service(index_handler)
+            .service(head_handler)
+            .service(job_handler)
+            .service(job_logs_handler)
+    })
+    .disable_signals()
+    .listen(listener.into_std()?)?;
+
+    info!("Starting HTTP server on port {}", port);
+    Ok(server.run())
 }
