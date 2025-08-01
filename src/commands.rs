@@ -10,6 +10,7 @@ use cli_tables::Table;
 use log::{LevelFilter, debug, error, info};
 use notify::RecursiveMode;
 use notify_debouncer_mini::{DebounceEventResult, new_debouncer};
+use rand::RngCore;
 use reqwest::{Client, StatusCode, header::HeaderValue};
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, BufWriter, IsTerminal, Read, Write, stdin};
@@ -43,13 +44,15 @@ pub async fn run(chron_dir: &Path, args: RunArgs) -> Result<()> {
     let chronfile = Chronfile::load(&chronfile_path).await?;
 
     let (listener, port) = http::select_port(port).await?;
-    let db = Arc::new(HostDatabase::open(chron_dir, port).await?);
+    let host_id = rand::rng().next_u32();
+    let (db, host_id) = HostDatabase::open(chron_dir, port, host_id).await?;
+    let db = Arc::new(db);
     let chron = ChronService::new(chron_dir, Arc::clone(&db))?;
     let chron_lock = Arc::new(RwLock::new(chron));
     chron_lock.write().await.start(chronfile).await?;
 
     let client_db = Arc::new(ClientDatabase::open(chron_dir).await?);
-    let server = http::create_server(&chron_lock, &client_db, listener)?;
+    let server = http::create_server(&chron_lock, &client_db, host_id, listener)?;
 
     let watcher_chron = Arc::clone(&chron_lock);
     let watch_path = chronfile_path.clone();

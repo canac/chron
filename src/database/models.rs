@@ -3,6 +3,21 @@ use anyhow::{Context, anyhow, bail};
 use async_sqlite::rusqlite::{Result, Row};
 use chrono::{DateTime, Duration, Local, NaiveDateTime, TimeZone, Utc};
 
+pub struct Host {
+    pub port: u16,
+    pub id: u32,
+}
+
+impl Host {
+    /// Convert an SQLite row into a Host model
+    pub fn from_row(row: &Row) -> Result<Self> {
+        Ok(Self {
+            port: row.get("port")?,
+            id: row.get("host_id")?,
+        })
+    }
+}
+
 #[cfg_attr(test, derive(Debug, Eq, PartialEq))]
 pub enum JobStatus {
     /// The job is currently running with this process id

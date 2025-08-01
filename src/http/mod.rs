@@ -7,9 +7,7 @@ use crate::database::{ClientDatabase, Job, JobStatus, Run, RunStatus};
 use actix_web::dev::Server;
 use actix_web::middleware::DefaultHeaders;
 use actix_web::web::{Data, Path};
-use actix_web::{
-    App, HttpResponse, HttpServer, Responder, Result, get, head, http::StatusCode, post,
-};
+use actix_web::{App, HttpResponse, HttpServer, Responder, Result, get, http::StatusCode, post};
 use askama::Template;
 use chrono::{DateTime, Duration, Local, TimeZone};
 use log::info;
@@ -23,6 +21,7 @@ use tokio_util::io::ReaderStream;
 struct AppState {
     chron: Arc<RwLock<ChronService>>,
     db: Arc<ClientDatabase>,
+    host_id: u32,
 }
 
 type AppData = Data<AppState>;
@@ -38,6 +37,13 @@ async fn styles() -> Result<impl Responder> {
     Ok(HttpResponse::Ok()
         .content_type("text/css; charset=utf-8")
         .body(include_str!("./static/styles.css")))
+}
+
+#[get("/host/id")]
+async fn host_id_handler(data: AppData) -> Result<impl Responder> {
+    Ok(HttpResponse::Ok()
+        .content_type("application/octet-stream")
+        .body(data.host_id.to_be_bytes().to_vec()))
 }
 
 #[get("/")]
@@ -56,11 +62,6 @@ async fn index_handler(data: AppData) -> Result<impl Responder> {
                 .render()
                 .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?,
         ))
-}
-
-#[head("/")]
-async fn head_handler() -> Result<impl Responder> {
-    Ok(HttpResponse::Ok())
 }
 
 struct RunInfo {
@@ -184,7 +185,7 @@ async fn job_terminate_handler(name: Path<String>, data: AppData) -> Result<impl
 /// The provided port is tried first, but if it is unavailable, other ports are tried until one can successfully connect.
 pub async fn select_port(mut port: u16) -> Result<(TcpListener, u16), std::io::Error> {
     loop {
-        match TcpListener::bind(("localhost", port)).await {
+        match TcpListener::bind(("127.0.0.1", port)).await {
             Ok(listener) => return Ok((listener, port)),
             Err(err) if err.kind() == std::io::ErrorKind::AddrInUse && port != u16::MAX => {
                 let next_port = port.saturating_add(1);
@@ -200,6 +201,7 @@ pub async fn select_port(mut port: u16) -> Result<(TcpListener, u16), std::io::E
 pub fn create_server(
     chron: &Arc<RwLock<ChronService>>,
     db: &Arc<ClientDatabase>,
+    host_id: u32,
     listener: TcpListener,
 ) -> Result<Server, std::io::Error> {
     let port = listener.local_addr()?.port();
@@ -211,12 +213,13 @@ pub fn create_server(
             .app_data(Data::new(AppState {
                 chron: Arc::clone(&chron),
                 db: Arc::clone(&db),
+                host_id,
             }))
             .wrap(DefaultHeaders::new().add(("X-Powered-By", "chron")))
             .service(actix_web::web::scope("/api").service(job_terminate_handler))
             .service(styles)
+            .service(host_id_handler)
             .service(index_handler)
-            .service(head_handler)
             .service(job_handler)
             .service(job_logs_handler)
     })

@@ -7,6 +7,7 @@ pub use self::job_config::JobConfig;
 pub use self::models::{Job, JobStatus, Run, RunStatus};
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, NaiveDateTime, Utc};
+use reqwest::header::HeaderValue;
 use std::path::Path;
 
 pub struct ClientDatabase {
@@ -47,6 +48,21 @@ impl ClientDatabase {
     }
 }
 
+/// Get the host id of the host at the given port
+async fn get_host_id(port: u16) -> Option<u32> {
+    let res = reqwest::get(format!("http://127.0.0.1:{port}/host/id"))
+        .await
+        .ok()?;
+    if !res.status().is_success()
+        || res.headers().get("x-powered-by") != Some(&HeaderValue::from_static("chron"))
+    {
+        return None;
+    }
+    Some(u32::from_be_bytes(
+        res.bytes().await.ok()?.as_ref().try_into().ok()?,
+    ))
+}
+
 pub struct HostDatabase {
     db: Database,
 }
@@ -55,11 +71,11 @@ impl HostDatabase {
     /// Open the database as a writable host
     /// The database will be able to write job information that other client databases can read. Only one host can open
     /// the database at a time.
-    pub async fn open(chron_dir: &Path, port: u16) -> Result<Self> {
+    pub async fn open(chron_dir: &Path, port: u16, host_id: u32) -> Result<(Self, u32)> {
         let db = Database::new(chron_dir).await?;
         db.init().await?;
-        db.set_port(port).await?;
-        Ok(Self { db })
+        db.set_port(port, host_id, get_host_id).await?;
+        Ok((Self { db }, host_id))
     }
 
     /// Close the database, releasing it to be opened by a different host

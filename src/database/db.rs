@@ -1,13 +1,15 @@
 use super::job_config::JobConfig;
 use super::models::{Job, Run};
-use crate::database::models::RawJob;
+use crate::database::models::{Host, RawJob};
 use anyhow::{Context, Result, bail};
-use async_sqlite::rusqlite::ToSql;
-use async_sqlite::rusqlite::{self};
+use async_sqlite::rusqlite::{self, OptionalExtension, ToSql};
 use async_sqlite::{Client, ClientBuilder, JournalMode};
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
+use log::info;
 use std::convert::TryInto;
+use std::future::Future;
 use std::path::Path;
+use tokio::runtime::Handle;
 
 pub struct Database {
     client: Client,
@@ -53,9 +55,10 @@ CREATE TABLE IF NOT EXISTS run (
   max_attempts INTEGER
 );
 
-CREATE TABLE IF NOT EXISTS host_info (
-  key VARCHAR PRIMARY KEY NOT NULL,
-  value NOT NULL
+CREATE TABLE IF NOT EXISTS host (
+  key VARCHAR PRIMARY KEY NOT NULL CHECK(key = 'singleton'),
+  port INTEGER NOT NULL,
+  host_id INTEGER NOT NULL
 );",
                 )
             })
@@ -70,6 +73,107 @@ CREATE TABLE IF NOT EXISTS host_info (
             })
             .await
             .context("Failed to set busy timeout")?;
+
+        Ok(())
+    }
+
+    /// Return the port of the host currently connected to the database
+    pub async fn get_port(&self) -> Result<Option<u16>> {
+        self.client
+            .conn(|conn| {
+                let mut statement = conn.prepare(
+                    "
+SELECT port
+FROM host
+WHERE key = 'singleton'",
+                )?;
+                statement
+                    .query_map([], |row| row.get::<_, u16>("port"))?
+                    .next()
+                    .transpose()
+            })
+            .await
+            .context("Failed to get port from the database")
+    }
+
+    /// Set the port in the host info table, marking the database as in-use
+    pub async fn set_port<F, Fut>(&self, port: u16, host_id: u32, get_host_id: F) -> Result<()>
+    where
+        F: Fn(u16) -> Fut + Send + 'static,
+        Fut: Future<Output = Option<u32>>,
+    {
+        let handle = Handle::current();
+        let success = self
+            .client
+            .conn(move |conn| {
+                // Prevent other processes from changing the port while we are checking and updating it
+                conn.execute("BEGIN IMMEDIATE TRANSACTION", ())?;
+
+                let existing_host = conn
+                    .query_row(
+                        "
+SELECT port, host_id
+FROM host
+WHERE key = 'singleton'",
+                        (),
+                        Host::from_row,
+                    )
+                    .optional()?;
+
+                // If there is an existing port, that means that this database already has an active host or that the
+                // chron host process crashed before cleaning up properly
+                let available = existing_host.is_none_or(|existing_host| {
+                    if existing_host.port == port {
+                        // The current host process has already acquired this port, proving that it does not belong to
+                        // the previous host
+                        return true;
+                    }
+
+                    // If the existing port does not belong to a running chron process, that means that the host process
+                    // crashed. The port is available to be recovered by the current chron process.
+                    info!(
+                        "Checking whether the host at port {} is still running...",
+                        existing_host.port
+                    );
+                    let remote_host_id =
+                        handle.block_on(async { get_host_id(existing_host.port).await });
+                    // If the host id in the database matches the host id of the server running at the port in the
+                    // database, then the existing host is still running. Otherwise, this means that no server is
+                    // using that port, a chron server connected to a different database is using that port, or an
+                    // entirely different process is using that port. In any of these cases, this database does not
+                    // belong to the existing host and can be reclaimed.
+                    let existing_host_running = remote_host_id
+                        .is_some_and(|existing_host_id| existing_host_id == existing_host.id);
+                    info!(
+                        "Host at port {} is {}running",
+                        existing_host.port,
+                        if existing_host_running { "" } else { "not " }
+                    );
+                    !existing_host_running
+                });
+                if available {
+                    conn.execute(
+                        "
+INSERT INTO host (key, port, host_id)
+VALUES ('singleton', ?1, ?2)
+ON CONFLICT(key)
+    DO UPDATE
+    SET port = excluded.port, host_id = excluded.host_id
+",
+                        (port, host_id),
+                    )?;
+                }
+
+                conn.execute("COMMIT", ())?;
+
+                Ok(available)
+            })
+            .await
+            .context("Failed to set port in the database")?;
+
+        if !success {
+            bail!("chron is already running");
+        }
 
         self.client
             .conn(|conn| {
@@ -87,52 +191,7 @@ SET state = 'completed';",
                 )
             })
             .await
-            .context("Failed to reset jobs and runs in the database")?;
-
-        Ok(())
-    }
-
-    /// Return the port of the host currently connected to the database
-    pub async fn get_port(&self) -> Result<Option<u16>> {
-        self.client
-            .conn(|conn| {
-                let mut statement = conn.prepare(
-                    "
-SELECT value
-FROM host_info
-WHERE key = 'port'",
-                )?;
-                let mut rows = statement.query_map([], |row| row.get::<_, u16>("value"))?;
-                rows.next().transpose()
-            })
-            .await
-            .context("Failed to get port from the database")
-    }
-
-    /// Set the port in the host info table, marking the database as in-use
-    pub async fn set_port(&self, port: u16) -> Result<()> {
-        let result = self
-            .client
-            .conn(move |conn| {
-                conn.execute(
-                    "
-INSERT INTO host_info (key, value)
-VALUES ('port', ?1)",
-                    (port,),
-                )
-            })
-            .await;
-
-        if let Err(ref err) = result
-            && let async_sqlite::Error::Rusqlite(err) = err
-            && let Some(err) = err.sqlite_error()
-            && err.code == rusqlite::ErrorCode::ConstraintViolation
-        {
-            bail!("chron is already running")
-        }
-
-        result.context("Failed to set port in the database")?;
-        Ok(())
+            .context("Failed to reset jobs and runs in the database")
     }
 
     /// Remove the port from the host info table, marking the database as no longer in-use
@@ -141,8 +200,8 @@ VALUES ('port', ?1)",
             .conn(move |conn| {
                 conn.execute(
                     "
-DELETE FROM host_info
-WHERE key = 'port'",
+DELETE FROM host
+WHERE key = 'singleton'",
                     (),
                 )
             })
@@ -424,6 +483,7 @@ ORDER BY name",
 
 #[cfg(test)]
 mod tests {
+
     use crate::database::{JobStatus, RunStatus};
     use assert_matches::assert_matches;
     use chrono::Days;
@@ -454,13 +514,73 @@ mod tests {
         id
     }
 
+    async fn get_host_id(_: u16) -> Option<u32> {
+        Some(1)
+    }
+
+    #[test]
+    async fn test_get_port() {
+        let db = open_db().await;
+
+        assert_eq!(db.get_port().await.unwrap(), None);
+    }
+
     #[test]
     async fn test_set_port() {
         let db = open_db().await;
 
-        db.set_port(1000).await.unwrap();
+        db.set_port(1000, 1, get_host_id).await.unwrap();
+    }
+
+    #[test]
+    async fn test_set_port_unchanged_port() {
+        let db = open_db().await;
+
+        db.set_port(1000, 1, get_host_id).await.unwrap();
+
+        // host 1 on port 1000 crashed, so connecting again with the same port should succeed
+        db.set_port(1000, 1, get_host_id).await.unwrap();
+    }
+
+    #[test]
+    async fn test_set_port_different_host() {
+        let db = open_db().await;
+
+        db.set_port(1000, 1, get_host_id).await.unwrap();
+
+        // host 1 on port 1000 crashed, and now host 2 is on port 1000, so connecting again with any port should succeed
+        db.set_port(1001, 1, async |_| Some(2)).await.unwrap();
+    }
+
+    #[test]
+    async fn test_set_port_no_host() {
+        let db = open_db().await;
+
+        db.set_port(1000, 1, get_host_id).await.unwrap();
+
+        // host 1 on port 1000 crashed, and now nothing is on port 1000, so connecting again with any port should succeed
+        db.set_port(1001, 1, async |_| None).await.unwrap();
+    }
+
+    #[test]
+    async fn test_set_port_running() {
+        let db = open_db().await;
+
+        db.set_port(1000, 1, get_host_id).await.unwrap();
+
+        // host 1 on port 1000 is still running, so connecting again with any other port or host should fail
         assert_eq!(
-            db.set_port(1000).await.unwrap_err().to_string(),
+            db.set_port(1001, 1, get_host_id)
+                .await
+                .unwrap_err()
+                .to_string(),
+            "chron is already running"
+        );
+        assert_eq!(
+            db.set_port(1001, 2, get_host_id)
+                .await
+                .unwrap_err()
+                .to_string(),
             "chron is already running"
         );
     }
@@ -469,13 +589,13 @@ mod tests {
     async fn test_remove_port() {
         let db = open_db().await;
 
-        db.set_port(1000).await.unwrap();
+        db.set_port(1000, 1, get_host_id).await.unwrap();
         assert_eq!(db.get_port().await.unwrap(), Some(1000));
 
         db.remove_port().await.unwrap();
         assert_eq!(db.get_port().await.unwrap(), None);
 
-        db.set_port(1000).await.unwrap();
+        db.set_port(1000, 1, get_host_id).await.unwrap();
         assert_eq!(db.get_port().await.unwrap(), Some(1000));
     }
 
@@ -590,7 +710,7 @@ mod tests {
         db.create_jobs(vec![name.clone()]).await.unwrap();
         insert_run(&db, name.clone()).await;
         // Simulate a new host connecting to the database without completing the run
-        db.init().await.unwrap();
+        db.set_port(1000, 1, get_host_id).await.unwrap();
 
         let runs = db.get_last_runs(name.clone(), 1).await.unwrap();
         assert_eq!(runs[0].status().unwrap(), RunStatus::Terminated);
