@@ -5,10 +5,15 @@ mod models;
 use self::db::Database;
 pub use self::job_config::JobConfig;
 pub use self::models::{Job, JobStatus, Run, RunStatus};
+use crate::http_helpers::{read_status, validate_headers};
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, NaiveDateTime, Utc};
-use reqwest::header::HeaderValue;
+use std::net::SocketAddr;
 use std::path::Path;
+use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::net::TcpStream;
+use tokio::time::timeout;
 
 pub struct ClientDatabase {
     db: Database,
@@ -48,19 +53,33 @@ impl ClientDatabase {
     }
 }
 
+/// Perform a `GET /host/id` HTTP request using raw TCP to avoid heavy HTTP client dependencies
+async fn send_get_host_id_request(port: u16) -> Result<Option<u32>> {
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let mut stream = TcpStream::connect(addr).await?;
+
+    let request = b"GET /host/id HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
+    stream.write_all(request).await?;
+
+    let mut reader = BufReader::new(stream);
+
+    if read_status(&mut reader).await? != "200" {
+        return Ok(None);
+    }
+    validate_headers(&mut reader).await?;
+
+    // Parse the body looking for the 4-byte host id
+    let mut body = [0; 4];
+    reader.read_exact(&mut body).await?;
+    Ok(Some(u32::from_be_bytes(body)))
+}
+
 /// Get the host id of the host at the given port
 async fn get_host_id(port: u16) -> Option<u32> {
-    let res = reqwest::get(format!("http://127.0.0.1:{port}/host/id"))
+    timeout(Duration::from_millis(100), send_get_host_id_request(port))
         .await
-        .ok()?;
-    if !res.status().is_success()
-        || res.headers().get("x-powered-by") != Some(&HeaderValue::from_static("chron"))
-    {
-        return None;
-    }
-    Some(u32::from_be_bytes(
-        res.bytes().await.ok()?.as_ref().try_into().ok()?,
-    ))
+        .ok()?
+        .ok()?
 }
 
 pub struct HostDatabase {

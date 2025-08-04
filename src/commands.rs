@@ -4,6 +4,7 @@ use crate::cli::{KillArgs, LogsArgs, RunArgs, RunsArgs, StatusArgs};
 use crate::database::{ClientDatabase, HostDatabase, JobStatus, RunStatus};
 use crate::format;
 use crate::http;
+use crate::http_helpers::{read_status, validate_headers};
 use anyhow::{Context, Result, bail};
 use chrono::Local;
 use cli_tables::Table;
@@ -11,14 +12,16 @@ use log::{LevelFilter, debug, error, info};
 use notify::RecursiveMode;
 use notify_debouncer_mini::{DebounceEventResult, new_debouncer};
 use rand::RngCore;
-use reqwest::{Client, StatusCode, header::HeaderValue};
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, BufWriter, IsTerminal, Read, Write, stdin};
+use std::net::SocketAddr;
 use std::path::Path;
 use std::process::exit;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
 use tokio::runtime::Handle;
 use tokio::sync::RwLock;
 use tokio::sync::oneshot::channel;
@@ -265,27 +268,38 @@ pub async fn logs(db: Arc<ClientDatabase>, args: LogsArgs) -> Result<()> {
     Ok(())
 }
 
+/// Perform a `POST /api/job/:job_id/terminate` HTTP request using raw TCP to avoid heavy HTTP client dependencies
+async fn send_terminate_job_request(port: u16, job: &str) -> Result<u32> {
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let mut stream = TcpStream::connect(addr).await?;
+
+    let request = format!(
+        "POST /api/job/{job}/terminate HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+    );
+    stream.write_all(request.as_bytes()).await?;
+
+    let mut reader = tokio::io::BufReader::new(stream);
+
+    let status = read_status(&mut reader).await?;
+    if status == "404" {
+        bail!("Job {job} is not running");
+    }
+    if status != "200" {
+        bail!("Invalid status {status}");
+    }
+    validate_headers(&mut reader).await?;
+
+    // Parse the body looking for the PID of the terminated process
+    let mut body = String::new();
+    reader.read_to_string(&mut body).await?;
+    Ok(body.parse()?)
+}
+
 /// Implementation for the `kill` CLI command
 pub async fn kill(db: Arc<ClientDatabase>, args: KillArgs) -> Result<()> {
     let KillArgs { job } = args;
     let port = db.get_port();
-    let res = Client::builder()
-        .build()?
-        .post(format!("http://localhost:{port}/api/job/{job}/terminate"))
-        .send()
-        .await
-        .context("Failed to connect to chron server")?;
-    if res.headers().get("x-powered-by") != Some(&HeaderValue::from_static("chron")) {
-        bail!(
-            "Server at {} is not a chron server",
-            res.url().origin().ascii_serialization()
-        );
-    }
-    if res.status() == StatusCode::NOT_FOUND {
-        bail!("Job {job} is not running");
-    }
-
-    let pid = res.text().await?;
+    let pid = send_terminate_job_request(port, &job).await?;
     println!("Terminated process {pid}");
 
     Ok(())
