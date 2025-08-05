@@ -230,10 +230,10 @@ impl ChronService {
             }
             task.handle.abort();
 
-            if let Err(err) = task.handle.await {
-                if err.is_panic() {
-                    debug!("{name}: failed with error: {err:?}");
-                }
+            if let Err(err) = task.handle.await
+                && err.is_panic()
+            {
+                debug!("{name}: failed with error: {err:?}");
             }
         }
         if has_jobs {

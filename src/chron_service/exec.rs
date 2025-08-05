@@ -135,13 +135,13 @@ async fn exec_command_once(
     // process is None because the job terminated, but the most recent run in the database still has a status of None.
     *job.running_process.write().await = None;
 
-    if let Some(code) = status_code {
-        if code != 0 {
-            warn!("{name}: failed with exit code {code}");
+    if let Some(code) = status_code
+        && code != 0
+    {
+        warn!("{name}: failed with exit code {code}");
 
-            if write_mailbox_message(&name, code).await.is_err() {
-                warn!("Failed to write mailbox message");
-            }
+        if write_mailbox_message(&name, code).await.is_err() {
+            warn!("Failed to write mailbox message");
         }
     }
 
