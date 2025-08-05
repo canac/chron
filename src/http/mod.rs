@@ -216,12 +216,12 @@ pub fn create_server(
                 host_id,
             }))
             .wrap(DefaultHeaders::new().add(("X-Powered-By", "chron")))
-            .service(actix_web::web::scope("/api").service(job_terminate_handler))
             .service(styles)
             .service(host_id_handler)
             .service(index_handler)
             .service(job_handler)
             .service(job_logs_handler)
+            .service(job_terminate_handler)
     })
     .disable_signals()
     .listen(listener.into_std()?)?;

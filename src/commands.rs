@@ -268,13 +268,13 @@ pub async fn logs(db: Arc<ClientDatabase>, args: LogsArgs) -> Result<()> {
     Ok(())
 }
 
-/// Perform a `POST /api/job/:job_id/terminate` HTTP request using raw TCP to avoid heavy HTTP client dependencies
+/// Perform a `POST /job/:job_id/terminate` HTTP request using raw TCP to avoid heavy HTTP client dependencies
 async fn send_terminate_job_request(port: u16, job: &str) -> Result<u32> {
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let mut stream = TcpStream::connect(addr).await?;
 
     let request = format!(
-        "POST /api/job/{job}/terminate HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+        "POST /job/{job}/terminate HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
     );
     stream.write_all(request.as_bytes()).await?;
 
