@@ -226,6 +226,6 @@ pub fn create_server(
     .disable_signals()
     .listen(listener.into_std()?)?;
 
-    info!("Starting HTTP server on port {}", port);
+    info!("Listening on http://localhost:{port}");
     Ok(server.run())
 }
