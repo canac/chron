@@ -26,13 +26,13 @@ command = "./backup.sh"
 schedule = "0 0 * * * *" # Run every hour
 ```
 
-The job name must only contain letters and numbers in kebab case, like "my-1st-job". The `command` value is the command that `chron` will execute when it is running the job. The `workingDir` value is optional and sets the current working directory when executing the job. "~" will be expanded to the current user's home directory. The `schedule` value is a cron expression that defines when the job should run. [crontab.guru](https://crontab.guru) is a helpful tool for creating and debugging expressions. Note that `chron` supports an additional sixth field for the year that crontab.guru does not.
+The job name must only contain letters and numbers in kebab case, like "my-1st-job". The `command` value is the command that `chron` will execute when it is running the job. The `workingDir` value optional and sets the current working directory when executing the job. "~" will be expanded to the current user's home directory. The `schedule` value is a cron expression that defines when the job should run. [crontab.guru](https://crontab.guru) is a helpful tool for creating and debugging expressions. Note that `chron` supports an additional sixth field for the year that crontab.guru does not.
 
 **Important note**: `chron` currently uses the [`cron` crate](https://github.com/zslayton/cron) for parsing schedules, and it uses Quartz-style expressions with 0 representing January and 1 representing Sunday, not 1 representing January and 0 representing Sunday like in Unix cron. Consider referring to days and weeks by their name instead of by their index to improve readability and avoid confusion.
 
 ## Running chron
 
-Now that you have a chronfile, you can run `chron` like this: `chron run chronfile.toml`. Assuming that you provided a valid chronfile, `chron` will run the `webserver` job immediately, run the `online-backup` job every hour, and continue running indefinitely. If you modify the chronfile, `chron` will automatically reload with the new jobs.
+Now that you have a chronfile, you can run `chron` like this: `chron chronfile.toml`. Assuming that you provided a valid chronfile, `chron` will run the `webserver` job immediately, run the `online-backup` job every hour, and continue running indefinitely. If you modify the chronfile, `chron` will automatically reload with the new jobs.
 
 ## Configuring chron
 
@@ -149,95 +149,13 @@ At the top level of the chronfile, you can define configuration for the entire `
 
 ## HTTP server
 
-`chron` also starts a basic HTTP server that lets you see the status of your commands. By default, `chron` will pick an open port to listen on.
+`chron` can optionally start a basic HTTP server that lets you see the status of your commands. To enable to HTTP server, provide `chron` with the port port through the `--port` flag or the `PORT` environment variable.
 
 ```sh
-$ chron run chronfile.toml
-# ...
-Listening on port http://localhost:2748
-```
+$ chron chronfile.toml --port=8000
 
-You can also manually specify the port through the `--port` flag or the `PORT` environment variable.
-
-```sh
-$ PORT=8000 chron run chronfile.toml
 # Or ...
-$ chron run chronfile.toml --port=8000
 
-$ open http://localhost:8000
-```
-
-## Data Directory
-
-By default `chron` stores its state database and logs in an application-specific directory. You can manually specify the data directory through the `--data-dir` flag or the `CHRON_DATA_DIR` environment variable. If you want to have two `chron` processes running simultaneously, they will need to have separate data directories to avoid conflicting.
-
-```sh
-$ chron run --data-dir=~/.local/share/chron-1 chronfile1.toml &
-$ chron run --data-dir=~/.local/share/chron-2 chronfile2.toml
-```
-
-## Management CLI
-
-You can view and manage a running `chron` process through the CLI.
-
-### `jobs` Subcommand
-
-`chron jobs` will print a table of the registered jobs, their command, and their status.
-
-```sh
-$ chron jobs
-+---------------+-------------------+------------------------+
-| name          | command           | status                 |
-+---------------+-------------------+------------------------+
-| online-backup | ./backup.sh       | next run in 40 minutes |
-| webserver     | ./start-server.sh | running                |
-+---------------+-------------------+------------------------+
-```
-
-### `status` Subcommand
-
-`chron status [job]` will print more detailed information about a specific job.
-
-```sh
-$ chron status online-backup
-command: ./backup.sh
-schedule: 0 0 * * * *
-status: not running (next run at 2025-01-01 00:00:00 UTC)
-```
-
-### `runs` Subcommand
-
-`chron runs [job]` will print a table of the job's most recent runs and their exit codes.
-
-```sh
-$ chron runs online-backup
-+----------------+----------------+--------+
-| time           | execution time | status |
-+----------------+----------------+--------+
-| 20 minutes ago | 25 seconds     | 0      |
-| 1 hour ago     | 27 seconds     | 0      |
-| 2 hours ago    | 26 seconds     | 0      |
-| 3 hours ago    | 1 second       | 1      |
-| 4 hours ago    | 25 seconds     | 0      |
-+----------------+----------------+--------+
-```
-
-### `logs` Subcommand
-
-`chron logs [job]` will print the stdout and stderr from a job's most recent execution. Pass the `--lines=n` flag to only print the last `n` lines. Pass the `--follow` flag to keep printing logs from a running job as they are written.
-
-```sh
-$ chron logs online-backup
-[2025-01-01 12:00:00] Starting backup process...
-[2025-01-01 12:00:15] Backing up database...
-[2025-01-01 12:00:20] Backup completed successfully
-```
-
-### `kill` Subcommand
-
-`chron kill [job]` will kill a job's running process, if it is running. The job will run again the next time that it is scheduled to.
-
-```sh
-$ chron kill online-backup
-Terminated process 12345
+$ PORT=8000 chron chronfile.toml
+open http://localhost:8000
 ```
