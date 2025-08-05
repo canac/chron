@@ -5,7 +5,7 @@
     clippy::nursery
 )]
 #![cfg_attr(not(test), warn(clippy::unwrap_used))]
-#![allow(clippy::missing_const_for_fn)]
+#![allow(clippy::cognitive_complexity, clippy::missing_const_for_fn)]
 
 mod chron_service;
 mod chronfile;
