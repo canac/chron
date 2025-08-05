@@ -149,13 +149,20 @@ At the top level of the chronfile, you can define configuration for the entire `
 
 ## HTTP server
 
-`chron` can optionally start a basic HTTP server that lets you see the status of your commands. To enable to HTTP server, provide `chron` with the port port through the `--port` flag or the `PORT` environment variable.
+`chron` also starts a basic HTTP server that lets you see the status of your commands. By default, `chron` will pick an open port to listen on.
 
 ```sh
+$ chron chronfile.toml
+# ...
+Listening on port http://localhost:2748
+```
+
+You can also manually specify the port through the `--port` flag or the `PORT` environment variable.
+
+```sh
+$ PORT=8000 chron chronfile.toml
+# Or ...
 $ chron chronfile.toml --port=8000
 
-# Or ...
-
-$ PORT=8000 chron chronfile.toml
-open http://localhost:8000
+$ open http://localhost:8000
 ```
