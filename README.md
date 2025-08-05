@@ -166,3 +166,12 @@ $ chron run chronfile.toml --port=8000
 
 $ open http://localhost:8000
 ```
+
+## Data Directory
+
+By default `chron` stores its state database and logs in an application-specific directory. You can manually specify the data directory through the `--data-dir` flag or the `CHRON_DATA_DIR` environment variable. If you want to have two `chron` processes running simultaneously, they will need to have separate data directories to avoid conflicting.
+
+```sh
+$ chron run --data-dir=~/.local/share/chron-1 chronfile1.toml &
+$ chron run --data-dir=~/.local/share/chron-2 chronfile2.toml
+```
