@@ -59,7 +59,12 @@ CREATE TABLE IF NOT EXISTS host (
   key VARCHAR PRIMARY KEY NOT NULL CHECK(key = 'singleton'),
   port INTEGER NOT NULL,
   host_id INTEGER NOT NULL
-);",
+);
+
+CREATE INDEX IF NOT EXISTS idx_job_name_initialized ON job (name, initialized);
+CREATE INDEX IF NOT EXISTS idx_run_job_name_state_id ON run (job_name, state, id);
+CREATE INDEX IF NOT EXISTS idx_run_job_name_id ON run (job_name, id DESC);
+CREATE INDEX IF NOT EXISTS idx_run_state ON run (state);",
                 )
             })
             .await
@@ -443,7 +448,7 @@ WHERE name = ?4",
                     "name"
                 };
 
-                // Data integrity: released and uninitialized jobs are ignored
+                // Data integrity: uninitialized jobs are ignored
                 let mut statement = conn.prepare(
                     format!(
                         "
