@@ -12,6 +12,8 @@ use tokio::fs::read_to_string;
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub shell: Option<String>,
+    #[serde(rename = "onError")]
+    pub on_error: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -164,14 +166,21 @@ mod tests {
 
     #[test]
     fn test_config() -> Result<()> {
-        let chronfile = load_chronfile("[config]\nshell = 'bash'")?;
+        let chronfile = load_chronfile(
+            "[config]
+shell = 'bash'
+onError = 'echo failed'",
+        )?;
         assert_eq!(chronfile.config.shell.as_deref(), Some("bash"));
+        assert_eq!(chronfile.config.on_error.as_deref(), Some("echo failed"));
 
         let chronfile = load_chronfile("[config]")?;
         assert_eq!(chronfile.config.shell, None);
+        assert_eq!(chronfile.config.on_error, None);
 
         let chronfile = load_chronfile("")?;
         assert_eq!(chronfile.config.shell, None);
+        assert_eq!(chronfile.config.on_error, None);
 
         Ok(())
     }

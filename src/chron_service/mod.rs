@@ -80,6 +80,7 @@ pub struct Job {
     pub command: String,
     pub shell: String,
     pub working_dir: Option<PathBuf>,
+    pub error_command: Option<String>,
     pub log_dir: PathBuf,
     pub running_process: RwLock<Option<Process>>,
     pub r#type: JobType,
@@ -109,6 +110,7 @@ pub struct ChronService {
     jobs: HashMap<String, Task>,
     default_shell: String,
     shell: Option<String>,
+    on_error: Option<String>,
 }
 
 impl ChronService {
@@ -120,6 +122,7 @@ impl ChronService {
             jobs: HashMap::new(),
             default_shell: Self::get_user_shell().context("Failed to get user's default shell")?,
             shell: None,
+            on_error: None,
         })
     }
 
@@ -132,6 +135,7 @@ impl ChronService {
     pub async fn start(&mut self, chronfile: Chronfile) -> Result<()> {
         let same_shell = self.shell == chronfile.config.shell;
         self.shell = chronfile.config.shell;
+        self.on_error = chronfile.config.on_error;
 
         let mut existing_jobs = take(&mut self.jobs);
 
@@ -254,6 +258,7 @@ impl ChronService {
             command: job.command.clone(),
             shell: self.get_shell(),
             working_dir: job.working_dir.as_ref().map(expand_working_dir),
+            error_command: self.on_error.clone(),
             log_dir: self.calculate_log_dir(name),
             running_process: RwLock::new(None),
             r#type: JobType::Startup {
@@ -319,6 +324,7 @@ impl ChronService {
             command: job.command.clone(),
             shell: self.get_shell(),
             working_dir: job.working_dir.as_ref().map(expand_working_dir),
+            error_command: self.on_error.clone(),
             log_dir: self.calculate_log_dir(name),
             running_process: RwLock::new(None),
             r#type: JobType::Scheduled {

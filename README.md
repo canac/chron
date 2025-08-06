@@ -147,6 +147,22 @@ At the top level of the chronfile, you can define configuration for the entire `
 
 `shell` is a string that specifies which shell to use when executing all commands in the chronfile. When the `shell` command is run, `chron` passes `-c` as the first argument and the job's command as the second argument. `shell` defaults to the contents of the `$SHELL` environment variable on Unix and `Invoke-Expression` on Windows. If you want to run just one command in a different shell, just put the shell in the job's command itself like this: `command = 'fish -c "my_fish_function"`.
 
+#### `config.onError`
+
+`onError` is an optional string that specifies an error handler when any job fails (exits with a non-zero status code). The script will be executed using the configured shell, if any. It is also executed in the job's working directory, if configured.
+
+Information about the current run is passed to the `onError` error handler through environment variables:
+- `CHRON_JOB`: The name of the job that failed
+- `CHRON_COMMAND`: The command that failed
+- `CHRON_EXIT_CODE`: The failed command's exit code
+
+#### Example
+
+```toml
+[config]
+onError = 'echo "Job $CHRON_JOB ($CHRON_COMMAND) failed with exit code $CHRON_EXIT_CODE" >> /var/log/chron.log'
+```
+
 ## HTTP server
 
 `chron` also starts a basic HTTP server that lets you see the status of your commands. By default, `chron` will pick an open port to listen on.

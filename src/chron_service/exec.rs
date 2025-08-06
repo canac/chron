@@ -13,21 +13,23 @@ use tokio::fs::{OpenOptions, create_dir_all};
 use tokio::process::Command;
 use tokio::sync::oneshot::channel;
 
-/// Create a mailbox message indicating that the job failed
-async fn write_mailbox_message(name: &str, code: i32) -> Result<()> {
-    warn!("{name}: failed with exit code {code}");
-
-    Command::new("mailbox")
+/// Handle job failure by running the job's `error_command` script if configured
+async fn run_error_handler(job: &Arc<Job>, exit_code: i32) -> Result<()> {
+    let Some(on_error_script) = &job.error_command else {
+        return Ok(());
+    };
+    let mut command = Command::new(&job.shell);
+    command
+        .args(["-c", on_error_script])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .args([
-            "add",
-            &format!("chron/error/{name}"),
-            &format!("{name} failed with exit code {code}"),
-        ])
-        .spawn()?
-        .wait()
-        .await?;
+        .env("CHRON_JOB", &job.name)
+        .env("CHRON_COMMAND", &job.command)
+        .env("CHRON_EXIT_CODE", exit_code.to_string());
+    if let Some(working_dir) = &job.working_dir {
+        command.current_dir(working_dir);
+    }
+    command.spawn()?.wait().await?;
     Ok(())
 }
 
@@ -139,9 +141,8 @@ async fn exec_command_once(
         && code != 0
     {
         warn!("{name}: failed with exit code {code}");
-
-        if write_mailbox_message(&name, code).await.is_err() {
-            warn!("Failed to write mailbox message");
+        if let Err(err) = run_error_handler(job, code).await {
+            warn!("Failed to run error handler: {err}");
         }
     }
 
