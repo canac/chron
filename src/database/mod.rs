@@ -6,12 +6,12 @@ use self::db::Database;
 pub use self::job_config::JobConfig;
 pub use self::models::{Job, JobStatus, Run, RunStatus};
 use crate::http_helpers::{read_status, validate_headers};
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, bail};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use std::net::SocketAddr;
 use std::path::Path;
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 
@@ -71,7 +71,12 @@ async fn send_get_host_id_request(port: u16) -> Result<Option<u32>> {
     // Parse the body looking for the 4-byte host id
     let mut body = [0; 4];
     reader.read_exact(&mut body).await?;
-    Ok(Some(u32::from_be_bytes(body)))
+    if reader.fill_buf().await?.is_empty() {
+        Ok(Some(u32::from_be_bytes(body)))
+    } else {
+        // The body has additional bytes remaining
+        bail!("Invalid host id body");
+    }
 }
 
 /// Get the host id of the host at the given port
