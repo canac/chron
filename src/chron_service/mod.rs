@@ -148,7 +148,7 @@ impl ChronService {
             if let Some((name, task)) = existing_jobs.remove_entry(&name) {
                 // Reuse the job if the command, working dir, shell, and options are the same
                 if task.job.command == job.command
-                    && task.job.working_dir == job.working_dir
+                    && task.job.working_dir == job.working_dir.as_ref().map(expand_working_dir)
                     && same_shell
                     && matches!(&task.job.r#type, JobType::Startup { options } if **options == job.get_options())
                 {
@@ -173,11 +173,11 @@ impl ChronService {
             if let Some((name, task)) = existing_jobs.remove_entry(&name) {
                 // Reuse the job if the command, working dir, shell, options, and schedule are the same
                 if task.job.command == job.command
-                    && task.job.working_dir == job.working_dir
+                    && task.job.working_dir == job.working_dir.as_ref().map(expand_working_dir)
                     && same_shell
                     && matches!(&task.job.r#type, JobType::Scheduled { options, scheduled_job } if **options == job.get_options() && scheduled_job.read().await.get_schedule() == job.schedule)
                 {
-                    debug!("{name}: reuse existing scheduled job");
+                    debug!("{name}: reusing existing scheduled job");
                     self.jobs.insert(name, task);
                     continue;
                 }
