@@ -211,19 +211,17 @@ impl ChronService {
         }
 
         // Terminate all existing jobs that weren't reused
-        Self::terminate_jobs(existing_jobs).await;
-
-        Ok(())
+        self.terminate_jobs(existing_jobs).await
     }
 
     /// Start or start the chron service using the jobs defined in the provided chronfile
     pub async fn stop(&mut self) -> Result<()> {
-        Self::terminate_jobs(take(&mut self.jobs)).await;
-        Ok(())
+        let jobs = take(&mut self.jobs);
+        self.terminate_jobs(jobs).await
     }
 
     /// Terminate a collection of jobs and wait for all of their tasks complete
-    async fn terminate_jobs(jobs: HashMap<String, Task>) {
+    async fn terminate_jobs(&self, jobs: HashMap<String, Task>) -> Result<()> {
         // Wait for each of the tasks to complete
         let has_jobs = !jobs.is_empty();
         for (name, task) in jobs {
@@ -239,10 +237,14 @@ impl ChronService {
             {
                 debug!("{name}: failed with error: {err:?}");
             }
+
+            self.db.uninitialize_job(name).await?;
         }
         if has_jobs {
             debug!("Finished waiting for all jobs to terminate");
         }
+
+        Ok(())
     }
 
     /// Add a new job to be run on startup

@@ -421,6 +421,24 @@ WHERE name = ?4",
         Ok(())
     }
 
+    /// Mark a job as uninitialized
+    pub async fn uninitialize_job(&self, name: String) -> Result<()> {
+        self.client
+            .conn(move |conn| {
+                conn.execute(
+                    "
+UPDATE job
+SET initialized = FALSE
+WHERE name = ?1",
+                    (name,),
+                )
+            })
+            .await
+            .context("Failed to uninitialize job in the database")?;
+
+        Ok(())
+    }
+
     /// Return all running, initialized jobs
     pub async fn get_active_jobs(&self) -> Result<Vec<Job>> {
         self.internal_get_active_jobs(None).await
@@ -809,6 +827,18 @@ mod tests {
             db.get_resume_time("job1".to_owned()).await.unwrap(),
             resume_time,
         );
+    }
+
+    #[test]
+    async fn test_uninitialize_job() {
+        let db = open_db().await;
+        db.create_jobs(vec!["job1".to_owned()]).await.unwrap();
+        initialize_job(&db, "job1".to_owned()).await;
+        assert!(!db.get_active_jobs().await.unwrap().is_empty());
+
+        db.uninitialize_job("job1".to_owned()).await.unwrap();
+
+        assert!(db.get_active_jobs().await.unwrap().is_empty());
     }
 
     #[test]

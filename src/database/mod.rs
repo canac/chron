@@ -155,4 +155,8 @@ impl HostDatabase {
             .initialize_job(name, job_config, next_run, preserve_resume_time)
             .await
     }
+
+    pub async fn uninitialize_job(&self, name: String) -> Result<()> {
+        self.db.uninitialize_job(name).await
+    }
 }
