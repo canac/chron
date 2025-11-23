@@ -55,33 +55,17 @@ Commenting out the job achieves the same effect
 # command = "./start-server.sh"
 ```
 
-### `keepAlive`
+### `retry`
 
-Startup jobs can set `keepAlive` to configure whether and how the job will be re-run if it terminates. `keepAlive` can be an object with four optional fields, `successes`, `failures`, `limit` and `delay`, or a boolean value. If omitted, `keepAlive` defaults to `{ successes = false, failures = false }`.
+chron can rerun jobs that fail with a non-zero exit code.
 
-#### `keepAlive.successes`
+#### `retry.limit`
 
-`successes` is a boolean and specifies whether the job should be re-run if it terminates successfully, i.e. exits with a status code of zero. If omitted `successes` defaults to `false`.
+Set `retry.limit` to the number of times that a job will be rerun. For example, if `retry.limit = 3`, the job will run at most 4 times: once for the initial run plus 3 reruns. `limit` defaults to 0 (i.e. no retries)
 
-#### `keepAlive.failures`
+#### `retry.delay`
 
-`failures` is a boolean and specifies whether the job should be re-run if it terminates unsuccessfully, i.e. exits with a non-zero status code. If omitted `failures` defaults to `false`.
-
-#### `keepAlive.limit`
-
-`limit` is a positive integer and imposes an upper limit on the number of times that the job will be re-run. For example, if `keepAlive = { limit = 3 }`, the job will be run at most 4 times: once for the initial run plus 3 reruns. `limit` defaults to infinity (i.e. no limit on the number of re-runs) if omitted.
-
-#### `keepAlive.delay`
-
-`delay` is a string and specifies how long to wait after the job terminates before re-running it. For example, if `keepAlive = { delay = "1m 30s" }`, the job will be re-run after 90 seconds. `delay` defaults to `0` (i.e. re-run immediately) if omitted.
-
-#### `keepAlive = false`
-
-`keepAlive` can also be set to the boolean value `false` to easily disable all reruns. `keepAlive = false` is equivalent to `keepAlive = { failures = false, successes = false }`.
-
-#### `keepAlive = true`
-
-`keepAlive` can also be set to the boolean value `true` to easily enable infinite reruns. `keepAlive = true` is equivalent to `keepAlive = { failures = true, successes = true }`.
+Set `retry.delay` to control how long to wait after the job terminates before rerunning it. For example, if `retry.delay = "1m 30s"`, the job will be rerun after 90 seconds. If omitted, `delay` defaults to `"0s"` (i.e. rerun immediately) for startup jobs and one-sixth of the schedule period for scheduled jobs. For example, if the schedule is `"0 0 * * * *"` to run every hour, the `delay` would default to `10m` or 10 minutes.
 
 #### Example
 
@@ -89,29 +73,7 @@ Startup jobs can set `keepAlive` to configure whether and how the job will be re
 [startup.webserver]
 command = "./start-server.sh"
 # Restart the server up to 5 times after a 30 second delay
-keepAlive = { limit = 5, delay = "30s" }
-```
-
-### `retry`
-
-Scheduled jobs can set `retry` to configure whether and how the job will be re-run if it terminates unsuccessfully, i.e. exits with a non-zero status code. Note that there is no way to configure scheduled jobs to be re-run after terminating successfully because then they would essentially be a startup job. `retry` can be an object with two optional fields, `limit` and `delay`, or a boolean value. If omitted, `retry` defaults to `false`.
-
-#### `retry.limit`
-
-The semantics of `retry.limit` are identical to those of [`keepAlive.limit`](#keepalivelimit).
-
-#### `retry.delay`
-
-The semantics of `retry.delay` are identical to those of [`keepAlive.delay`](#keepalivedelay), except that if omitted, `delay` defaults to one-sixth of the schedule period. For example, if the schedule is `"0 0 * * * *"` to run every hour, the `delay` would default to `10m` or 10 minutes.
-
-#### Example
-
-```toml
-[scheduled.online-backup]
-command = "./backup.sh"
-schedule = "0 0 * * * *"
-# Retry the online backup up to 3 times after a 5 minute delay
-retry = { limit = 3, delay = "5m" }
+retry = { limit = 5, delay = "30s" }
 ```
 
 ### `makeUpMissedRun`
@@ -152,6 +114,7 @@ At the top level of the chronfile, you can define configuration for the entire `
 `onError` is an optional string that specifies an error handler when any job fails (exits with a non-zero status code). The script will be executed using the configured shell, if any. It is also executed in the job's working directory, if configured.
 
 Information about the current run is passed to the `onError` error handler through environment variables:
+
 - `CHRON_JOB`: The name of the job that failed
 - `CHRON_COMMAND`: The command that failed
 - `CHRON_EXIT_CODE`: The failed command's exit code

@@ -1,6 +1,8 @@
+mod retry_config;
 mod scheduled_job;
 mod startup_job;
 
+pub use self::retry_config::RetryConfig;
 pub use self::scheduled_job::ScheduledJob;
 pub use self::startup_job::StartupJob;
 use anyhow::{Context, Result};
@@ -148,7 +150,7 @@ mod tests {
             load_chronfile(
                 "[startup.startup]
             command = 'echo'
-            keepAlive = { foo = 'bar' }"
+            retry = { foo = 'bar' }"
             )
             .is_err(),
         );

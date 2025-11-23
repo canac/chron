@@ -21,16 +21,10 @@ impl Attempt<'_> {
             return None;
         }
 
-        let should_retry = if status_code == Some(0) {
-            retry_config.successes
-        } else {
-            retry_config.failures
-        };
-
-        if should_retry {
-            Some(Utc::now() + retry_config.delay.unwrap_or_default())
-        } else {
+        if status_code == Some(0) {
             None
+        } else {
+            Some(Utc::now() + retry_config.delay.unwrap_or_default())
         }
     }
 }
@@ -45,9 +39,7 @@ mod tests {
     #[test]
     fn test_next_attempt_no_retries() {
         let retry_config = RetryConfig {
-            failures: false,
-            successes: false,
-            limit: None,
+            limit: Some(0),
             delay: None,
         };
 
@@ -71,10 +63,8 @@ mod tests {
     }
 
     #[test]
-    fn test_next_attempt_only_failures() {
+    fn test_next_attempt() {
         let retry_config = RetryConfig {
-            failures: true,
-            successes: false,
             limit: None,
             delay: None,
         };
@@ -95,42 +85,12 @@ mod tests {
             }
             .next_attempt(FAILURE_CODE, &retry_config)
             .is_some()
-        );
-    }
-
-    #[test]
-    fn test_next_attempt_only_successes() {
-        let retry_config = RetryConfig {
-            failures: false,
-            successes: true,
-            limit: None,
-            delay: None,
-        };
-
-        let scheduled_time = &Utc::now();
-        assert!(
-            Attempt {
-                scheduled_time,
-                attempt: 0,
-            }
-            .next_attempt(SUCCESS_CODE, &retry_config)
-            .is_some()
-        );
-        assert!(
-            Attempt {
-                scheduled_time,
-                attempt: 0,
-            }
-            .next_attempt(FAILURE_CODE, &retry_config)
-            .is_none()
         );
     }
 
     #[test]
     fn test_next_attempt_limited_retries() {
         let retry_config = RetryConfig {
-            failures: true,
-            successes: true,
             limit: Some(2),
             delay: None,
         };
@@ -141,7 +101,7 @@ mod tests {
                 scheduled_time,
                 attempt: 0,
             }
-            .next_attempt(SUCCESS_CODE, &retry_config)
+            .next_attempt(FAILURE_CODE, &retry_config)
             .is_some()
         );
         assert!(
@@ -149,7 +109,7 @@ mod tests {
                 scheduled_time,
                 attempt: 1,
             }
-            .next_attempt(SUCCESS_CODE, &retry_config)
+            .next_attempt(FAILURE_CODE, &retry_config)
             .is_some()
         );
         assert!(
@@ -157,7 +117,7 @@ mod tests {
                 scheduled_time,
                 attempt: 2,
             }
-            .next_attempt(SUCCESS_CODE, &retry_config)
+            .next_attempt(FAILURE_CODE, &retry_config)
             .is_none()
         );
     }
@@ -165,8 +125,6 @@ mod tests {
     #[test]
     fn test_next_attempt_unlimited_retries() {
         let retry_config = RetryConfig {
-            failures: true,
-            successes: true,
             limit: None,
             delay: None,
         };
@@ -177,7 +135,7 @@ mod tests {
                 scheduled_time,
                 attempt: 0,
             }
-            .next_attempt(SUCCESS_CODE, &retry_config)
+            .next_attempt(FAILURE_CODE, &retry_config)
             .is_some()
         );
         assert!(
@@ -185,7 +143,7 @@ mod tests {
                 scheduled_time,
                 attempt: 1000,
             }
-            .next_attempt(SUCCESS_CODE, &retry_config)
+            .next_attempt(FAILURE_CODE, &retry_config)
             .is_some()
         );
         assert!(
@@ -193,7 +151,7 @@ mod tests {
                 scheduled_time,
                 attempt: usize::MAX,
             }
-            .next_attempt(SUCCESS_CODE, &retry_config)
+            .next_attempt(FAILURE_CODE, &retry_config)
             .is_some()
         );
     }

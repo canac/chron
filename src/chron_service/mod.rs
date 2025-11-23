@@ -8,7 +8,7 @@ use self::exec::exec_command;
 use self::scheduled_job::ScheduledJob;
 use self::sleep::sleep_until;
 use self::working_dir::expand_working_dir;
-use crate::chronfile::{self, Chronfile};
+use crate::chronfile::{self, Chronfile, RetryConfig};
 use crate::database::{HostDatabase, JobConfig};
 use anyhow::Result;
 use anyhow::{Context, bail};
@@ -16,13 +16,11 @@ use chrono::{DateTime, Utc};
 use chrono_humanize::{Accuracy, HumanTime, Tense};
 use cron::Schedule;
 use log::debug;
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::mem::take;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::spawn;
 use tokio::sync::RwLock;
 use tokio::sync::oneshot::{Receiver, Sender};
@@ -38,17 +36,9 @@ pub enum JobType {
     },
 }
 
-#[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct RetryConfig {
-    pub failures: bool,
-    pub successes: bool,
-    pub limit: Option<usize>,
-    pub delay: Option<Duration>,
-}
-
 #[derive(Eq, PartialEq)]
 pub struct StartupJobOptions {
-    pub keep_alive: RetryConfig,
+    pub retry: RetryConfig,
 }
 
 #[derive(Eq, PartialEq)]
@@ -281,7 +271,7 @@ impl ChronService {
 
         let db = Arc::clone(&self.db);
         let handle = spawn(async move {
-            if let Err(err) = exec_command(&db, &job, &options.keep_alive, &Utc::now()).await {
+            if let Err(err) = exec_command(&db, &job, &options.retry, &Utc::now()).await {
                 debug!("{}: failed with error:\n{err:?}", job.name);
             }
         });

@@ -1,47 +1,7 @@
-use crate::chron_service::{self, ScheduledJobOptions};
-use serde::{Deserialize, Deserializer, de::Error};
-use std::{path::PathBuf, time::Duration};
-
-// Allow RetryConfig to be deserialized from a boolean or a full retry config
-fn deserialize_retry_config<'de, D: Deserializer<'de>>(
-    deserializer: D,
-) -> Result<RetryConfig, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(deny_unknown_fields, untagged)]
-    enum RetryConfigVariant {
-        Simple(bool),
-        Complex {
-            limit: Option<usize>,
-            #[serde(default, with = "humantime_serde")]
-            delay: Option<Duration>,
-        },
-    }
-
-    match RetryConfigVariant::deserialize(deserializer)? {
-        RetryConfigVariant::Simple(retry) => Ok(RetryConfig {
-            retry,
-            ..Default::default()
-        }),
-        RetryConfigVariant::Complex { limit, delay } => {
-            if limit == Some(0) {
-                return Err(D::Error::custom("limit cannot be 0"));
-            }
-
-            Ok(RetryConfig {
-                retry: true,
-                limit,
-                delay,
-            })
-        }
-    }
-}
-
-#[derive(Debug, Default, Deserialize, Eq, PartialEq)]
-struct RetryConfig {
-    retry: bool,
-    limit: Option<usize>,
-    delay: Option<Duration>,
-}
+use super::RetryConfig;
+use crate::chron_service::ScheduledJobOptions;
+use serde::Deserialize;
+use std::path::PathBuf;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -53,7 +13,7 @@ pub struct ScheduledJob {
     pub disabled: bool,
     #[serde(default)]
     make_up_missed_run: bool,
-    #[serde(default, deserialize_with = "deserialize_retry_config")]
+    #[serde(default)]
     retry: RetryConfig,
 }
 
@@ -61,19 +21,13 @@ impl ScheduledJob {
     pub fn get_options(&self) -> ScheduledJobOptions {
         ScheduledJobOptions {
             make_up_missed_run: self.make_up_missed_run,
-            retry: chron_service::RetryConfig {
-                failures: self.retry.retry,
-                successes: false,
-                limit: self.retry.limit,
-                delay: self.retry.delay,
-            },
+            retry: self.retry,
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::chron_service::RetryConfig;
     use anyhow::Result;
     use std::time::Duration;
     use toml::de::Error;
@@ -101,13 +55,11 @@ mod tests {
     }
 
     #[test]
-    fn test_retry_false() -> Result<()> {
+    fn test_retry_omitted() -> Result<()> {
         assert_eq!(
-            parse_retry("command = 'echo'\nschedule = '* * * * * *'\nretry = false")?,
+            parse_retry("command = 'echo'\nschedule = '* * * * * *'")?,
             RetryConfig {
-                failures: false,
-                successes: false,
-                limit: None,
+                limit: Some(0),
                 delay: None,
             },
         );
@@ -115,64 +67,16 @@ mod tests {
     }
 
     #[test]
-    fn test_retry_true() -> Result<()> {
+    fn test_retry() -> Result<()> {
         assert_eq!(
-            parse_retry("command = 'echo'\nschedule = '* * * * * *'\nretry = true")?,
+            parse_retry(
+                "command = 'echo'\nschedule = '* * * * * *'\nretry = { limit = 3, delay = '10m' }"
+            )?,
             RetryConfig {
-                failures: true,
-                successes: false,
-                limit: None,
-                delay: None,
-            },
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn test_retry_empty() -> Result<()> {
-        assert_eq!(
-            parse_retry("command = 'echo'\nschedule = '* * * * * *'\nretry = {}")?,
-            RetryConfig {
-                failures: true,
-                successes: false,
-                limit: None,
-                delay: None,
-            },
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn test_retry_delay() -> Result<()> {
-        assert_eq!(
-            parse_retry("command = 'echo'\nschedule = '* * * * * *'\nretry = { delay = '10m' }")?,
-            RetryConfig {
-                failures: true,
-                successes: false,
-                limit: None,
+                limit: Some(3),
                 delay: Some(Duration::from_secs(600)),
             },
         );
         Ok(())
-    }
-
-    #[test]
-    fn test_retry_limit_zero() {
-        assert_eq!(
-            parse_retry("command = 'echo'\nschedule = '* * * * * *'\nretry = { limit = 0 }")
-                .unwrap_err()
-                .message(),
-            "limit cannot be 0",
-        );
-    }
-
-    #[test]
-    fn test_retry_failures_invalid() {
-        assert_eq!(
-            parse_retry("command = 'echo'\nschedule = '* * * * * *'\nretry = { failures = true, delay = '10m' }")
-                .unwrap_err()
-                .message(),
-            "data did not match any variant of untagged enum RetryConfigVariant",
-        );
     }
 }
