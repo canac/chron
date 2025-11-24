@@ -5,6 +5,7 @@ mod models;
 use self::db::Database;
 pub use self::job_config::JobConfig;
 pub use self::models::{Job, JobStatus, Run, RunStatus};
+use crate::chronfile::RetryLimit;
 use crate::http_helpers::{read_status, validate_headers};
 use anyhow::{Result, anyhow, bail};
 use chrono::{DateTime, NaiveDateTime, Utc};
@@ -112,8 +113,12 @@ impl HostDatabase {
         name: String,
         scheduled_at: NaiveDateTime,
         attempt: usize,
-        max_attempts: Option<usize>,
+        retry_limit: RetryLimit,
     ) -> Result<Run> {
+        let max_attempts = match retry_limit {
+            RetryLimit::Unlimited => None,
+            RetryLimit::Limited(limit) => Some(limit),
+        };
         self.db
             .insert_run(name, scheduled_at, attempt, max_attempts)
             .await

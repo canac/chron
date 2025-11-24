@@ -2,7 +2,7 @@ mod retry_config;
 mod scheduled_job;
 mod startup_job;
 
-pub use self::retry_config::RetryConfig;
+pub use self::retry_config::{RetryConfig, RetryLimit};
 pub use self::scheduled_job::ScheduledJob;
 pub use self::startup_job::StartupJob;
 use anyhow::{Context, Result};

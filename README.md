@@ -61,7 +61,7 @@ chron can rerun jobs that fail with a non-zero exit code.
 
 #### `retry.limit`
 
-Set `retry.limit` to the number of times that a job will be rerun. For example, if `retry.limit = 3`, the job will run at most 4 times: once for the initial run plus 3 reruns. `limit` defaults to 0 (i.e. no retries)
+Set `retry.limit` to control how many times th job will be rerun when it fails. For example, if `retry.limit = 3`, the job will run at most 4 times: once for the initial run plus 3 reruns. Set the limit to `"unlimited"` to rerun it an unlimited number of times. `limit` defaults to 0 (i.e. no retries).
 
 #### `retry.delay`
 
@@ -72,7 +72,13 @@ Set `retry.delay` to control how long to wait after the job terminates before re
 ```toml
 [startup.webserver]
 command = "./start-server.sh"
-# Restart the server up to 5 times after a 30 second delay
+# Restart the server an unlimited number of times with no delay
+retry.limit = "unlimited"
+
+[scheduled.online-backup]
+command = "./backup.sh"
+schedule = "0 0 * * * *"
+# Retry the backup up to 5 times after a 30 second delay
 retry = { limit = 5, delay = "30s" }
 ```
 
@@ -203,7 +209,7 @@ $ chron runs online-backup
 
 ### `logs` Subcommand
 
-`chron logs [job]` will print the stdout and stderr from a job's most recent execution. Pass the `--lines=n` flag to only print the last `n` lines. Pass the `--follow` flag to keep printing logs from a running job as they are written.
+`chron logs [job]` will print the stdout and stderr from the job's most recent execution. Pass the `--lines=n` flag to only print the last `n` lines. Pass the `--follow` flag to keep printing logs from a running job as they are written.
 
 ```sh
 $ chron logs online-backup
@@ -214,7 +220,7 @@ $ chron logs online-backup
 
 ### `kill` Subcommand
 
-`chron kill [job]` will kill a job's running process, if it is running. The job will run again the next time that it is scheduled to.
+`chron kill [job]` will kill the job's running process, if it is running. The job will run again the next time that it is scheduled to.
 
 ```sh
 $ chron kill online-backup

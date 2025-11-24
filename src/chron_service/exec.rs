@@ -2,6 +2,7 @@ use super::attempt::Attempt;
 use super::sleep::sleep_until;
 use super::{Job, RetryConfig};
 use crate::chron_service::Process;
+use crate::chronfile::RetryLimit;
 use crate::database::HostDatabase;
 use crate::result_ext::ResultExt;
 use anyhow::{Context, Result, anyhow};
@@ -162,9 +163,10 @@ pub async fn exec_command(
     scheduled_time: &DateTime<Utc>,
 ) -> Result<()> {
     let name = job.name.clone();
-    let num_attempts = retry_config
-        .limit
-        .map_or_else(|| String::from("unlimited"), |limit| limit.to_string());
+    let num_attempts = match retry_config.limit {
+        RetryLimit::Unlimited => "unlimited".to_owned(),
+        RetryLimit::Limited(limit) => limit.to_string(),
+    };
     for attempt in 0.. {
         if attempt > 0 {
             debug!("{name}: retry attempt {attempt} of {num_attempts}");

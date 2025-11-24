@@ -1,4 +1,4 @@
-use super::RetryConfig;
+use crate::chronfile::{RetryConfig, RetryLimit};
 use chrono::{DateTime, Utc};
 
 pub struct Attempt<'t> {
@@ -13,9 +13,8 @@ impl Attempt<'_> {
         status_code: Option<i32>,
         retry_config: &RetryConfig,
     ) -> Option<DateTime<Utc>> {
-        if retry_config
-            .limit
-            .is_some_and(|limit| self.attempt >= limit)
+        if let RetryLimit::Limited(limit) = retry_config.limit
+            && self.attempt >= limit
         {
             // There are no more remaining attempts
             return None;
@@ -31,6 +30,8 @@ impl Attempt<'_> {
 
 #[cfg(test)]
 mod tests {
+    use crate::chronfile::RetryLimit;
+
     use super::*;
 
     const SUCCESS_CODE: Option<i32> = Some(0);
@@ -39,7 +40,7 @@ mod tests {
     #[test]
     fn test_next_attempt_no_retries() {
         let retry_config = RetryConfig {
-            limit: Some(0),
+            limit: RetryLimit::Limited(0),
             delay: None,
         };
 
@@ -65,7 +66,7 @@ mod tests {
     #[test]
     fn test_next_attempt() {
         let retry_config = RetryConfig {
-            limit: None,
+            limit: RetryLimit::Unlimited,
             delay: None,
         };
 
@@ -91,7 +92,7 @@ mod tests {
     #[test]
     fn test_next_attempt_limited_retries() {
         let retry_config = RetryConfig {
-            limit: Some(2),
+            limit: RetryLimit::Limited(2),
             delay: None,
         };
 
@@ -125,7 +126,7 @@ mod tests {
     #[test]
     fn test_next_attempt_unlimited_retries() {
         let retry_config = RetryConfig {
-            limit: None,
+            limit: RetryLimit::Unlimited,
             delay: None,
         };
 

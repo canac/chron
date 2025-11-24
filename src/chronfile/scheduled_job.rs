@@ -28,6 +28,7 @@ impl ScheduledJob {
 
 #[cfg(test)]
 mod tests {
+    use super::super::RetryLimit;
     use anyhow::Result;
     use std::time::Duration;
     use toml::de::Error;
@@ -59,7 +60,7 @@ mod tests {
         assert_eq!(
             parse_retry("command = 'echo'\nschedule = '* * * * * *'")?,
             RetryConfig {
-                limit: Some(0),
+                limit: RetryLimit::Limited(0),
                 delay: None,
             },
         );
@@ -73,7 +74,7 @@ mod tests {
                 "command = 'echo'\nschedule = '* * * * * *'\nretry = { limit = 3, delay = '10m' }"
             )?,
             RetryConfig {
-                limit: Some(3),
+                limit: RetryLimit::Limited(3),
                 delay: Some(Duration::from_secs(600)),
             },
         );

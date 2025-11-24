@@ -4,14 +4,47 @@ use serde::{
 };
 use std::time::Duration;
 
-#[allow(clippy::unnecessary_wraps)]
-fn default_limit() -> Option<usize> {
-    Some(0)
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RetryLimit {
+    Unlimited,
+    Limited(usize),
+}
+
+impl Default for RetryLimit {
+    fn default() -> Self {
+        Self::Limited(0)
+    }
+}
+
+impl<'de> Deserialize<'de> for RetryLimit {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum RawLimit {
+            Unlimited(String),
+            Number(usize),
+        }
+
+        match RawLimit::deserialize(deserializer)? {
+            RawLimit::Unlimited(string) if string == "unlimited" => Ok(Self::Unlimited),
+            RawLimit::Unlimited(string) => Err(Error::custom(format!(
+                "expected \"unlimited\" or a positive integer, got \"{string}\""
+            ))),
+            RawLimit::Number(number) => Ok(Self::Limited(number)),
+        }
+    }
+}
+
+fn default_limit() -> RetryLimit {
+    RetryLimit::default()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RetryConfig {
-    pub limit: Option<usize>,
+    pub limit: RetryLimit,
     pub delay: Option<Duration>,
 }
 
@@ -33,13 +66,13 @@ impl<'de> Deserialize<'de> for RetryConfig {
         #[serde(deny_unknown_fields)]
         struct RawConfig {
             #[serde(default = "default_limit")]
-            limit: Option<usize>,
+            limit: RetryLimit,
             #[serde(default, with = "humantime_serde")]
             delay: Option<Duration>,
         }
 
         let raw = RawConfig::deserialize(deserializer)?;
-        if raw.limit == Some(0) && raw.delay.is_some() {
+        if raw.limit == RetryLimit::Limited(0) && raw.delay.is_some() {
             return Err(Error::custom("`delay` cannot be set when `limit` is zero"));
         }
 
@@ -73,7 +106,7 @@ mod tests {
         assert_eq!(
             parse_retry("retry = {}")?,
             RetryConfig {
-                limit: Some(0),
+                limit: RetryLimit::Limited(0),
                 delay: None,
             },
         );
@@ -85,7 +118,19 @@ mod tests {
         assert_eq!(
             parse_retry("retry = { limit = 3 }")?,
             RetryConfig {
-                limit: Some(3),
+                limit: RetryLimit::Limited(3),
+                delay: None,
+            },
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_retry_unlimited() -> Result<()> {
+        assert_eq!(
+            parse_retry("retry = { limit = 'unlimited' }")?,
+            RetryConfig {
+                limit: RetryLimit::Unlimited,
                 delay: None,
             },
         );
@@ -97,11 +142,21 @@ mod tests {
         assert_eq!(
             parse_retry("retry = { limit = 3, delay = '10m' }")?,
             RetryConfig {
-                limit: Some(3),
+                limit: RetryLimit::Limited(3),
                 delay: Some(Duration::from_secs(600)),
             },
         );
         Ok(())
+    }
+
+    #[test]
+    fn test_retry_limit_invalid() {
+        assert_eq!(
+            parse_retry("retry = { limit = 'invalid' }")
+                .unwrap_err()
+                .message(),
+            "expected \"unlimited\" or a positive integer, got \"invalid\""
+        );
     }
 
     #[test]
