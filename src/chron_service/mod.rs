@@ -43,7 +43,6 @@ pub struct StartupJobOptions {
 
 #[derive(Eq, PartialEq)]
 pub struct ScheduledJobOptions {
-    pub make_up_missed_run: bool,
     pub retry: RetryConfig,
 }
 
@@ -265,7 +264,6 @@ impl ChronService {
                 name.to_owned(),
                 JobConfig::from_job(&job).await,
                 Some(&Utc::now()),
-                false,
             )
             .await?;
 
@@ -294,13 +292,9 @@ impl ChronService {
         }
 
         // Resume the job scheduler from the saved resume time, which is the scheduled time of the last successful (i.e.
-        // not retried) run. However, jobs that don't make up missed runs resume now, not in the past.
+        // not retried) run
         let options = job.get_options();
-        let resume_time = if options.make_up_missed_run {
-            Some(self.db.get_resume_time(name.to_owned()).await?)
-        } else {
-            None
-        };
+        let resume_time = self.db.get_resume_time(name.to_owned()).await?;
 
         let schedule = Schedule::from_str(&job.schedule).with_context(|| {
             format!(
@@ -310,7 +304,6 @@ impl ChronService {
         })?;
         let scheduled_job = ScheduledJob::new(schedule, resume_time);
         let next_run = scheduled_job.next_run();
-        let preserve_resume_time = options.make_up_missed_run;
         let job = Arc::new(Job {
             name: name.to_owned(),
             command: job.command.clone(),
@@ -332,7 +325,6 @@ impl ChronService {
                 name.to_owned(),
                 JobConfig::from_job(&job).await,
                 next_run.as_ref(),
-                preserve_resume_time,
             )
             .await?;
 

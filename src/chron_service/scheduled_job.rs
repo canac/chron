@@ -22,10 +22,10 @@ pub struct ScheduledJob {
 
 impl ScheduledJob {
     /// Create a new scheduled job
-    pub fn new(schedule: Schedule, resume_at: Option<DateTime<Utc>>) -> Self {
+    pub fn new(schedule: Schedule, resume_at: DateTime<Utc>) -> Self {
         Self {
             schedule,
-            last_tick: resume_at.unwrap_or_else(Utc::now),
+            last_tick: resume_at,
         }
     }
 
@@ -94,7 +94,7 @@ mod tests {
     #[test]
     fn test_period() -> Result<()> {
         let now = now();
-        let job = ScheduledJob::new(Schedule::from_str("*/5 * * * * *")?, Some(now));
+        let job = ScheduledJob::new(Schedule::from_str("*/5 * * * * *")?, now);
         assert_eq!(job.get_current_period(&now.into())?, Duration::from_secs(5));
         Ok(())
     }
@@ -102,30 +102,28 @@ mod tests {
     #[test]
     fn test_next_run_whole_seconds() {
         let start_time = now();
-        let job = ScheduledJob::new(Schedule::from_str("* * * * * *").unwrap(), Some(start_time));
+        let job = ScheduledJob::new(Schedule::from_str("* * * * * *").unwrap(), start_time);
         assert_eq!(job.next_run().unwrap(), now().with_second(1).unwrap());
     }
 
     #[test]
     fn test_next_run_fractional_seconds() {
         let start_time = now().with_nanosecond(1).unwrap();
-        let job = ScheduledJob::new(Schedule::from_str("* * * * * *").unwrap(), Some(start_time));
+        let job = ScheduledJob::new(Schedule::from_str("* * * * * *").unwrap(), start_time);
         assert_eq!(job.next_run().unwrap(), now().with_second(1).unwrap());
     }
 
     #[test]
     fn test_tick_no_run() {
         let start_time = now();
-        let mut job =
-            ScheduledJob::new(Schedule::from_str("* * * * * *").unwrap(), Some(start_time));
+        let mut job = ScheduledJob::new(Schedule::from_str("* * * * * *").unwrap(), start_time);
         assert_eq!(job.tick(now()), None);
     }
 
     #[test]
     fn test_tick_fractional_second() {
         let start_time = now();
-        let mut job =
-            ScheduledJob::new(Schedule::from_str("* * * * * *").unwrap(), Some(start_time));
+        let mut job = ScheduledJob::new(Schedule::from_str("* * * * * *").unwrap(), start_time);
         let scheduled_time = now().with_second(1).unwrap();
         assert_eq!(
             job.tick(scheduled_time.with_nanosecond(1).unwrap())
@@ -140,8 +138,7 @@ mod tests {
     #[test]
     fn test_tick_skipped_runs() {
         let start_time = now();
-        let mut job =
-            ScheduledJob::new(Schedule::from_str("* * * * * *").unwrap(), Some(start_time));
+        let mut job = ScheduledJob::new(Schedule::from_str("* * * * * *").unwrap(), start_time);
         assert_eq!(job.tick(now()), None);
         assert_eq!(
             job.tick(now().with_second(5).unwrap()).unwrap(),

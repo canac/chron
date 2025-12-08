@@ -82,31 +82,6 @@ schedule = "0 0 * * * *"
 retry = { limit = 5, delay = "30s" }
 ```
 
-### `makeUpMissedRun`
-
-By default, `chron` only executes jobs that were scheduled to run while `chron` itself was running. However, if `chron` is stopped or your computer is powered off, this can cause `chron` to miss scheduled runs. For example, suppose that you have your online backup configured to run every hour. If you shutdown your computer at 11:55am and then turn it back on at 12:05pm, `chron` would miss the 12pm execution.
-
-To change this, scheduled jobs can set `makeUpMissedRun = true`. With this configuration, on startup `chron` will check whether any jobs were scheduled to run since `chron` stopped running and run any that it finds.
-
-`makeUpMissedRun` defaults to `false`.
-
-#### `makeUpMissedRun = true`
-
-Set `makeUpMissedRun` to `true` to enable making up a run that was scheduled to run when `chron` was not running.
-
-#### `makeUpMissedRun = false`
-
-Set `makeUpMissedRun` to `false` to disable making up missed runs. `chron` will only execute jobs that were scheduled to run while `chron` was running.
-
-#### Example
-
-```toml
-[scheduled.online-backup]
-command = "./backup.sh"
-schedule = "0 0 * * * *"
-makeUpMissedRun = true
-```
-
 ### `config`
 
 At the top level of the chronfile, you can define configuration for the entire `chron` instance.
@@ -131,6 +106,10 @@ Information about the current run is passed to the `onError` error handler throu
 [config]
 onError = 'echo "Job $CHRON_JOB ($CHRON_COMMAND) failed with exit code $CHRON_EXIT_CODE" >> /var/log/chron.log'
 ```
+
+## Making Up Missed Runs
+
+On startup `chron` will automatically check whether any jobs were scheduled to run since `chron` itself stopped running and run any that it finds. For example, suppose that you have your online backup configured to run every hour. If you shutdown your computer at 11:55am and then turn it back on at 12:05pm, `chron` will make up the 12pm execution on startup.
 
 ## HTTP server
 

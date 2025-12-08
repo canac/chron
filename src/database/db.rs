@@ -395,14 +395,14 @@ ON CONFLICT (name)
     }
 
     /// Record information about a newly-created job
-    /// The job's resume time is set to NULL unless `preserve_resume_time` is true.
     pub async fn initialize_job(
         &self,
         name: String,
         job_config: JobConfig,
         next_run: Option<&DateTime<Utc>>,
-        preserve_resume_time: bool,
     ) -> Result<()> {
+        // Reset the job's resume time to NULL for startup jobs
+        let scheduled_job = job_config.schedule.is_some();
         let serialized_config = serde_json::to_string(&job_config)?;
         let next_run = next_run.map(chrono::DateTime::naive_utc);
         self.client
@@ -412,7 +412,7 @@ ON CONFLICT (name)
 UPDATE job
 SET config = ?1, next_run = ?2, initialized = TRUE, resume_at = CASE WHEN ?3 THEN resume_at ELSE NULL END
 WHERE name = ?4",
-                    (serialized_config, next_run, preserve_resume_time, name),
+                    (serialized_config, next_run, scheduled_job, name),
                 )
             })
             .await
@@ -506,7 +506,6 @@ ORDER BY name",
 
 #[cfg(test)]
 mod tests {
-
     use crate::database::{JobStatus, RunStatus};
     use assert_matches::assert_matches;
     use chrono::Days;
@@ -522,7 +521,7 @@ mod tests {
     }
 
     async fn initialize_job(db: &Database, name: String) {
-        db.initialize_job(name, JobConfig::default(), None, false)
+        db.initialize_job(name, JobConfig::default(), None)
             .await
             .unwrap();
     }
@@ -640,7 +639,7 @@ mod tests {
         let name = "job".to_owned();
         db.create_jobs(vec![name.clone()]).await.unwrap();
         let next_run = Utc::now();
-        db.initialize_job(name.clone(), JobConfig::default(), Some(&next_run), false)
+        db.initialize_job(name.clone(), JobConfig::default(), Some(&next_run))
             .await
             .unwrap();
         assert_eq!(
@@ -661,7 +660,7 @@ mod tests {
         let db = open_db().await;
         let name = "job".to_owned();
         db.create_jobs(vec![name.clone()]).await.unwrap();
-        db.initialize_job(name.clone(), JobConfig::default(), None, false)
+        db.initialize_job(name.clone(), JobConfig::default(), None)
             .await
             .unwrap();
         insert_run(&db, name.clone()).await;
@@ -743,7 +742,7 @@ mod tests {
     async fn test_get_resume_time_sets_to_now() {
         let db = open_db().await;
         db.create_jobs(vec!["job1".to_owned()]).await.unwrap();
-        db.initialize_job("job1".to_owned(), JobConfig::default(), None, false)
+        db.initialize_job("job1".to_owned(), JobConfig::default(), None)
             .await
             .unwrap();
 
@@ -779,7 +778,7 @@ mod tests {
             ..JobConfig::default()
         };
 
-        db.initialize_job("job1".to_owned(), make_config(), None, false)
+        db.initialize_job("job1".to_owned(), make_config(), None)
             .await
             .unwrap();
 
@@ -801,9 +800,16 @@ mod tests {
         db.set_resume_time("job1".to_owned(), &resume_time)
             .await
             .unwrap();
-        db.initialize_job("job1".to_owned(), JobConfig::default(), None, true)
-            .await
-            .unwrap();
+        db.initialize_job(
+            "job1".to_owned(),
+            JobConfig {
+                schedule: Some("* * * * * *".to_owned()),
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(
             db.get_resume_time("job1".to_owned()).await.unwrap(),
@@ -819,7 +825,7 @@ mod tests {
         db.set_resume_time("job1".to_owned(), &resume_time)
             .await
             .unwrap();
-        db.initialize_job("job1".to_owned(), JobConfig::default(), None, false)
+        db.initialize_job("job1".to_owned(), JobConfig::default(), None)
             .await
             .unwrap();
 
