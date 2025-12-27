@@ -16,17 +16,17 @@ Jobs are defined in a `chronfile` written in TOML. Here is a simple example:
 
 ```toml
 # Define a job named "webserver" that will run when chron starts
-[startup.webserver]
+[jobs.webserver]
 command = "./start-server.sh"
 workingDir = "~/dev/server"
 
 # Define a job named "online-backup" that will run on a schedule
-[scheduled.online-backup]
+[jobs.online-backup]
 command = "./backup.sh"
 schedule = "0 0 * * * *" # Run every hour
 ```
 
-The job name must only contain letters and numbers in kebab case, like "my-1st-job". The `command` value is the command that `chron` will execute when it is running the job. The `workingDir` value is optional and sets the current working directory when executing the job. "~" will be expanded to the current user's home directory. The `schedule` value is a cron expression that defines when the job should run. [crontab.guru](https://crontab.guru) is a helpful tool for creating and debugging expressions. Note that `chron` supports an additional sixth field for the year that crontab.guru does not.
+The job name must only contain letters and numbers in kebab case, like "my-1st-job". The `command` value is the command that `chron` will execute when it is running the job. The `workingDir` value is optional and sets the current working directory when executing the job. "~" will be expanded to the current user's home directory. Jobs with a `schedule` cron expression run on that schedule. Jobs without a `schedule` run once on startup. [crontab.guru](https://crontab.guru) is a helpful tool for creating and debugging cron expressions. Note that `chron` supports an additional sixth field for the year that crontab.guru does not.
 
 **Important note**: `chron` currently uses the [`cron` crate](https://github.com/zslayton/cron) for parsing schedules, and it uses Quartz-style expressions with 0 representing January and 1 representing Sunday, not 1 representing January and 0 representing Sunday like in Unix cron. Consider referring to days and weeks by their name instead of by their index to improve readability and avoid confusion.
 
@@ -40,10 +40,10 @@ There are a few job configuration options available.
 
 ### `disabled`
 
-Both startup and schedule jobs can set `disabled` to `true` to be ignored and not run.
+Jobs can set `disabled` to `true` to be ignored and not run.
 
 ```toml
-[startup.webserver]
+[jobs.webserver]
 command = "./start-server.sh"
 disabled = true
 ```
@@ -51,7 +51,7 @@ disabled = true
 Commenting out the job achieves the same effect
 
 ```toml
-# [startup.webserver]
+# [jobs.webserver]
 # command = "./start-server.sh"
 ```
 
@@ -70,12 +70,12 @@ Set `retry.delay` to control how long to wait after the job terminates before re
 #### Example
 
 ```toml
-[startup.webserver]
+[jobs.webserver]
 command = "./start-server.sh"
 # Restart the server an unlimited number of times with no delay
 retry.limit = "unlimited"
 
-[scheduled.online-backup]
+[jobs.online-backup]
 command = "./backup.sh"
 schedule = "0 0 * * * *"
 # Retry the backup up to 5 times after a 30 second delay

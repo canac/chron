@@ -26,26 +26,6 @@ use tokio::sync::RwLock;
 use tokio::sync::oneshot::{Receiver, Sender};
 use tokio::task::JoinHandle;
 
-pub enum JobType {
-    Startup {
-        options: Arc<StartupJobOptions>,
-    },
-    Scheduled {
-        options: Arc<ScheduledJobOptions>,
-        scheduled_job: RwLock<Box<ScheduledJob>>,
-    },
-}
-
-#[derive(Eq, PartialEq)]
-pub struct StartupJobOptions {
-    pub retry: RetryConfig,
-}
-
-#[derive(Eq, PartialEq)]
-pub struct ScheduledJobOptions {
-    pub retry: RetryConfig,
-}
-
 pub struct Process {
     pub pid: u32,
 
@@ -71,19 +51,19 @@ pub struct Job {
     pub working_dir: Option<PathBuf>,
     pub error_command: Option<String>,
     pub log_dir: PathBuf,
+    pub retry: RetryConfig,
     pub running_process: RwLock<Option<Process>>,
-    pub r#type: JobType,
+    #[allow(clippy::struct_field_names)]
+    pub scheduled_job: Option<RwLock<ScheduledJob>>,
     pub next_attempt: RwLock<Option<DateTime<Utc>>>,
 }
 
 impl Job {
     /// Return the time that the job is scheduled to run next
     pub async fn next_scheduled_run(&self) -> Option<DateTime<Utc>> {
-        match self.r#type {
-            JobType::Startup { .. } => None,
-            JobType::Scheduled {
-                ref scheduled_job, ..
-            } => scheduled_job.read().await.next_run(),
+        match &self.scheduled_job {
+            None => None,
+            Some(scheduled_job) => scheduled_job.read().await.next_run(),
         }
     }
 }
@@ -127,21 +107,28 @@ impl ChronService {
         self.on_error = chronfile.config.on_error;
 
         let mut existing_jobs = take(&mut self.jobs);
+        let mut new_jobs = HashMap::<String, chronfile::Job>::new();
 
-        let mut startup_jobs = HashMap::<String, chronfile::StartupJob>::new();
-        for (name, job) in chronfile.startup_jobs {
+        for (name, job) in chronfile.jobs {
             if job.disabled {
                 continue;
             }
 
             if let Some((name, task)) = existing_jobs.remove_entry(&name) {
-                // Reuse the job if the command, working dir, shell, and options are the same
-                if task.job.command == job.command
+                // Reuse the job if the command, working dir, shell, options, and schedule match
+                let reuse = task.job.command == job.command
                     && task.job.working_dir == job.working_dir.as_ref().map(expand_working_dir)
                     && same_shell
-                    && matches!(&task.job.r#type, JobType::Startup { options } if **options == job.get_options())
-                {
-                    debug!("{name}: reusing existing startup job");
+                    && task.job.retry == job.retry
+                    && match (&task.job.scheduled_job, &job.schedule) {
+                        (None, None) => true,
+                        (Some(scheduled_job), Some(schedule)) => {
+                            scheduled_job.read().await.get_schedule() == *schedule
+                        }
+                        _ => false,
+                    };
+                if reuse {
+                    debug!("{name}: reusing existing job");
                     self.jobs.insert(name, task);
                     continue;
                 }
@@ -150,53 +137,18 @@ impl ChronService {
                 existing_jobs.insert(name, task);
             }
 
-            startup_jobs.insert(name, job);
-        }
-
-        let mut scheduled_jobs = HashMap::<String, chronfile::ScheduledJob>::new();
-        for (name, job) in chronfile.scheduled_jobs {
-            if job.disabled {
-                continue;
-            }
-
-            if let Some((name, task)) = existing_jobs.remove_entry(&name) {
-                // Reuse the job if the command, working dir, shell, options, and schedule are the same
-                if task.job.command == job.command
-                    && task.job.working_dir == job.working_dir.as_ref().map(expand_working_dir)
-                    && same_shell
-                    && matches!(&task.job.r#type, JobType::Scheduled { options, scheduled_job } if **options == job.get_options() && scheduled_job.read().await.get_schedule() == job.schedule)
-                {
-                    debug!("{name}: reusing existing scheduled job");
-                    self.jobs.insert(name, task);
-                    continue;
-                }
-
-                // Add back the job because it was not reused
-                existing_jobs.insert(name, task);
-            }
-
-            scheduled_jobs.insert(name, job);
+            new_jobs.insert(name, job);
         }
 
         // Determine any newly added jobs and lock them in the database
-        let created_jobs = startup_jobs
-            .keys()
-            .cloned()
-            .chain(scheduled_jobs.keys().cloned())
-            .collect::<Vec<_>>();
-        if !created_jobs.is_empty() {
+        if !new_jobs.is_empty() {
+            let created_jobs = new_jobs.keys().cloned().collect::<Vec<_>>();
             debug!("Creating jobs: {}...", created_jobs.join(", "));
             self.db.create_jobs(created_jobs).await?;
         }
 
-        for (name, job) in startup_jobs {
-            debug!("{name}: registering new startup job");
-            self.startup(&name, &job).await?;
-        }
-
-        for (name, job) in scheduled_jobs {
-            debug!("{name}: registering new scheduled job");
-            self.schedule(&name, &job).await?;
+        for (name, job) in new_jobs {
+            self.register_job(&name, &job).await?;
         }
 
         // Terminate all existing jobs that weren't reused
@@ -236,14 +188,27 @@ impl ChronService {
         Ok(())
     }
 
-    /// Add a new job to be run on startup
-    async fn startup(&mut self, name: &str, job: &chronfile::StartupJob) -> Result<()> {
+    /// Register a new job
+    async fn register_job(&mut self, name: &str, job: &chronfile::Job) -> Result<()> {
         Self::validate_name(name)?;
         if self.jobs.contains_key(name) {
             bail!("A job with the name {name} already exists")
         }
 
-        let options = Arc::new(job.get_options());
+        if let Some(schedule_str) = &job.schedule {
+            let schedule = Schedule::from_str(schedule_str).with_context(|| {
+                format!("Failed to parse schedule expression {schedule_str} in job {name}")
+            })?;
+            self.schedule(name, job, schedule).await
+        } else {
+            self.startup(name, job).await
+        }
+    }
+
+    /// Add a new job to be run on startup
+    async fn startup(&mut self, name: &str, job: &chronfile::Job) -> Result<()> {
+        debug!("{name}: registering new startup job");
+
         let job = Arc::new(Job {
             name: name.to_owned(),
             command: job.command.clone(),
@@ -251,10 +216,9 @@ impl ChronService {
             working_dir: job.working_dir.as_ref().map(expand_working_dir),
             error_command: self.on_error.clone(),
             log_dir: self.calculate_log_dir(name),
+            retry: job.retry,
             running_process: RwLock::new(None),
-            r#type: JobType::Startup {
-                options: Arc::clone(&options),
-            },
+            scheduled_job: None,
             next_attempt: RwLock::new(None),
         });
         let job_copy = Arc::clone(&job);
@@ -269,7 +233,7 @@ impl ChronService {
 
         let db = Arc::clone(&self.db);
         let handle = spawn(async move {
-            if let Err(err) = exec_command(&db, &job, &options.retry, &Utc::now()).await {
+            if let Err(err) = exec_command(&db, &job, &job.retry, &Utc::now()).await {
                 debug!("{}: failed with error:\n{err:?}", job.name);
             }
         });
@@ -285,23 +249,17 @@ impl ChronService {
     }
 
     /// Add a new job to be run on the given schedule
-    async fn schedule(&mut self, name: &str, job: &chronfile::ScheduledJob) -> Result<()> {
-        Self::validate_name(name)?;
-        if self.jobs.contains_key(name) {
-            bail!("A job with the name {name} already exists")
-        }
+    async fn schedule(
+        &mut self,
+        name: &str,
+        job: &chronfile::Job,
+        schedule: Schedule,
+    ) -> Result<()> {
+        debug!("{name}: registering new scheduled job");
 
         // Resume the job scheduler from the saved resume time, which is the scheduled time of the last successful (i.e.
         // not retried) run
-        let options = job.get_options();
         let resume_time = self.db.get_resume_time(name.to_owned()).await?;
-
-        let schedule = Schedule::from_str(&job.schedule).with_context(|| {
-            format!(
-                "Failed to parse schedule expression {} in job {name}",
-                job.schedule
-            )
-        })?;
         let scheduled_job = ScheduledJob::new(schedule, resume_time);
         let next_run = scheduled_job.next_run();
         let job = Arc::new(Job {
@@ -311,11 +269,9 @@ impl ChronService {
             working_dir: job.working_dir.as_ref().map(expand_working_dir),
             error_command: self.on_error.clone(),
             log_dir: self.calculate_log_dir(name),
+            retry: job.retry,
             running_process: RwLock::new(None),
-            r#type: JobType::Scheduled {
-                options: Arc::new(options),
-                scheduled_job: RwLock::new(Box::new(scheduled_job)),
-            },
+            scheduled_job: Some(RwLock::new(scheduled_job)),
             next_attempt: RwLock::new(None),
         });
         let job_copy = Arc::clone(&job);
@@ -367,11 +323,7 @@ impl ChronService {
         name: &str,
         job: &Arc<Job>,
     ) -> Result<Option<DateTime<Utc>>> {
-        let JobType::Scheduled {
-            ref options,
-            ref scheduled_job,
-        } = job.r#type
-        else {
+        let Some(scheduled_job) = job.scheduled_job.as_ref() else {
             bail!("{name}: job is not a scheduled job");
         };
 
@@ -382,7 +334,7 @@ impl ChronService {
         let next_run = job_guard.next_run();
 
         // Retry delay defaults to one sixth of the job's period
-        let retry_delay = options.retry.delay.unwrap_or_else(|| {
+        let retry_delay = job.retry.delay.unwrap_or_else(|| {
             job_guard
                 .get_current_period(&now.into())
                 .unwrap_or_default()
@@ -402,7 +354,7 @@ impl ChronService {
                 job,
                 &RetryConfig {
                     delay: Some(retry_delay),
-                    ..options.retry
+                    ..job.retry
                 },
                 &scheduled_time,
             )

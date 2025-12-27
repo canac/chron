@@ -1,26 +1,17 @@
 use super::RetryConfig;
-use crate::chron_service::ScheduledJobOptions;
 use serde::Deserialize;
 use std::path::PathBuf;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct ScheduledJob {
-    pub schedule: String,
+pub struct Job {
+    pub schedule: Option<String>,
     pub command: String,
     pub working_dir: Option<PathBuf>,
     #[serde(default)]
     pub disabled: bool,
     #[serde(default)]
-    retry: RetryConfig,
-}
-
-impl ScheduledJob {
-    pub fn get_options(&self) -> ScheduledJobOptions {
-        ScheduledJobOptions {
-            retry: self.retry,
-        }
-    }
+    pub retry: RetryConfig,
 }
 
 #[cfg(test)]
@@ -32,13 +23,37 @@ mod tests {
 
     use super::*;
 
-    /// Parse a scheduled job and return its retry config
+    /// Parse a job and return its retry config
     fn parse_retry(input: &'static str) -> std::result::Result<RetryConfig, Error> {
-        Ok(toml::from_str::<ScheduledJob>(input)?.get_options().retry)
+        Ok(toml::from_str::<Job>(input)?.retry)
     }
 
     #[test]
-    fn test_retry_omitted() -> Result<()> {
+    fn test_startup_job_retry_omitted() -> Result<()> {
+        assert_eq!(
+            parse_retry("command = 'echo'")?,
+            RetryConfig {
+                limit: RetryLimit::Limited(0),
+                delay: None,
+            },
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_startup_job_retry() -> Result<()> {
+        assert_eq!(
+            parse_retry("command = 'echo'\nretry = { limit = 3, delay = '10m' }")?,
+            RetryConfig {
+                limit: RetryLimit::Limited(3),
+                delay: Some(Duration::from_secs(600)),
+            },
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_scheduled_job_retry_omitted() -> Result<()> {
         assert_eq!(
             parse_retry("command = 'echo'\nschedule = '* * * * * *'")?,
             RetryConfig {
@@ -50,7 +65,7 @@ mod tests {
     }
 
     #[test]
-    fn test_retry() -> Result<()> {
+    fn test_scheduled_job_retry() -> Result<()> {
         assert_eq!(
             parse_retry(
                 "command = 'echo'\nschedule = '* * * * * *'\nretry = { limit = 3, delay = '10m' }"

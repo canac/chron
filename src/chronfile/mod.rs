@@ -1,10 +1,8 @@
+mod job;
 mod retry_config;
-mod scheduled_job;
-mod startup_job;
 
+pub use self::job::Job;
 pub use self::retry_config::{RetryConfig, RetryLimit};
-pub use self::scheduled_job::ScheduledJob;
-pub use self::startup_job::StartupJob;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::{collections::HashMap, path::PathBuf};
@@ -23,10 +21,9 @@ pub struct Config {
 pub struct Chronfile {
     #[serde(default)]
     pub config: Config,
-    #[serde(rename = "startup", default)]
-    pub startup_jobs: HashMap<String, StartupJob>,
-    #[serde(rename = "scheduled", default)]
-    pub scheduled_jobs: HashMap<String, ScheduledJob>,
+
+    #[serde(default)]
+    pub jobs: HashMap<String, Job>,
 }
 
 impl Chronfile {
@@ -42,8 +39,7 @@ impl Chronfile {
 
 #[cfg(test)]
 mod tests {
-    use self::scheduled_job::ScheduledJob;
-    use self::startup_job::StartupJob;
+    use self::job::Job;
     use assert_matches::assert_matches;
 
     use super::*;
@@ -59,67 +55,49 @@ mod tests {
 
     #[test]
     fn test_simple() -> Result<()> {
-        let chronfile = load_chronfile(
-            "[startup.startup]
-            command = 'echo'
-            workingDir = '/directory'
+        let jobs = load_chronfile(
+            "[jobs.startup]
+command = 'echo'
+workingDir = '/directory'
 
-            [scheduled.schedule]
-            schedule = '* * * * * *'
-            command = 'echo'",
-        )?;
-        assert_matches!(
-            chronfile,
-            Chronfile {
-                startup_jobs,
-                scheduled_jobs,
-                ..
-            } => {
-                assert_eq!(startup_jobs.len(), 1);
-                assert_matches!(startup_jobs.get("startup"), Some(StartupJob { command, working_dir, disabled, .. }) => {
-                    assert_eq!(command, &"echo");
-                    assert_eq!(working_dir, &Some(PathBuf::from("/directory")));
-                    assert_eq!(disabled, &false);
-                });
-                assert_eq!(scheduled_jobs.len(), 1);
-                assert_matches!(scheduled_jobs.get("schedule"), Some(ScheduledJob { schedule, working_dir, command, disabled, .. }) => {
-                    assert_eq!(schedule, &"* * * * * *");
-                    assert_eq!(command, &"echo");
-                    assert_eq!(working_dir, &None);
-                    assert_eq!(disabled, &false);
-                });
-            }
-        );
+            [jobs.scheduled]
+schedule = '* * * * * *'
+command = 'echo'",
+        )?
+        .jobs;
+
+        assert_eq!(jobs.len(), 2);
+        assert_matches!(jobs.get("startup"), Some(Job { schedule, command, working_dir, disabled, .. }) => {
+            assert_eq!(schedule, &None);
+            assert_eq!(command, &"echo");
+            assert_eq!(working_dir, &Some(PathBuf::from("/directory")));
+            assert_eq!(disabled, &false);
+        });
+        assert_matches!(jobs.get("scheduled"), Some(Job { schedule, working_dir, command, disabled, .. }) => {
+            assert_eq!(schedule, &Some("* * * * * *".to_owned()));
+            assert_eq!(command, &"echo");
+            assert_eq!(working_dir, &None);
+            assert_eq!(disabled, &false);
+        });
         Ok(())
     }
 
     #[test]
     fn test_disabled() -> Result<()> {
-        let chronfile = load_chronfile(
-            "[startup.startup]
-            command = 'echo'
-            disabled = false
+        let jobs = load_chronfile(
+            "[jobs.startup]
+command = 'echo'
+disabled = false
 
-            [scheduled.schedule]
-            schedule = '* * * * * *'
-            command = 'echo'
-            disabled = true",
-        )?;
-        assert_matches!(
-            chronfile,
-            Chronfile {
-                startup_jobs,
-                scheduled_jobs,
-                ..
-            } => {
-                assert_matches!(startup_jobs.get("startup"), Some(StartupJob { disabled, .. }) => {
-                    assert_eq!(disabled, &false);
-                });
-                assert_matches!(scheduled_jobs.get("schedule"), Some(ScheduledJob { disabled, .. }) => {
-                    assert_eq!(disabled, &true);
-                });
-            }
-        );
+            [jobs.scheduled]
+schedule = '* * * * * *'
+command = 'echo'
+disabled = true",
+        )?
+        .jobs;
+
+        assert!(!jobs.get("startup").unwrap().disabled);
+        assert!(jobs.get("scheduled").unwrap().disabled);
         Ok(())
     }
 
@@ -129,38 +107,38 @@ mod tests {
 
         assert!(
             load_chronfile(
-                "[startup.startup]
-            command = 'echo'
-            foo = 'bar'"
+                "[jobs.startup]
+command = 'echo'
+foo = 'bar'"
             )
             .is_err(),
         );
 
         assert!(
             load_chronfile(
-                "[scheduled.schedule]
-            schedule = '* * * * * *'
-            command = 'echo'
-            foo = 'bar'"
+                "[jobs.scheduled]
+schedule = '* * * * * *'
+command = 'echo'
+foo = 'bar'"
             )
             .is_err(),
         );
 
         assert!(
             load_chronfile(
-                "[startup.startup]
-            command = 'echo'
-            retry = { foo = 'bar' }"
+                "[jobs.startup]
+command = 'echo'
+retry = { foo = 'bar' }"
             )
             .is_err(),
         );
 
         assert!(
             load_chronfile(
-                "[scheduled.schedule]
-            schedule = '* * * * * *'
-            command = 'echo'
-            retry = { foo = 'bar' }"
+                "[jobs.scheduled]
+schedule = '* * * * * *'
+command = 'echo'
+retry = { foo = 'bar' }"
             )
             .is_err(),
         );

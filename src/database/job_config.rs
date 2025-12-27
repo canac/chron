@@ -1,4 +1,4 @@
-use crate::chron_service::{Job, JobType};
+use crate::chron_service::Job;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -14,17 +14,16 @@ pub struct JobConfig {
 impl JobConfig {
     /// Extract a `JobConfig` from a `Job` reference
     pub async fn from_job(job: impl AsRef<Job>) -> Self {
+        let job = job.as_ref();
         Self {
-            schedule: match &job.as_ref().r#type {
-                JobType::Startup { .. } => None,
-                JobType::Scheduled { scheduled_job, .. } => {
-                    Some(scheduled_job.read().await.get_schedule())
-                }
+            schedule: match &job.scheduled_job {
+                None => None,
+                Some(scheduled_job) => Some(scheduled_job.read().await.get_schedule()),
             },
-            command: job.as_ref().command.clone(),
-            shell: job.as_ref().shell.clone(),
-            working_dir: job.as_ref().working_dir.clone(),
-            log_dir: job.as_ref().log_dir.clone(),
+            command: job.command.clone(),
+            shell: job.shell.clone(),
+            working_dir: job.working_dir.clone(),
+            log_dir: job.log_dir.clone(),
         }
     }
 }
