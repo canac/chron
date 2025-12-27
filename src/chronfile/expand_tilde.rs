@@ -2,7 +2,7 @@ use dirs::home_dir;
 use std::path::PathBuf;
 
 // Expand an initial tilde component in the directory
-pub fn expand_working_dir(dir: &PathBuf) -> PathBuf {
+pub fn expand_tilde(dir: &PathBuf) -> PathBuf {
     if let Some(home) = home_dir() {
         let mut components = dir.components();
         if let Some(first_component) = components.next() {
@@ -27,7 +27,7 @@ mod tests {
     #[test]
     fn test_initial_solitary_tilde() {
         assert_eq!(
-            expand_working_dir(&PathBuf::from("~/project")),
+            expand_tilde(&PathBuf::from("~/project")),
             dirs::home_dir().unwrap().join("project"),
         );
     }
@@ -35,7 +35,7 @@ mod tests {
     #[test]
     fn test_non_solitary_tilde() {
         assert_eq!(
-            expand_working_dir(&PathBuf::from("~a/project")),
+            expand_tilde(&PathBuf::from("~a/project")),
             PathBuf::from("~a/project"),
         );
     }
@@ -43,7 +43,7 @@ mod tests {
     #[test]
     fn test_non_initial_tilde() {
         assert_eq!(
-            expand_working_dir(&PathBuf::from("/~/project")),
+            expand_tilde(&PathBuf::from("/~/project")),
             PathBuf::from("/~/project"),
         );
     }

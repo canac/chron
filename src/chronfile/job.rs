@@ -1,12 +1,22 @@
 use super::RetryConfig;
-use serde::Deserialize;
+use super::expand_tilde::expand_tilde;
+use serde::{Deserialize, Deserializer};
 use std::path::PathBuf;
+
+fn deserialize_directory<'de, D>(deserializer: D) -> Result<Option<PathBuf>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let path = Option::deserialize(deserializer)?;
+    Ok(path.map(|path| expand_tilde(&path)))
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Job {
     pub schedule: Option<String>,
     pub command: String,
+    #[serde(default, deserialize_with = "deserialize_directory")]
     pub working_dir: Option<PathBuf>,
     #[serde(default)]
     pub disabled: bool,
@@ -23,9 +33,13 @@ mod tests {
 
     use super::*;
 
+    fn parse_job(input: &'static str) -> std::result::Result<Job, Error> {
+        toml::from_str::<Job>(input)
+    }
+
     /// Parse a job and return its retry config
     fn parse_retry(input: &'static str) -> std::result::Result<RetryConfig, Error> {
-        Ok(toml::from_str::<Job>(input)?.retry)
+        Ok(parse_job(input)?.retry)
     }
 
     #[test]
@@ -74,6 +88,15 @@ mod tests {
                 limit: RetryLimit::Limited(3),
                 delay: Some(Duration::from_secs(600)),
             },
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_working_dir() -> Result<()> {
+        assert_eq!(
+            parse_job("command = 'echo'\nworkingDir = '~/project'")?.working_dir,
+            Some(dirs::home_dir().unwrap().join("project"))
         );
         Ok(())
     }

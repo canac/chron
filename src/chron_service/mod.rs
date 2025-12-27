@@ -2,12 +2,10 @@ mod attempt;
 mod exec;
 mod scheduled_job;
 mod sleep;
-mod working_dir;
 
 use self::exec::exec_command;
 use self::scheduled_job::ScheduledJob;
 use self::sleep::sleep_until;
-use self::working_dir::expand_working_dir;
 use crate::chronfile::{self, Chronfile, RetryConfig};
 use crate::database::{HostDatabase, JobConfig};
 use anyhow::Result;
@@ -117,7 +115,7 @@ impl ChronService {
             if let Some((name, task)) = existing_jobs.remove_entry(&name) {
                 // Reuse the job if the command, working dir, shell, options, and schedule match
                 let reuse = task.job.command == job.command
-                    && task.job.working_dir == job.working_dir.as_ref().map(expand_working_dir)
+                    && task.job.working_dir == job.working_dir
                     && same_shell
                     && task.job.retry == job.retry
                     && match (&task.job.scheduled_job, &job.schedule) {
@@ -213,7 +211,7 @@ impl ChronService {
             name: name.to_owned(),
             command: job.command.clone(),
             shell: self.get_shell(),
-            working_dir: job.working_dir.as_ref().map(expand_working_dir),
+            working_dir: job.working_dir.clone(),
             error_command: self.on_error.clone(),
             log_dir: self.calculate_log_dir(name),
             retry: job.retry,
@@ -266,7 +264,7 @@ impl ChronService {
             name: name.to_owned(),
             command: job.command.clone(),
             shell: self.get_shell(),
-            working_dir: job.working_dir.as_ref().map(expand_working_dir),
+            working_dir: job.working_dir.clone(),
             error_command: self.on_error.clone(),
             log_dir: self.calculate_log_dir(name),
             retry: job.retry,

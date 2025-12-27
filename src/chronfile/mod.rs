@@ -1,3 +1,4 @@
+mod expand_tilde;
 mod job;
 mod retry_config;
 
