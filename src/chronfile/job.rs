@@ -11,7 +11,7 @@ where
     Ok(path.map(|path| expand_tilde(&path)))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Job {
     pub schedule: Option<String>,

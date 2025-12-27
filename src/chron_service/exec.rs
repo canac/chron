@@ -25,9 +25,9 @@ async fn run_error_handler(job: &Arc<Job>, exit_code: i32) -> Result<()> {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .env("CHRON_JOB", &job.name)
-        .env("CHRON_COMMAND", &job.command)
+        .env("CHRON_COMMAND", &job.definition.command)
         .env("CHRON_EXIT_CODE", exit_code.to_string());
-    if let Some(working_dir) = &job.working_dir {
+    if let Some(working_dir) = &job.definition.working_dir {
         command.current_dir(working_dir);
     }
     command.spawn()?.wait().await?;
@@ -45,9 +45,10 @@ async fn exec_command_once(
     let name = job.name.clone();
     info!(
         "{name}: running \"{}\" with shell \"{}\"{}",
-        job.command,
+        job.definition.command,
         job.shell,
-        job.working_dir
+        job.definition
+            .working_dir
             .as_ref()
             .map(|dir| format!(" in directory \"{}\"", dir.to_string_lossy()))
             .unwrap_or_default()
@@ -80,16 +81,16 @@ async fn exec_command_once(
     // Run the command
     let mut command = Command::new(&job.shell);
     command
-        .args(["-c", &job.command])
+        .args(["-c", &job.definition.command])
         .stdin(Stdio::null())
         .stdout(log_file.try_clone().context("Failed to clone log file")?)
         .stderr(log_file);
-    if let Some(working_dir) = &job.working_dir {
+    if let Some(working_dir) = &job.definition.working_dir {
         command.current_dir(working_dir);
     }
     let mut process = command
         .spawn()
-        .with_context(|| format!("Failed to run command {}", job.command))?;
+        .with_context(|| format!("Failed to run command {}", job.definition.command))?;
 
     // Link the process to the database run
     let pid = process
@@ -109,11 +110,11 @@ async fn exec_command_once(
         tx_result = rx_terminate => {
             let terminated = tx_result.is_ok();
             if terminated {
-                info!("{}: killing running process \"{}\"", job.name, job.command);
+                info!("{}: killing running process \"{}\"", job.name, job.definition.command);
 
                 // Ignore InvalidInput errors, which are because the process already terminated
                 process.kill().await.filter_err(|err| err.kind() != std::io::ErrorKind::InvalidInput).with_context(|| {
-                    format!("Failed to terminate command {}", job.command)
+                    format!("Failed to terminate command {}", job.definition.command)
                 })?;
             }
             (None, terminated)

@@ -44,12 +44,10 @@ impl Process {
 
 pub struct Job {
     pub name: String,
-    pub command: String,
+    pub definition: Arc<chronfile::Job>,
     pub shell: String,
-    pub working_dir: Option<PathBuf>,
     pub error_command: Option<String>,
     pub log_dir: PathBuf,
-    pub retry: RetryConfig,
     pub running_process: RwLock<Option<Process>>,
     #[allow(clippy::struct_field_names)]
     pub scheduled_job: Option<RwLock<ScheduledJob>>,
@@ -114,18 +112,7 @@ impl ChronService {
 
             if let Some((name, task)) = existing_jobs.remove_entry(&name) {
                 // Reuse the job if the command, working dir, shell, options, and schedule match
-                let reuse = task.job.command == job.command
-                    && task.job.working_dir == job.working_dir
-                    && same_shell
-                    && task.job.retry == job.retry
-                    && match (&task.job.scheduled_job, &job.schedule) {
-                        (None, None) => true,
-                        (Some(scheduled_job), Some(schedule)) => {
-                            scheduled_job.read().await.get_schedule() == *schedule
-                        }
-                        _ => false,
-                    };
-                if reuse {
+                if task.job.definition.as_ref() == &job && same_shell {
                     debug!("{name}: reusing existing job");
                     self.jobs.insert(name, task);
                     continue;
@@ -146,7 +133,7 @@ impl ChronService {
         }
 
         for (name, job) in new_jobs {
-            self.register_job(&name, &job).await?;
+            self.register_job(&name, job).await?;
         }
 
         // Terminate all existing jobs that weren't reused
@@ -187,34 +174,32 @@ impl ChronService {
     }
 
     /// Register a new job
-    async fn register_job(&mut self, name: &str, job: &chronfile::Job) -> Result<()> {
+    async fn register_job(&mut self, name: &str, definition: chronfile::Job) -> Result<()> {
         Self::validate_name(name)?;
         if self.jobs.contains_key(name) {
             bail!("A job with the name {name} already exists")
         }
 
-        if let Some(schedule_str) = &job.schedule {
+        if let Some(schedule_str) = &definition.schedule {
             let schedule = Schedule::from_str(schedule_str).with_context(|| {
                 format!("Failed to parse schedule expression {schedule_str} in job {name}")
             })?;
-            self.schedule(name, job, schedule).await
+            self.schedule(name, definition, schedule).await
         } else {
-            self.startup(name, job).await
+            self.startup(name, definition).await
         }
     }
 
     /// Add a new job to be run on startup
-    async fn startup(&mut self, name: &str, job: &chronfile::Job) -> Result<()> {
+    async fn startup(&mut self, name: &str, definition: chronfile::Job) -> Result<()> {
         debug!("{name}: registering new startup job");
 
         let job = Arc::new(Job {
             name: name.to_owned(),
-            command: job.command.clone(),
+            definition: Arc::new(definition),
             shell: self.get_shell(),
-            working_dir: job.working_dir.clone(),
             error_command: self.on_error.clone(),
             log_dir: self.calculate_log_dir(name),
-            retry: job.retry,
             running_process: RwLock::new(None),
             scheduled_job: None,
             next_attempt: RwLock::new(None),
@@ -231,7 +216,7 @@ impl ChronService {
 
         let db = Arc::clone(&self.db);
         let handle = spawn(async move {
-            if let Err(err) = exec_command(&db, &job, &job.retry, &Utc::now()).await {
+            if let Err(err) = exec_command(&db, &job, &job.definition.retry, &Utc::now()).await {
                 debug!("{}: failed with error:\n{err:?}", job.name);
             }
         });
@@ -250,7 +235,7 @@ impl ChronService {
     async fn schedule(
         &mut self,
         name: &str,
-        job: &chronfile::Job,
+        definition: chronfile::Job,
         schedule: Schedule,
     ) -> Result<()> {
         debug!("{name}: registering new scheduled job");
@@ -262,12 +247,10 @@ impl ChronService {
         let next_run = scheduled_job.next_run();
         let job = Arc::new(Job {
             name: name.to_owned(),
-            command: job.command.clone(),
+            definition: Arc::new(definition),
             shell: self.get_shell(),
-            working_dir: job.working_dir.clone(),
             error_command: self.on_error.clone(),
             log_dir: self.calculate_log_dir(name),
-            retry: job.retry,
             running_process: RwLock::new(None),
             scheduled_job: Some(RwLock::new(scheduled_job)),
             next_attempt: RwLock::new(None),
@@ -332,7 +315,7 @@ impl ChronService {
         let next_run = job_guard.next_run();
 
         // Retry delay defaults to one sixth of the job's period
-        let retry_delay = job.retry.delay.unwrap_or_else(|| {
+        let retry_delay = job.definition.retry.delay.unwrap_or_else(|| {
             job_guard
                 .get_current_period(&now.into())
                 .unwrap_or_default()
@@ -352,7 +335,7 @@ impl ChronService {
                 job,
                 &RetryConfig {
                     delay: Some(retry_delay),
-                    ..job.retry
+                    ..job.definition.retry
                 },
                 &scheduled_time,
             )

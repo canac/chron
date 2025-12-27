@@ -20,9 +20,9 @@ impl JobConfig {
                 None => None,
                 Some(scheduled_job) => Some(scheduled_job.read().await.get_schedule()),
             },
-            command: job.command.clone(),
+            command: job.definition.command.clone(),
             shell: job.shell.clone(),
-            working_dir: job.working_dir.clone(),
+            working_dir: job.definition.working_dir.clone(),
             log_dir: job.log_dir.clone(),
         }
     }
