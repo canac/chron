@@ -44,7 +44,7 @@ impl Process {
 
 pub struct Job {
     pub name: String,
-    pub definition: Arc<chronfile::Job>,
+    pub definition: chronfile::Job,
     pub shell: String,
     pub error_command: Option<String>,
     pub log_dir: PathBuf,
@@ -112,7 +112,7 @@ impl ChronService {
 
             if let Some((name, task)) = existing_jobs.remove_entry(&name) {
                 // Reuse the job if the command, working dir, shell, options, and schedule match
-                if task.job.definition.as_ref() == &job && same_shell {
+                if task.job.definition == job && same_shell {
                     debug!("{name}: reusing existing job");
                     self.jobs.insert(name, task);
                     continue;
@@ -196,7 +196,7 @@ impl ChronService {
 
         let job = Arc::new(Job {
             name: name.to_owned(),
-            definition: Arc::new(definition),
+            definition,
             shell: self.get_shell(),
             error_command: self.on_error.clone(),
             log_dir: self.calculate_log_dir(name),
@@ -247,7 +247,7 @@ impl ChronService {
         let next_run = scheduled_job.next_run();
         let job = Arc::new(Job {
             name: name.to_owned(),
-            definition: Arc::new(definition),
+            definition,
             shell: self.get_shell(),
             error_command: self.on_error.clone(),
             log_dir: self.calculate_log_dir(name),
