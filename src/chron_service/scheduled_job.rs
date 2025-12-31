@@ -29,11 +29,6 @@ impl ScheduledJob {
         }
     }
 
-    /// Return the string representation of the job's schedule
-    pub fn get_schedule(&self) -> String {
-        self.schedule.to_string()
-    }
-
     /// Return the date of the next time that this scheduled job will run
     pub fn next_run(&self) -> Option<DateTime<Utc>> {
         self.schedule

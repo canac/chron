@@ -16,10 +16,10 @@ use tokio::sync::oneshot::channel;
 
 /// Handle job failure by running the job's `error_command` script if configured
 async fn run_error_handler(job: &Arc<Job>, exit_code: i32) -> Result<()> {
-    let Some(on_error_script) = &job.error_command else {
+    let Some(on_error_script) = &job.config.on_error else {
         return Ok(());
     };
-    let mut command = Command::new(&job.shell);
+    let mut command = Command::new(&job.config.shell);
     command
         .args(["-c", on_error_script])
         .stdout(Stdio::null())
@@ -46,7 +46,7 @@ async fn exec_command_once(
     info!(
         "{name}: running \"{}\" with shell \"{}\"{}",
         job.definition.command,
-        job.shell,
+        job.config.shell,
         job.definition
             .working_dir
             .as_ref()
@@ -79,7 +79,7 @@ async fn exec_command_once(
         .await;
 
     // Run the command
-    let mut command = Command::new(&job.shell);
+    let mut command = Command::new(&job.config.shell);
     command
         .args(["-c", &job.definition.command])
         .stdin(Stdio::null())

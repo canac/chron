@@ -13,15 +13,12 @@ pub struct JobConfig {
 
 impl JobConfig {
     /// Extract a `JobConfig` from a `Job` reference
-    pub async fn from_job(job: impl AsRef<Job>) -> Self {
+    pub fn from_job(job: impl AsRef<Job>) -> Self {
         let job = job.as_ref();
         Self {
-            schedule: match &job.scheduled_job {
-                None => None,
-                Some(scheduled_job) => Some(scheduled_job.read().await.get_schedule()),
-            },
+            schedule: job.definition.schedule.clone(),
             command: job.definition.command.clone(),
-            shell: job.shell.clone(),
+            shell: job.config.shell.clone(),
             working_dir: job.definition.working_dir.clone(),
             log_dir: job.log_dir.clone(),
         }

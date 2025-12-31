@@ -6,10 +6,9 @@ mod sleep;
 use self::exec::exec_command;
 use self::scheduled_job::ScheduledJob;
 use self::sleep::sleep_until;
-use crate::chronfile::{self, Chronfile, RetryConfig};
+use crate::chronfile::{Chronfile, Config, JobDefinition, RetryConfig};
 use crate::database::{HostDatabase, JobConfig};
-use anyhow::Result;
-use anyhow::{Context, bail};
+use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use chrono_humanize::{Accuracy, HumanTime, Tense};
 use cron::Schedule;
@@ -44,9 +43,8 @@ impl Process {
 
 pub struct Job {
     pub name: String,
-    pub definition: chronfile::Job,
-    pub shell: String,
-    pub error_command: Option<String>,
+    pub definition: JobDefinition,
+    pub config: Arc<Config>,
     pub log_dir: PathBuf,
     pub running_process: RwLock<Option<Process>>,
     #[allow(clippy::struct_field_names)]
@@ -73,22 +71,16 @@ pub struct ChronService {
     log_dir: PathBuf,
     db: Arc<HostDatabase>,
     jobs: HashMap<String, Task>,
-    default_shell: String,
-    shell: Option<String>,
-    on_error: Option<String>,
 }
 
 impl ChronService {
     /// Create a new `ChronService` instance
-    pub fn new(data_dir: &Path, db: Arc<HostDatabase>) -> Result<Self> {
-        Ok(Self {
+    pub fn new(data_dir: &Path, db: Arc<HostDatabase>) -> Self {
+        Self {
             log_dir: data_dir.join("logs"),
             db,
             jobs: HashMap::new(),
-            default_shell: Self::get_user_shell().context("Failed to get user's default shell")?,
-            shell: None,
-            on_error: None,
-        })
+        }
     }
 
     /// Lookup a job by name
@@ -98,21 +90,15 @@ impl ChronService {
 
     /// Start or start the chron service using the jobs defined in the provided chronfile
     pub async fn start(&mut self, chronfile: Chronfile) -> Result<()> {
-        let same_shell = self.shell == chronfile.config.shell;
-        self.shell = chronfile.config.shell;
-        self.on_error = chronfile.config.on_error;
-
         let mut existing_jobs = take(&mut self.jobs);
-        let mut new_jobs = HashMap::<String, chronfile::Job>::new();
+        let mut new_jobs = HashMap::new();
 
-        for (name, job) in chronfile.jobs {
-            if job.disabled {
-                continue;
-            }
-
+        for (name, definition) in chronfile.jobs {
             if let Some((name, task)) = existing_jobs.remove_entry(&name) {
                 // Reuse the job if the command, working dir, shell, options, and schedule match
-                if task.job.definition == job && same_shell {
+                if task.job.definition == definition
+                    && task.job.config.as_ref() == &chronfile.config
+                {
                     debug!("{name}: reusing existing job");
                     self.jobs.insert(name, task);
                     continue;
@@ -122,7 +108,7 @@ impl ChronService {
                 existing_jobs.insert(name, task);
             }
 
-            new_jobs.insert(name, job);
+            new_jobs.insert(name, definition);
         }
 
         // Determine any newly added jobs and lock them in the database
@@ -132,8 +118,10 @@ impl ChronService {
             self.db.create_jobs(created_jobs).await?;
         }
 
-        for (name, job) in new_jobs {
-            self.register_job(&name, job).await?;
+        let config = Arc::new(chronfile.config);
+        for (name, definition) in new_jobs {
+            self.register_job(&name, definition, Arc::clone(&config))
+                .await?;
         }
 
         // Terminate all existing jobs that weren't reused
@@ -174,8 +162,12 @@ impl ChronService {
     }
 
     /// Register a new job
-    async fn register_job(&mut self, name: &str, definition: chronfile::Job) -> Result<()> {
-        Self::validate_name(name)?;
+    async fn register_job(
+        &mut self,
+        name: &str,
+        definition: JobDefinition,
+        config: Arc<Config>,
+    ) -> Result<()> {
         if self.jobs.contains_key(name) {
             bail!("A job with the name {name} already exists")
         }
@@ -184,21 +176,25 @@ impl ChronService {
             let schedule = Schedule::from_str(schedule_str).with_context(|| {
                 format!("Failed to parse schedule expression {schedule_str} in job {name}")
             })?;
-            self.schedule(name, definition, schedule).await
+            self.schedule(name, definition, schedule, config).await
         } else {
-            self.startup(name, definition).await
+            self.startup(name, definition, config).await
         }
     }
 
     /// Add a new job to be run on startup
-    async fn startup(&mut self, name: &str, definition: chronfile::Job) -> Result<()> {
+    async fn startup(
+        &mut self,
+        name: &str,
+        definition: JobDefinition,
+        config: Arc<Config>,
+    ) -> Result<()> {
         debug!("{name}: registering new startup job");
 
         let job = Arc::new(Job {
             name: name.to_owned(),
             definition,
-            shell: self.get_shell(),
-            error_command: self.on_error.clone(),
+            config,
             log_dir: self.calculate_log_dir(name),
             running_process: RwLock::new(None),
             scheduled_job: None,
@@ -209,7 +205,7 @@ impl ChronService {
         self.db
             .initialize_job(
                 name.to_owned(),
-                JobConfig::from_job(&job).await,
+                JobConfig::from_job(&job),
                 Some(&Utc::now()),
             )
             .await?;
@@ -235,8 +231,9 @@ impl ChronService {
     async fn schedule(
         &mut self,
         name: &str,
-        definition: chronfile::Job,
+        definition: JobDefinition,
         schedule: Schedule,
+        config: Arc<Config>,
     ) -> Result<()> {
         debug!("{name}: registering new scheduled job");
 
@@ -248,8 +245,7 @@ impl ChronService {
         let job = Arc::new(Job {
             name: name.to_owned(),
             definition,
-            shell: self.get_shell(),
-            error_command: self.on_error.clone(),
+            config,
             log_dir: self.calculate_log_dir(name),
             running_process: RwLock::new(None),
             scheduled_job: Some(RwLock::new(scheduled_job)),
@@ -260,7 +256,7 @@ impl ChronService {
         self.db
             .initialize_job(
                 name.to_owned(),
-                JobConfig::from_job(&job).await,
+                JobConfig::from_job(&job),
                 next_run.as_ref(),
             )
             .await?;
@@ -348,56 +344,8 @@ impl ChronService {
         Ok(next_run)
     }
 
-    /// Get the shell to execute commands with
-    fn get_shell(&self) -> String {
-        self.shell.as_ref().unwrap_or(&self.default_shell).clone()
-    }
-
-    /// Validate a job name
-    fn validate_name(name: &str) -> Result<()> {
-        if name.starts_with('-')
-            || name.ends_with('-')
-            || name.contains("--")
-            || name
-                .chars()
-                .any(|char| !char.is_ascii_alphanumeric() && char != '-')
-        {
-            bail!("Invalid job name {name}")
-        }
-
-        Ok(())
-    }
-
     // Calculate the log file directory for a job
     fn calculate_log_dir(&self, name: &str) -> PathBuf {
         self.log_dir.join(name)
-    }
-
-    /// Get the user's shell
-    #[cfg(target_os = "windows")]
-    fn get_user_shell() -> Result<String> {
-        Ok(String::from("Invoke-Expression"))
-    }
-
-    /// Get the user's shell
-    #[cfg(not(target_os = "windows"))]
-    fn get_user_shell() -> Result<String> {
-        std::env::var("SHELL").context("Couldn't get $SHELL environment variable")
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_validate_name() {
-        assert!(ChronService::validate_name("abc").is_ok());
-        assert!(ChronService::validate_name("abc-def-ghi").is_ok());
-        assert!(ChronService::validate_name("123-456-789").is_ok());
-        assert!(ChronService::validate_name("-abc-def-ghi").is_err());
-        assert!(ChronService::validate_name("abc-def-ghi-").is_err());
-        assert!(ChronService::validate_name("abc--def-ghi").is_err());
-        assert!(ChronService::validate_name("1*2$3").is_err());
     }
 }

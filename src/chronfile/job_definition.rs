@@ -1,22 +1,14 @@
 use super::RetryConfig;
 use super::expand_tilde::expand_tilde;
-use serde::{Deserialize, Deserializer};
+use crate::chronfile::env::Env;
+use serde::Deserialize;
 use std::path::PathBuf;
 
-fn deserialize_directory<'de, D>(deserializer: D) -> Result<Option<PathBuf>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let path = Option::deserialize(deserializer)?;
-    Ok(path.map(|path| expand_tilde(&path)))
-}
-
-#[derive(Debug, Deserialize, Eq, PartialEq)]
+#[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct Job {
+pub(super) struct RawJobDefinition {
     pub schedule: Option<String>,
     pub command: String,
-    #[serde(default, deserialize_with = "deserialize_directory")]
     pub working_dir: Option<PathBuf>,
     #[serde(default)]
     pub disabled: bool,
@@ -24,21 +16,42 @@ pub struct Job {
     pub retry: RetryConfig,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub struct JobDefinition {
+    pub schedule: Option<String>,
+    pub command: String,
+    pub working_dir: Option<PathBuf>,
+    pub retry: RetryConfig,
+}
+
+impl JobDefinition {
+    pub(super) fn from_raw(raw: RawJobDefinition, env: &Env) -> Self {
+        Self {
+            schedule: raw.schedule,
+            command: raw.command,
+            working_dir: raw.working_dir.map(|path| expand_tilde(&path, env)),
+            retry: raw.retry,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::RetryLimit;
     use anyhow::Result;
     use std::time::Duration;
-    use toml::de::Error;
 
     use super::*;
 
-    fn parse_job(input: &'static str) -> std::result::Result<Job, Error> {
-        toml::from_str::<Job>(input)
+    fn parse_job(input: &'static str) -> Result<JobDefinition> {
+        Ok(JobDefinition::from_raw(
+            toml::from_str(input)?,
+            &Env::mock(),
+        ))
     }
 
     /// Parse a job and return its retry config
-    fn parse_retry(input: &'static str) -> std::result::Result<RetryConfig, Error> {
+    fn parse_retry(input: &'static str) -> Result<RetryConfig> {
         Ok(parse_job(input)?.retry)
     }
 
@@ -94,10 +107,8 @@ mod tests {
 
     #[test]
     fn test_working_dir() -> Result<()> {
-        assert_eq!(
-            parse_job("command = 'echo'\nworkingDir = '~/project'")?.working_dir,
-            Some(dirs::home_dir().unwrap().join("project"))
-        );
+        let job = parse_job("command = 'echo'\nworkingDir = '~/project'")?;
+        assert_eq!(job.working_dir, Some(PathBuf::from("/Users/user/project")));
         Ok(())
     }
 }

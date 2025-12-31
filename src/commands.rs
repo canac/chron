@@ -1,5 +1,6 @@
 use crate::chron_service::ChronService;
 use crate::chronfile::Chronfile;
+use crate::chronfile::env::Env;
 use crate::cli::{KillArgs, LogsArgs, RunArgs, RunsArgs, StatusArgs};
 use crate::database::{ClientDatabase, HostDatabase, JobStatus, RunStatus};
 use crate::format;
@@ -44,13 +45,14 @@ pub async fn run(chron_dir: &Path, args: RunArgs) -> Result<()> {
         })
         .init()?;
 
-    let chronfile = Chronfile::load(&chronfile_path).await?;
+    let env = Env::from_host()?;
+    let chronfile = Chronfile::load(&chronfile_path, &env).await?;
 
     let (listener, port) = http::select_port(port).await?;
     let host_id = rand::rng().next_u32();
     let (db, host_id) = HostDatabase::open(chron_dir, port, host_id).await?;
     let db = Arc::new(db);
-    let chron = ChronService::new(chron_dir, Arc::clone(&db))?;
+    let chron = ChronService::new(chron_dir, Arc::clone(&db));
     let chron_lock = Arc::new(RwLock::new(chron));
     chron_lock.write().await.start(chronfile).await?;
 
@@ -66,7 +68,7 @@ pub async fn run(chron_dir: &Path, args: RunArgs) -> Result<()> {
         }
 
         handle.block_on(async {
-            match Chronfile::load(&watch_path).await {
+            match Chronfile::load(&watch_path, &env).await {
                 Ok(chronfile) => {
                     debug!("Reloading chronfile {}", watch_path.to_string_lossy());
                     if let Err(err) = watcher_chron.write().await.start(chronfile).await {
