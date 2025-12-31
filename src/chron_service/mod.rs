@@ -13,7 +13,7 @@ use chrono::{DateTime, Utc};
 use chrono_humanize::{Accuracy, HumanTime, Tense};
 use cron::Schedule;
 use log::debug;
-use std::collections::HashMap;
+use std::collections::{HashMap, hash_map::Entry};
 use std::mem::take;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -94,18 +94,14 @@ impl ChronService {
         let mut new_jobs = HashMap::new();
 
         for (name, definition) in chronfile.jobs {
-            if let Some((name, task)) = existing_jobs.remove_entry(&name) {
-                // Reuse the job if the command, working dir, shell, options, and schedule match
-                if task.job.definition == definition
-                    && task.job.config.as_ref() == &chronfile.config
-                {
+            if let Entry::Occupied(entry) = existing_jobs.entry(name.clone()) {
+                // Reuse the job if the definition and configuration match
+                let job = &entry.get().job;
+                if job.definition == definition && job.config.as_ref() == &chronfile.config {
                     debug!("{name}: reusing existing job");
-                    self.jobs.insert(name, task);
+                    self.jobs.insert(name, entry.remove());
                     continue;
                 }
-
-                // Add back the job because it was not reused
-                existing_jobs.insert(name, task);
             }
 
             new_jobs.insert(name, definition);
