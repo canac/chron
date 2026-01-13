@@ -114,8 +114,10 @@ impl Run {
             started_at: row.get("started_at")?,
             ended_at: row.get("ended_at")?,
             status_code: row.get("status_code")?,
-            attempt: row.get("attempt")?,
-            max_attempts: row.get("max_attempts")?,
+            attempt: Self::cast_isize(row.get("attempt")?),
+            max_attempts: row
+                .get::<_, Option<_>>("max_attempts")?
+                .map(Self::cast_isize),
             state: row.get("state")?,
             pid: row.get("pid")?,
         })
@@ -154,5 +156,10 @@ impl Run {
             RunStatus::Terminated => return None,
         };
         Some(ended_at.signed_duration_since(self.started_at()))
+    }
+
+    /// Convert an isize to a usize, clamping to 0 on overflow
+    fn cast_isize(value: isize) -> usize {
+        usize::try_from(value).unwrap_or(0)
     }
 }

@@ -41,7 +41,7 @@ impl ClientDatabase {
         self.port
     }
 
-    pub async fn get_last_runs(&self, name: String, count: u64) -> Result<Vec<Run>> {
+    pub async fn get_last_runs(&self, name: String, count: usize) -> Result<Vec<Run>> {
         self.db.get_last_runs(name, count).await
     }
 

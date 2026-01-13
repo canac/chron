@@ -230,7 +230,12 @@ WHERE key = 'singleton'",
 INSERT INTO run (job_name, scheduled_at, attempt, max_attempts)
 VALUES (?1, ?2, ?3, ?4)
 RETURNING *",
-                    (name.clone(), scheduled_at, attempt, max_attempts),
+                    (
+                        name.clone(),
+                        scheduled_at,
+                        Self::cast_usize(attempt),
+                        max_attempts.map(Self::cast_usize),
+                    ),
                     Run::from_row,
                 )
             })
@@ -301,7 +306,7 @@ WHERE id = (
 
     /// Read the last runs of a job
     /// Data integrity: forcefully terminated runs will still appear as running until the job is created again
-    pub async fn get_last_runs(&self, name: String, count: u64) -> Result<Vec<Run>> {
+    pub async fn get_last_runs(&self, name: String, count: usize) -> Result<Vec<Run>> {
         self.client
             .conn(move |conn| {
                 let mut statement = conn.prepare(
@@ -313,7 +318,7 @@ ORDER BY run.id DESC
 LIMIT ?2",
                 )?;
                 statement
-                    .query_map((name, count), Run::from_row)?
+                    .query_map((name, Self::cast_usize(count)), Run::from_row)?
                     .collect::<rusqlite::Result<Vec<_>>>()
             })
             .await
@@ -501,6 +506,11 @@ ORDER BY name",
             .into_iter()
             .map(TryInto::try_into)
             .collect()
+    }
+
+    /// Convert a usize to an isize, truncating on overflow
+    fn cast_usize(value: usize) -> isize {
+        isize::try_from(value).unwrap_or(isize::MAX)
     }
 }
 
