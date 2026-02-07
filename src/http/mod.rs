@@ -187,12 +187,16 @@ pub async fn select_port(mut port: u16) -> Result<(TcpListener, u16), std::io::E
     loop {
         match TcpListener::bind(("127.0.0.1", port)).await {
             Ok(listener) => return Ok((listener, port)),
-            Err(err) if err.kind() == std::io::ErrorKind::AddrInUse && port != u16::MAX => {
-                let next_port = port.saturating_add(1);
-                info!("Port {port} is unavailable, trying port {next_port}...");
-                port = next_port;
+            Err(err) => {
+                if err.kind() == std::io::ErrorKind::AddrInUse
+                    && let Some(next_port) = port.checked_add(1)
+                {
+                    info!("Port {port} is unavailable, trying port {next_port}...");
+                    port = next_port;
+                } else {
+                    return Err(err);
+                }
             }
-            Err(err) => return Err(err),
         }
     }
 }
