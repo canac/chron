@@ -207,14 +207,14 @@ pub fn create_server(
     let port = listener.local_addr()?.port();
 
     let chron = Arc::clone(chron);
-    let db = Arc::clone(db);
+    let data = Data::new(AppState {
+        chron: Arc::clone(&chron),
+        db: Arc::clone(db),
+        host_id,
+    });
     let server = HttpServer::new(move || {
         App::new()
-            .app_data(Data::new(AppState {
-                chron: Arc::clone(&chron),
-                db: Arc::clone(&db),
-                host_id,
-            }))
+            .app_data(data.clone())
             .wrap(DefaultHeaders::new().add(("X-Powered-By", "chron")))
             .service(styles)
             .service(host_id_handler)

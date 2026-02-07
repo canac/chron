@@ -52,9 +52,9 @@ pub async fn run(chron_dir: &Path, args: RunArgs) -> Result<()> {
     let host_id = rand::rng().next_u32();
     let (db, host_id) = HostDatabase::open(chron_dir, port, host_id).await?;
     let db = Arc::new(db);
-    let chron = ChronService::new(chron_dir, Arc::clone(&db));
+    let mut chron = ChronService::new(chron_dir, Arc::clone(&db));
+    chron.start(chronfile).await?;
     let chron_lock = Arc::new(RwLock::new(chron));
-    chron_lock.write().await.start(chronfile).await?;
 
     let client_db = Arc::new(ClientDatabase::open(chron_dir).await?);
     let server = http::create_server(&chron_lock, &client_db, host_id, listener)?;
@@ -89,10 +89,8 @@ pub async fn run(chron_dir: &Path, args: RunArgs) -> Result<()> {
         .context("Failed to start chronfile watcher")?;
 
     let (tx, rx) = channel();
-    let ctrlc_chron = Arc::clone(&chron_lock);
     let mut tx = Some(tx);
     let second_signal = AtomicBool::new(false);
-    let handle = Handle::current();
     ctrlc::set_handler(move || {
         if second_signal.swap(true, Ordering::Relaxed) {
             info!("Shutting down forcefully");
@@ -103,29 +101,29 @@ pub async fn run(chron_dir: &Path, args: RunArgs) -> Result<()> {
         if stdin().is_terminal() {
             info!("To shut down immediately, press Ctrl-C again");
         }
-        handle.block_on(async {
-            ctrlc_chron
-                .write()
-                .await
-                .stop()
-                .await
-                .expect("Failed to stop chron");
-        });
         if let Some(tx) = tx.take() {
-            tx.send(()).expect("Failed to send terminate message");
+            let _ = tx.send(());
         }
     })?;
 
     // Start the HTTP server
     let handle = server.handle();
-    tokio::select! {
-        _ = server => (),
-        _ = rx => {
-            info!("Stopping HTTP server");
-            handle.stop(true).await;
-        },
-    }
+    tokio::spawn(async move {
+        let _ = rx.await;
+        info!("Stopping HTTP server");
+        handle.stop(true).await;
+    });
+    server.await?;
+    drop(debouncer);
 
+    let Some(chron) = Arc::into_inner(chron_lock) else {
+        bail!("Failed to shutdown because the chron service is still in use");
+    };
+    chron.into_inner().stop().await?;
+
+    let Some(db) = Arc::into_inner(db) else {
+        bail!("Failed to shutdown because the database is still in use")
+    };
     db.close().await?;
 
     Ok(())

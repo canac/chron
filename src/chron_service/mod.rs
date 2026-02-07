@@ -125,7 +125,7 @@ impl ChronService {
     }
 
     /// Start or start the chron service using the jobs defined in the provided chronfile
-    pub async fn stop(&mut self) -> Result<()> {
+    pub async fn stop(mut self) -> Result<()> {
         let jobs = take(&mut self.jobs);
         self.terminate_jobs(jobs).await
     }

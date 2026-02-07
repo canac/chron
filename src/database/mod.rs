@@ -104,7 +104,7 @@ impl HostDatabase {
     }
 
     /// Close the database, releasing it to be opened by a different host
-    pub async fn close(&self) -> Result<()> {
+    pub async fn close(self) -> Result<()> {
         self.db.remove_port().await
     }
 
