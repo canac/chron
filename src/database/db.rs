@@ -244,7 +244,7 @@ RETURNING *",
     }
 
     /// Set a job's current run's process id
-    pub async fn set_run_pid(&self, job: String, pid: u32) -> Result<()> {
+    pub async fn set_run_pid(&self, name: String, pid: u32) -> Result<()> {
         self.client
             .conn(move |conn| {
                 conn.prepare(
@@ -257,7 +257,7 @@ WHERE id = (
     WHERE job_name = ?2 AND state = 'starting'
 )",
                 )?
-                .execute((pid, job))
+                .execute((pid, name))
             })
             .await
             .context("Failed to set run process id in the database")?;
@@ -268,7 +268,7 @@ WHERE id = (
     /// Mark a job's current run as completed with a given status code and set its next run time
     pub async fn complete_run(
         &self,
-        job: String,
+        name: String,
         status_code: Option<i32>,
         next_run: Option<&DateTime<Utc>>,
     ) -> Result<()> {
@@ -282,7 +282,7 @@ WHERE id = (
 UPDATE job
 SET next_run = ?1
 WHERE name = ?2",
-                    (next_run, job.clone()),
+                    (next_run, name.clone()),
                 )?;
 
                 conn.execute(
@@ -294,7 +294,7 @@ WHERE id = (
     FROM run
     WHERE job_name = ?2 AND state = 'running'
 )",
-                    (status_code, job),
+                    (status_code, name),
                 )?;
 
                 conn.execute_batch("COMMIT")
@@ -330,7 +330,7 @@ LIMIT ?2",
     /// missed job runs between runs of chron itself. The timestamp It is the time that the run was originally scheduled
     /// for, not the time that it actually ran. The resume time is only updated after completed runs, not runs that were
     /// configured to be retried.
-    pub async fn get_resume_time(&self, job: String) -> Result<DateTime<Utc>> {
+    pub async fn get_resume_time(&self, name: String) -> Result<DateTime<Utc>> {
         let resume_at = self
             .client
             .conn(|conn| {
@@ -349,7 +349,7 @@ SET resume_at = COALESCE(resume_at, STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW'))
 WHERE name = ?1
 RETURNING resume_at",
                 )?;
-                statement.query_row((job,), |row| row.get::<_, NaiveDateTime>("resume_at"))
+                statement.query_row((name,), |row| row.get::<_, NaiveDateTime>("resume_at"))
             })
             .await
             .context("Failed to load resume time from the database")?;
@@ -357,7 +357,7 @@ RETURNING resume_at",
     }
 
     /// Write the resume time of a job
-    pub async fn set_resume_time(&self, job: String, timestamp: &DateTime<Utc>) -> Result<()> {
+    pub async fn set_resume_time(&self, name: String, timestamp: &DateTime<Utc>) -> Result<()> {
         let timestamp = timestamp.naive_utc();
         self.client
             .conn(move |conn| {
@@ -367,7 +367,7 @@ UPDATE job
 SET resume_at = ?1
 WHERE name = ?2",
                 )?;
-                statement.execute((timestamp, job))
+                statement.execute((timestamp, name))
             })
             .await
             .context("Failed to save resume time to the database")?;
@@ -450,8 +450,8 @@ WHERE name = ?1",
     }
 
     /// Return a running, initialized job by its name
-    pub async fn get_active_job(&self, job: String) -> Result<Option<Job>> {
-        let jobs = self.internal_get_active_jobs(Some(job)).await?;
+    pub async fn get_active_job(&self, name: String) -> Result<Option<Job>> {
+        let jobs = self.internal_get_active_jobs(Some(name)).await?;
         Ok(jobs.into_iter().next())
     }
 

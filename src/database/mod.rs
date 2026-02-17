@@ -49,8 +49,8 @@ impl ClientDatabase {
         self.db.get_active_jobs().await
     }
 
-    pub async fn get_active_job(&self, job: String) -> Result<Option<Job>> {
-        self.db.get_active_job(job).await
+    pub async fn get_active_job(&self, name: String) -> Result<Option<Job>> {
+        self.db.get_active_job(name).await
     }
 }
 
@@ -124,25 +124,25 @@ impl HostDatabase {
             .await
     }
 
-    pub async fn set_run_pid(&self, job: String, pid: u32) -> Result<()> {
-        self.db.set_run_pid(job, pid).await
+    pub async fn set_run_pid(&self, name: String, pid: u32) -> Result<()> {
+        self.db.set_run_pid(name, pid).await
     }
 
     pub async fn complete_run(
         &self,
-        job: String,
+        name: String,
         status_code: Option<i32>,
         next_run: Option<&DateTime<Utc>>,
     ) -> Result<()> {
-        self.db.complete_run(job, status_code, next_run).await
+        self.db.complete_run(name, status_code, next_run).await
     }
 
-    pub async fn get_resume_time(&self, job: String) -> Result<DateTime<Utc>> {
-        self.db.get_resume_time(job).await
+    pub async fn get_resume_time(&self, name: String) -> Result<DateTime<Utc>> {
+        self.db.get_resume_time(name).await
     }
 
-    pub async fn set_resume_time(&self, job: String, timestamp: &DateTime<Utc>) -> Result<()> {
-        self.db.set_resume_time(job, timestamp).await
+    pub async fn set_resume_time(&self, name: String, timestamp: &DateTime<Utc>) -> Result<()> {
+        self.db.set_resume_time(name, timestamp).await
     }
 
     pub async fn create_jobs(&self, jobs: Vec<String>) -> Result<()> {
