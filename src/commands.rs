@@ -2,27 +2,22 @@ use crate::chron_service::ChronService;
 use crate::chronfile::Chronfile;
 use crate::chronfile::env::Env;
 use crate::cli::{KillArgs, LogsArgs, RunArgs, RunsArgs, StatusArgs};
-use crate::database::{ClientDatabase, HostDatabase, JobStatus, RunStatus};
+use crate::database::{ClientDatabase, HostDatabase, HostServer, JobStatus, RunStatus};
 use crate::format;
 use crate::http;
-use crate::http_helpers::{read_status, validate_headers};
 use anyhow::{Context, Result, bail};
 use chrono::Local;
 use cli_tables::Table;
 use log::{LevelFilter, debug, error, info};
 use notify::RecursiveMode;
 use notify_debouncer_mini::{DebounceEventResult, new_debouncer};
-use rand::RngCore;
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, BufWriter, IsTerminal, Read, Write, stdin};
-use std::net::SocketAddr;
 use std::path::Path;
 use std::process::exit;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
 use tokio::runtime::Handle;
 use tokio::sync::RwLock;
 use tokio::sync::oneshot::channel;
@@ -48,16 +43,18 @@ pub async fn run(chron_dir: &Path, args: RunArgs) -> Result<()> {
     let env = Env::from_host()?;
     let chronfile = Chronfile::load(&chronfile_path, &env).await?;
 
-    let (listener, port) = http::select_port(port).await?;
-    let host_id = rand::rng().next_u32();
-    let (db, host_id) = HostDatabase::open(chron_dir, port, host_id).await?;
-    let db = Arc::new(db);
+    let listener = http::connect(port).await?;
+    let host_server = HostServer::new(chron_dir).await?;
+
+    let db = Arc::new(HostDatabase::open(chron_dir).await?);
     let mut chron = ChronService::new(chron_dir, Arc::clone(&db));
     chron.start(chronfile).await?;
     let chron_lock = Arc::new(RwLock::new(chron));
 
+    host_server.start(Arc::clone(&chron_lock)).await;
+
     let client_db = Arc::new(ClientDatabase::open(chron_dir).await?);
-    let server = http::create_server(&chron_lock, &client_db, host_id, listener)?;
+    let server = http::create_server(&chron_lock, &client_db, listener)?;
 
     let watcher_chron = Arc::clone(&chron_lock);
     let watch_path = chronfile_path.clone();
@@ -116,15 +113,16 @@ pub async fn run(chron_dir: &Path, args: RunArgs) -> Result<()> {
     server.await?;
     drop(debouncer);
 
+    host_server.close().await?;
+
     let Some(chron) = Arc::into_inner(chron_lock) else {
         bail!("Failed to shutdown because the chron service is still in use");
     };
     chron.into_inner().stop().await?;
 
-    let Some(db) = Arc::into_inner(db) else {
+    if Arc::into_inner(db).is_none() {
         bail!("Failed to shutdown because the database is still in use")
-    };
-    db.close().await?;
+    }
 
     Ok(())
 }
@@ -268,38 +266,12 @@ pub async fn logs(db: ClientDatabase, args: LogsArgs) -> Result<()> {
     Ok(())
 }
 
-/// Perform a `POST /job/:job_id/terminate` HTTP request using raw TCP to avoid heavy HTTP client dependencies
-async fn send_terminate_job_request(port: u16, job: &str) -> Result<u32> {
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
-    let mut stream = TcpStream::connect(addr).await?;
-
-    let request = format!(
-        "POST /job/{job}/terminate HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
-    );
-    stream.write_all(request.as_bytes()).await?;
-
-    let mut reader = tokio::io::BufReader::new(stream);
-
-    let status = read_status(&mut reader).await?;
-    if status == "404" {
-        bail!("Job {job} is not running");
-    }
-    if status != "200" {
-        bail!("Invalid status {status}");
-    }
-    validate_headers(&mut reader).await?;
-
-    // Parse the body looking for the PID of the terminated process
-    let mut body = String::new();
-    reader.read_to_string(&mut body).await?;
-    Ok(body.parse()?)
-}
-
 /// Implementation for the `kill` CLI command
-pub async fn kill(db: ClientDatabase, args: KillArgs) -> Result<()> {
+pub async fn kill(mut db: ClientDatabase, args: KillArgs) -> Result<()> {
     let KillArgs { job } = args;
-    let port = db.get_port();
-    let pid = send_terminate_job_request(port, &job).await?;
+    let Some(pid) = db.terminate_job(&job).await? else {
+        bail!("Job {job} is not running");
+    };
     println!("Terminated process {pid}");
 
     Ok(())

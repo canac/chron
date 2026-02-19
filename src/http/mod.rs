@@ -7,7 +7,7 @@ use crate::database::{ClientDatabase, Job, JobStatus, Run, RunStatus};
 use actix_web::dev::Server;
 use actix_web::middleware::DefaultHeaders;
 use actix_web::web::{Data, Path};
-use actix_web::{App, HttpResponse, HttpServer, Responder, Result, get, http::StatusCode, post};
+use actix_web::{App, HttpResponse, HttpServer, Responder, Result, get, http::StatusCode};
 use askama::Template;
 use chrono::{DateTime, Duration, Local, TimeZone};
 use log::info;
@@ -21,7 +21,6 @@ use tokio_util::io::ReaderStream;
 struct AppState {
     chron: Arc<RwLock<ChronService>>,
     db: Arc<ClientDatabase>,
-    host_id: u32,
 }
 
 type AppData = Data<AppState>;
@@ -37,13 +36,6 @@ async fn styles() -> Result<impl Responder> {
     Ok(HttpResponse::Ok()
         .content_type("text/css; charset=utf-8")
         .body(include_str!("./static/styles.css")))
-}
-
-#[get("/host/id")]
-async fn host_id_handler(data: AppData) -> Result<impl Responder> {
-    Ok(HttpResponse::Ok()
-        .content_type("application/octet-stream")
-        .body(data.host_id.to_be_bytes().to_vec()))
 }
 
 #[get("/")]
@@ -155,38 +147,12 @@ async fn job_logs_handler(path: Path<(String, String)>, data: AppData) -> Result
         .streaming(ReaderStream::new(file)))
 }
 
-#[post("/job/{name}/terminate")]
-async fn job_terminate_handler(name: Path<String>, data: AppData) -> Result<impl Responder> {
-    let data_guard = data.chron.read().await;
-    let process = data_guard
-        .get_job(&name)
-        .ok_or_else(|| HttpError::from_status_code(StatusCode::NOT_FOUND))?
-        .running_process
-        .write()
-        .await
-        .take();
-    drop(data_guard);
-
-    if let Some(process) = process {
-        let pid = process.pid;
-        if process.terminate().await {
-            return Ok(HttpResponse::Ok()
-                .content_type("text/plain; charset=utf-8")
-                .body(pid.to_string()));
-        }
-    }
-
-    Ok(HttpResponse::NotFound()
-        .content_type("text/plain; charset=utf-8")
-        .body("Not Running"))
-}
-
 /// Select a port for the HTTP server to listen on
 /// The provided port is tried first, but if it is unavailable, other ports are tried until one can successfully connect.
-pub async fn select_port(mut port: u16) -> Result<(TcpListener, u16), std::io::Error> {
+pub async fn connect(mut port: u16) -> Result<TcpListener, std::io::Error> {
     loop {
         match TcpListener::bind(("127.0.0.1", port)).await {
-            Ok(listener) => return Ok((listener, port)),
+            Ok(listener) => return Ok(listener),
             Err(err) => {
                 if err.kind() == std::io::ErrorKind::AddrInUse
                     && let Some(next_port) = port.checked_add(1)
@@ -205,27 +171,22 @@ pub async fn select_port(mut port: u16) -> Result<(TcpListener, u16), std::io::E
 pub fn create_server(
     chron: &Arc<RwLock<ChronService>>,
     db: &Arc<ClientDatabase>,
-    host_id: u32,
     listener: TcpListener,
 ) -> Result<Server, std::io::Error> {
     let port = listener.local_addr()?.port();
 
-    let chron = Arc::clone(chron);
     let data = Data::new(AppState {
-        chron: Arc::clone(&chron),
+        chron: Arc::clone(chron),
         db: Arc::clone(db),
-        host_id,
     });
     let server = HttpServer::new(move || {
         App::new()
             .app_data(data.clone())
             .wrap(DefaultHeaders::new().add(("X-Powered-By", "chron")))
             .service(styles)
-            .service(host_id_handler)
             .service(index_handler)
             .service(job_handler)
             .service(job_logs_handler)
-            .service(job_terminate_handler)
     })
     .disable_signals()
     .listen(listener.into_std()?)?;

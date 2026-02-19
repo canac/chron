@@ -130,6 +130,18 @@ impl ChronService {
         self.terminate_jobs(jobs).await
     }
 
+    /// Terminate a job and returns its pid if it exists and is running
+    pub async fn terminate_job(&self, name: &str) -> Option<u32> {
+        let job = self.get_job(name)?;
+        let process = job.running_process.write().await.take()?;
+
+        let pid = process.pid;
+        if process.terminate().await {
+            return Some(pid);
+        }
+        None
+    }
+
     /// Terminate a collection of jobs and wait for all of their tasks complete
     async fn terminate_jobs(&self, jobs: HashMap<String, Task>) -> Result<()> {
         // Wait for each of the tasks to complete

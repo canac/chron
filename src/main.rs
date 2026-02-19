@@ -14,7 +14,6 @@ mod commands;
 mod database;
 mod format;
 mod http;
-mod http_helpers;
 mod result_ext;
 
 use crate::{cli::Cli, database::ClientDatabase};
