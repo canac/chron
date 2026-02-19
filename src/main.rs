@@ -21,7 +21,7 @@ use crate::{cli::Cli, database::ClientDatabase};
 use anyhow::{Context, Result};
 use clap::Parser;
 use cli::Command;
-use std::{path::PathBuf, sync::Arc};
+use std::path::PathBuf;
 use tokio::fs::create_dir_all;
 
 #[actix_web::main]
@@ -50,23 +50,23 @@ async fn main() -> Result<()> {
             commands::run(&data_dir, args).await?;
         }
         Command::Jobs => {
-            let db = Arc::new(ClientDatabase::open(&data_dir).await?);
+            let db = ClientDatabase::open(&data_dir).await?;
             commands::jobs(db).await?;
         }
         Command::Status(args) => {
-            let db = Arc::new(ClientDatabase::open(&data_dir).await?);
+            let db = ClientDatabase::open(&data_dir).await?;
             commands::status(db, args).await?;
         }
         Command::Runs(args) => {
-            let db = Arc::new(ClientDatabase::open(&data_dir).await?);
+            let db = ClientDatabase::open(&data_dir).await?;
             commands::runs(db, args).await?;
         }
         Command::Logs(args) => {
-            let db = Arc::new(ClientDatabase::open(&data_dir).await?);
+            let db = ClientDatabase::open(&data_dir).await?;
             commands::logs(db, args).await?;
         }
         Command::Kill(args) => {
-            let db = Arc::new(ClientDatabase::open(&data_dir).await?);
+            let db = ClientDatabase::open(&data_dir).await?;
             commands::kill(db, args).await?;
         }
     }

@@ -130,7 +130,7 @@ pub async fn run(chron_dir: &Path, args: RunArgs) -> Result<()> {
 }
 
 /// Implementation for the `jobs` CLI command
-pub async fn jobs(db: Arc<ClientDatabase>) -> Result<()> {
+pub async fn jobs(db: ClientDatabase) -> Result<()> {
     let jobs = db.get_active_jobs().await?;
     if jobs.is_empty() {
         println!("No jobs are running");
@@ -155,7 +155,7 @@ pub async fn jobs(db: Arc<ClientDatabase>) -> Result<()> {
 }
 
 /// Implementation for the `status` CLI command
-pub async fn status(db: Arc<ClientDatabase>, args: StatusArgs) -> Result<()> {
+pub async fn status(db: ClientDatabase, args: StatusArgs) -> Result<()> {
     let StatusArgs { job } = args;
     let Some(job) = db.get_active_job(job.clone()).await? else {
         bail!("Job {job} is not running");
@@ -180,7 +180,7 @@ pub async fn status(db: Arc<ClientDatabase>, args: StatusArgs) -> Result<()> {
 }
 
 /// Implementation for the `runs` CLI command
-pub async fn runs(db: Arc<ClientDatabase>, args: RunsArgs) -> Result<()> {
+pub async fn runs(db: ClientDatabase, args: RunsArgs) -> Result<()> {
     let name = args.job;
     if db.get_active_job(name.clone()).await?.is_none() {
         bail!("Job {name} is not running")
@@ -212,7 +212,7 @@ pub async fn runs(db: Arc<ClientDatabase>, args: RunsArgs) -> Result<()> {
 }
 
 /// Implementation for the `logs` CLI command
-pub async fn logs(db: Arc<ClientDatabase>, args: LogsArgs) -> Result<()> {
+pub async fn logs(db: ClientDatabase, args: LogsArgs) -> Result<()> {
     let LogsArgs {
         job: name,
         lines,
@@ -296,7 +296,7 @@ async fn send_terminate_job_request(port: u16, job: &str) -> Result<u32> {
 }
 
 /// Implementation for the `kill` CLI command
-pub async fn kill(db: Arc<ClientDatabase>, args: KillArgs) -> Result<()> {
+pub async fn kill(db: ClientDatabase, args: KillArgs) -> Result<()> {
     let KillArgs { job } = args;
     let port = db.get_port();
     let pid = send_terminate_job_request(port, &job).await?;
