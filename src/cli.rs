@@ -4,8 +4,8 @@ use std::path::PathBuf;
 #[derive(Parser)]
 pub struct RunArgs {
     /// HTTP server port
-    #[clap(short = 'p', long, env = "PORT", default_value = "2748")]
-    pub port: u16,
+    #[clap(short = 'p', long, env = "PORT")]
+    pub port: Option<u16>,
 
     /// Log fewer messages
     #[clap(short = 'q', long)]

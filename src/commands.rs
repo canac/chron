@@ -43,7 +43,6 @@ pub async fn run(chron_dir: &Path, args: RunArgs) -> Result<()> {
     let env = Env::from_host()?;
     let chronfile = Chronfile::load(&chronfile_path, &env).await?;
 
-    let listener = http::connect(port).await?;
     let host_server = HostServer::new(chron_dir).await?;
 
     let db = Arc::new(HostDatabase::open(chron_dir).await?);
@@ -52,9 +51,6 @@ pub async fn run(chron_dir: &Path, args: RunArgs) -> Result<()> {
     let chron_lock = Arc::new(RwLock::new(chron));
 
     host_server.start(Arc::clone(&chron_lock)).await;
-
-    let client_db = Arc::new(ClientDatabase::open(chron_dir).await?);
-    let server = http::create_server(&chron_lock, &client_db, listener)?;
 
     let watcher_chron = Arc::clone(&chron_lock);
     let watch_path = chronfile_path.clone();
@@ -103,14 +99,20 @@ pub async fn run(chron_dir: &Path, args: RunArgs) -> Result<()> {
         }
     })?;
 
-    // Start the HTTP server
-    let handle = server.handle();
-    tokio::spawn(async move {
+    if let Some(port) = port {
+        // Start the HTTP server
+        let client_db = Arc::new(ClientDatabase::open(chron_dir).await?);
+        let server = http::create_server(&chron_lock, &client_db, port).await?;
+        let handle = server.handle();
+        tokio::spawn(async move {
+            let _ = rx.await;
+            info!("Stopping HTTP server");
+            handle.stop(true).await;
+        });
+        server.await?;
+    } else {
         let _ = rx.await;
-        info!("Stopping HTTP server");
-        handle.stop(true).await;
-    });
-    server.await?;
+    }
     drop(debouncer);
 
     host_server.close().await?;

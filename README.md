@@ -113,22 +113,20 @@ On startup `chron` will automatically check whether any jobs were scheduled to r
 
 ## HTTP server
 
-`chron` also starts a basic HTTP server that lets you see the status of your commands. By default, `chron` will pick an open port to listen on.
+`chron` can also start a basic HTTP server that lets you see the status of your commands.
 
 ```sh
-$ chron run chronfile.toml
+$ chron run chronfile.toml --port=8000
 # ...
-Listening on port http://localhost:2748
+Listening on port http://localhost:8000
 ```
 
-You can also manually specify the port through the `--port` flag or the `PORT` environment variable.
+You can also manually specify the port through the `PORT` environment variable.
 
 ```sh
 $ PORT=8000 chron run chronfile.toml
-# Or ...
-$ chron run chronfile.toml --port=8000
-
-$ open http://localhost:8000
+# ...
+Listening on port http://localhost:3000
 ```
 
 ## Data Directory

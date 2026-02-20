@@ -147,34 +147,13 @@ async fn job_logs_handler(path: Path<(String, String)>, data: AppData) -> Result
         .streaming(ReaderStream::new(file)))
 }
 
-/// Select a port for the HTTP server to listen on
-/// The provided port is tried first, but if it is unavailable, other ports are tried until one can successfully connect.
-pub async fn connect(mut port: u16) -> Result<TcpListener, std::io::Error> {
-    loop {
-        match TcpListener::bind(("127.0.0.1", port)).await {
-            Ok(listener) => return Ok(listener),
-            Err(err) => {
-                if err.kind() == std::io::ErrorKind::AddrInUse
-                    && let Some(next_port) = port.checked_add(1)
-                {
-                    info!("Port {port} is unavailable, trying port {next_port}...");
-                    port = next_port;
-                } else {
-                    return Err(err);
-                }
-            }
-        }
-    }
-}
-
-/// Create a new chron HTTP server on the provided TCP listener
-pub fn create_server(
+/// Create a new chron HTTP server on the port
+pub async fn create_server(
     chron: &Arc<RwLock<ChronService>>,
     db: &Arc<ClientDatabase>,
-    listener: TcpListener,
+    port: u16,
 ) -> Result<Server, std::io::Error> {
-    let port = listener.local_addr()?.port();
-
+    let listener = TcpListener::bind(("127.0.0.1", port)).await?;
     let data = Data::new(AppState {
         chron: Arc::clone(chron),
         db: Arc::clone(db),
