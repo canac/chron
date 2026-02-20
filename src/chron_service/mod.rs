@@ -160,7 +160,10 @@ impl ChronService {
                 debug!("{name}: failed with error: {err:?}");
             }
 
-            self.db.uninitialize_job(name).await?;
+            if !self.jobs.contains_key(&name) {
+                // Keep jobs initialized that were updated instead of removed
+                self.db.uninitialize_job(name).await?;
+            }
         }
         if has_jobs {
             debug!("Finished waiting for all jobs to terminate");
