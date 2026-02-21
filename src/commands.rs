@@ -11,13 +11,14 @@ use cli_tables::Table;
 use log::{LevelFilter, debug, error, info};
 use notify::RecursiveMode;
 use notify_debouncer_mini::{DebounceEventResult, new_debouncer};
-use std::fs::OpenOptions;
-use std::io::{BufRead, BufReader, BufWriter, IsTerminal, Read, Write, stdin};
+use std::io::{BufWriter, IsTerminal, Write, stdin};
 use std::path::Path;
 use std::process::exit;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+use tokio::fs::OpenOptions;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::runtime::Handle;
 use tokio::sync::RwLock;
 use tokio::sync::oneshot::channel;
@@ -232,16 +233,18 @@ pub async fn logs(db: ClientDatabase, args: LogsArgs) -> Result<()> {
     let file = OpenOptions::new()
         .read(true)
         .open(job.config.log_dir.join(format!("{run_id}.log")))
+        .await
         .context("Failed to open log file")?;
     let mut reader = BufReader::new(file);
 
     let mut logs = String::new();
     reader
         .read_to_string(&mut logs)
+        .await
         .context("Failed to read log file")?;
 
     if let Some(lines) = lines {
-        let log_lines: Vec<&str> = logs.lines().collect();
+        let log_lines = logs.lines().collect::<Vec<_>>();
         let start = log_lines.len().saturating_sub(lines);
 
         let mut writer = BufWriter::new(std::io::stdout().lock());
@@ -250,17 +253,17 @@ pub async fn logs(db: ClientDatabase, args: LogsArgs) -> Result<()> {
         }
         writer.flush()?;
     } else {
-        println!("{logs}");
+        print!("{logs}");
     }
 
     if follow {
         loop {
             let mut line = String::new();
-            let bytes_read = reader.read_line(&mut line)?;
+            let bytes_read = reader.read_line(&mut line).await?;
             if bytes_read > 0 {
                 print!("{line}");
             } else {
-                std::thread::sleep(Duration::from_secs(1));
+                tokio::time::sleep(Duration::from_secs(1)).await;
             }
         }
     }
