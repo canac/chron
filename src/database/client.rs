@@ -1,5 +1,5 @@
 use super::db::Database;
-use super::models::{Job, Run};
+use super::models::{Job, Run, RunStatus};
 use crate::database::HostServer;
 use crate::database::ipc::{self, Request, Response};
 use anyhow::{Result, bail};
@@ -43,6 +43,10 @@ impl ClientDatabase {
 
     pub async fn get_last_runs(&self, name: String, count: usize) -> Result<Vec<Run>> {
         self.db.get_last_runs(name, count).await
+    }
+
+    pub async fn get_run_status(&self, run_id: u32) -> Result<Option<RunStatus>> {
+        self.db.get_run_status(run_id).await
     }
 
     pub async fn get_active_jobs(&self) -> Result<Vec<Job>> {

@@ -258,6 +258,16 @@ pub async fn logs(db: ClientDatabase, args: LogsArgs) -> Result<()> {
 
     if follow {
         loop {
+            let status = db.get_run_status(run_id).await?;
+            if !matches!(status, Some(RunStatus::Running { .. })) {
+                let mut remaining = String::new();
+                reader.read_to_string(&mut remaining).await?;
+                if !remaining.is_empty() {
+                    print!("{remaining}");
+                }
+                break;
+            }
+
             let mut line = String::new();
             let bytes_read = reader.read_line(&mut line).await?;
             if bytes_read > 0 {

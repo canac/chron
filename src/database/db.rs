@@ -1,8 +1,8 @@
 use super::job_config::JobConfig;
-use super::models::{Job, Run};
+use super::models::{Job, Run, RunStatus};
 use crate::database::models::RawJob;
 use anyhow::{Context, Result};
-use async_sqlite::rusqlite::{self, ToSql};
+use async_sqlite::rusqlite::{self, OptionalExtension, ToSql};
 use async_sqlite::{Client, ClientBuilder, JournalMode};
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use std::convert::TryInto;
@@ -204,6 +204,26 @@ LIMIT ?2",
             })
             .await
             .context("Failed to load last runs from the database")
+    }
+
+    /// Get the status of a run
+    pub async fn get_run_status(&self, run_id: u32) -> Result<Option<RunStatus>> {
+        self.client
+            .conn(move |conn| {
+                conn.query_row(
+                    "
+SELECT *
+FROM run
+WHERE id = ?1",
+                    (run_id,),
+                    Run::from_row,
+                )
+                .optional()
+            })
+            .await
+            .context("Failed to get run status from the database")?
+            .map(|run| run.status().context("Failed to parse run status"))
+            .transpose()
     }
 
     /// Read the resume time of a job, setting it to the current time if it isn't set
@@ -745,5 +765,24 @@ mod tests {
                 .status,
             JobStatus::Running { pid: 0 },
         );
+    }
+
+    #[test]
+    async fn test_get_run_status() {
+        let db = open_db().await;
+
+        let name = "job".to_owned();
+        db.create_jobs(vec![name.clone()]).await.unwrap();
+        let run_id = insert_run(&db, name).await;
+        assert_eq!(
+            db.get_run_status(run_id).await.unwrap().unwrap(),
+            RunStatus::Running { pid: 0 },
+        );
+    }
+
+    #[test]
+    async fn test_get_run_status_not_found() {
+        let db = open_db().await;
+        assert_eq!(db.get_run_status(0).await.unwrap(), None);
     }
 }
