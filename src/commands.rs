@@ -17,7 +17,6 @@ use std::io::{BufWriter, IsTerminal, Write, stdin};
 use std::path::Path;
 use std::process::exit;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::fs::OpenOptions;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
@@ -85,22 +84,18 @@ pub async fn run(chron_dir: &Path, args: RunArgs) -> Result<()> {
         .context("Failed to start chronfile watcher")?;
 
     let (tx, rx) = channel();
-    let mut tx = Some(tx);
-    let second_signal = AtomicBool::new(false);
-    ctrlc::set_handler(move || {
-        if second_signal.swap(true, Ordering::Relaxed) {
-            info!("Shutting down forcefully");
-            exit(1);
-        }
-
+    tokio::spawn(async move {
+        let _ = tokio::signal::ctrl_c().await;
         info!("Shutting down gracefully...");
         if stdin().is_terminal() {
             info!("To shut down immediately, press Ctrl-C again");
         }
-        if let Some(tx) = tx.take() {
-            let _ = tx.send(());
-        }
-    })?;
+        let _ = tx.send(());
+
+        let _ = tokio::signal::ctrl_c().await;
+        info!("Shutting down forcefully");
+        exit(1);
+    });
 
     if let Some(port) = port {
         // Start the HTTP server

@@ -15,7 +15,6 @@ chrono-humanize = "0.2.2"
 clap = { version = "4.1.6", features = ["derive", "env"] }
 cli-tables = "0.2.1"
 cron = "0.15.0"
-ctrlc = "3.4.5"
 directories = "6.0.0"
 humantime-serde = "1.1.1"
 log = "0.4.17"
@@ -25,7 +24,7 @@ serde = { version = "1.0.136", features = ["derive"] }
 serde_json = "1.0.79"
 simple_logger = { version = "5.0.0", features = ["stderr"] }
 interprocess = { version = "2.2.3", features = ["tokio"] }
-tokio = { version = "1.47.1", features = ["fs", "io-util", "macros", "net", "process"] }
+tokio = { version = "1.47.1", features = ["fs", "io-util", "macros", "net", "process", "signal"] }
 tokio-util = "0.7.11"
 toml = { version = "0.9.11", default-features = false, features = ["parse", "serde"] }
 wincode = { version = "0.4.4", features = ["derive"] }
