@@ -4,7 +4,7 @@ mod scheduled_job;
 mod sleep;
 
 use self::exec::exec_command;
-use self::scheduled_job::ScheduledJob;
+use self::scheduled_job::{ElapsedRuns, ScheduledJob};
 use self::sleep::sleep_until;
 use crate::chronfile::{Chronfile, Config, JobDefinition, RetryConfig};
 use crate::database::{HostDatabase, JobConfig};
@@ -12,7 +12,7 @@ use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use chrono_humanize::{Accuracy, HumanTime, Tense};
 use cron::Schedule;
-use log::debug;
+use log::{debug, warn};
 use std::collections::{HashMap, hash_map::Entry};
 use std::mem::take;
 use std::path::{Path, PathBuf};
@@ -52,12 +52,62 @@ pub struct Job {
     pub next_attempt: RwLock<Option<DateTime<Utc>>>,
 }
 
+struct JobTick {
+    elapsed_runs: Option<ElapsedRuns>,
+    next_run: Option<DateTime<Utc>>,
+    retry_config: RetryConfig,
+}
+
 impl Job {
     /// Return the time that the job is scheduled to run next
     pub async fn next_scheduled_run(&self) -> Option<DateTime<Utc>> {
         match &self.scheduled_job {
             None => None,
             Some(scheduled_job) => scheduled_job.read().await.next_run(),
+        }
+    }
+
+    /// Tick the scheduler and compute retry config, without executing the command.
+    async fn tick(&self) -> Result<JobTick> {
+        let Some(scheduled_job) = self.scheduled_job.as_ref() else {
+            bail!("{}: job is not a scheduled job", self.name);
+        };
+
+        // Get the elapsed run since the last tick, if any
+        let mut job_guard = scheduled_job.write().await;
+        let now = Utc::now();
+        let elapsed_runs = job_guard.tick(now);
+        let next_run = job_guard.next_run();
+
+        // Retry delay defaults to one sixth of the job's period
+        let retry_delay = self.definition.retry.delay.unwrap_or_else(|| {
+            job_guard
+                .get_current_period(&now.into())
+                .unwrap_or_default()
+                / 6
+        });
+        drop(job_guard);
+
+        let retry_config = RetryConfig {
+            delay: Some(retry_delay),
+            ..self.definition.retry
+        };
+
+        Ok(JobTick {
+            elapsed_runs,
+            next_run,
+            retry_config,
+        })
+    }
+
+    /// Terminate the running process and return its pid
+    pub async fn terminate(&self) -> Option<u32> {
+        let process = self.running_process.write().await.take()?;
+        let pid = process.pid;
+        if process.terminate().await {
+            Some(pid)
+        } else {
+            None
         }
     }
 }
@@ -130,28 +180,16 @@ impl ChronService {
         self.terminate_jobs(jobs).await
     }
 
-    /// Terminate a job and returns its pid if it exists and is running
-    pub async fn terminate_job(&self, name: &str) -> Option<u32> {
-        let job = self.get_job(name)?;
-        let process = job.running_process.write().await.take()?;
-
-        let pid = process.pid;
-        if process.terminate().await {
-            return Some(pid);
-        }
-        None
-    }
-
     /// Terminate a collection of jobs and wait for all of their tasks complete
     async fn terminate_jobs(&self, jobs: HashMap<String, Task>) -> Result<()> {
+        if jobs.is_empty() {
+            return Ok(());
+        }
+
         // Wait for each of the tasks to complete
-        let has_jobs = !jobs.is_empty();
         for (name, task) in jobs {
             debug!("{name}: waiting for job to terminate...");
-            let process = task.job.running_process.write().await.take();
-            if let Some(process) = process {
-                process.terminate().await;
-            }
+            task.job.terminate().await;
             task.handle.abort();
 
             if let Err(err) = task.handle.await
@@ -165,9 +203,7 @@ impl ChronService {
                 self.db.uninitialize_job(name).await?;
             }
         }
-        if has_jobs {
-            debug!("Finished waiting for all jobs to terminate");
-        }
+        debug!("Finished waiting for all jobs to terminate");
 
         Ok(())
     }
@@ -275,21 +311,54 @@ impl ChronService {
         let db = Arc::clone(&self.db);
         let name = name.to_owned();
         let handle = spawn(async move {
-            loop {
-                match Self::exec_scheduled_job(&db, &name, &job).await {
-                    Ok(Some(next_run)) => {
-                        // Wait until the next run before ticking again
-                        sleep_until(next_run).await;
+            let run = async {
+                loop {
+                    let JobTick {
+                        elapsed_runs,
+                        next_run,
+                        retry_config,
+                    } = job.tick().await?;
+
+                    if let Some(elapsed_runs) = elapsed_runs {
+                        let scheduled_time = elapsed_runs.oldest;
+                        let late = HumanTime::from(scheduled_time)
+                            .to_text_en(Accuracy::Precise, Tense::Present);
+                        debug!("{name}: scheduled for {scheduled_time} ({late} late)");
+
+                        let mut handle = {
+                            let db = Arc::clone(&db);
+                            let job = Arc::clone(&job);
+                            spawn(async move {
+                                exec_command(&db, &job, &retry_config, &scheduled_time).await
+                            })
+                        };
+                        if let Some(next_run) = next_run {
+                            tokio::select! {
+                                result = &mut handle => result??,
+                                () = sleep_until(next_run) => {
+                                    warn!("{name}: terminating existing run");
+                                    job.terminate().await;
+                                }
+                            }
+                        } else {
+                            handle.await??;
+                        }
+
+                        let resume_time = elapsed_runs.newest;
+                        debug!("{name}: updating resume time {resume_time}");
+                        db.set_resume_time(name.clone(), &resume_time).await?;
                     }
-                    Ok(None) => {
-                        debug!("{name}: schedule contains no more future runs");
-                        break;
-                    }
-                    Err(err) => {
-                        debug!("{name}: failed with error:\n{err:?}");
-                        break;
-                    }
+
+                    let Some(next_run) = next_run else { break };
+                    // Wait until the next run before ticking again
+                    sleep_until(next_run).await;
                 }
+
+                Ok::<(), anyhow::Error>(())
+            };
+
+            if let Err(err) = run.await {
+                debug!("{name}: failed with error:\n{err:?}");
             }
         });
 
@@ -302,57 +371,6 @@ impl ChronService {
         );
 
         Ok(())
-    }
-
-    /// Execute a scheduled job a single time
-    /// Returns the next time that the job is scheduled to run, if any
-    async fn exec_scheduled_job(
-        db: &Arc<HostDatabase>,
-        name: &str,
-        job: &Arc<Job>,
-    ) -> Result<Option<DateTime<Utc>>> {
-        let Some(scheduled_job) = job.scheduled_job.as_ref() else {
-            bail!("{name}: job is not a scheduled job");
-        };
-
-        // Get the elapsed run since the last tick, if any
-        let mut job_guard = scheduled_job.write().await;
-        let now = Utc::now();
-        let current_run = job_guard.tick(now);
-        let next_run = job_guard.next_run();
-
-        // Retry delay defaults to one sixth of the job's period
-        let retry_delay = job.definition.retry.delay.unwrap_or_else(|| {
-            job_guard
-                .get_current_period(&now.into())
-                .unwrap_or_default()
-                / 6
-        });
-
-        drop(job_guard);
-
-        if let Some(elapsed_runs) = current_run {
-            let scheduled_time = elapsed_runs.oldest;
-            let late =
-                HumanTime::from(scheduled_time).to_text_en(Accuracy::Precise, Tense::Present);
-            debug!("{name}: scheduled for {scheduled_time} ({late} late)");
-
-            exec_command(
-                db,
-                job,
-                &RetryConfig {
-                    delay: Some(retry_delay),
-                    ..job.definition.retry
-                },
-                &scheduled_time,
-            )
-            .await?;
-            let resume_time = elapsed_runs.newest;
-            debug!("{name}: updating resume time {resume_time}");
-            db.set_resume_time(name.to_owned(), &resume_time).await?;
-        }
-
-        Ok(next_run)
     }
 
     // Calculate the log file directory for a job

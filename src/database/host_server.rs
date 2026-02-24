@@ -103,7 +103,12 @@ impl HostServer {
                         let res = match req {
                             Request::Connect => Response::Connect,
                             Request::Terminate { name } => {
-                                let pid = chron.read().await.terminate_job(&name).await;
+                                let chron_lock = chron.read().await;
+                                let pid = match chron_lock.get_job(&name) {
+                                    Some(job) => job.terminate().await,
+                                    None => None,
+                                };
+                                drop(chron_lock);
                                 Response::Terminate { pid }
                             }
                         };
