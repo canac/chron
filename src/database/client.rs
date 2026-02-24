@@ -41,17 +41,17 @@ impl ClientDatabase {
         Ok(result)
     }
 
-    /// Terminate a running job by name, returning the pid of the terminated process
-    pub async fn terminate_job(&mut self, name: &str) -> Result<Option<u32>> {
+    /// Terminate a running job by name
+    pub async fn terminate_job(&mut self, name: &str) -> Result<ipc::TerminateResult> {
         let req = Request::Terminate {
             name: name.to_owned(),
         };
         ipc::send(&mut self.tx, &req).await?;
         let res = ipc::receive::<Response, _>(&mut self.rx).await?;
-        let Response::Terminate { pid } = res else {
+        let Response::Terminate { result } = res else {
             bail!("Unexpected response")
         };
-        Ok(pid)
+        Ok(result)
     }
 
     pub async fn get_last_runs(&self, name: String, count: usize) -> Result<Vec<Run>> {

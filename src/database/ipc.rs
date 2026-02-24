@@ -17,10 +17,17 @@ pub enum TriggerResult {
 }
 
 #[derive(SchemaRead, SchemaWrite)]
+pub enum TerminateResult {
+    Terminated { pid: u32 },
+    NotRunning,
+    NotFound,
+}
+
+#[derive(SchemaRead, SchemaWrite)]
 pub enum Response {
     Connect,
     Trigger { result: TriggerResult },
-    Terminate { pid: Option<u32> },
+    Terminate { result: TerminateResult },
 }
 
 /// Serialize a value and write it as a length-prefixed message

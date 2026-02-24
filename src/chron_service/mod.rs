@@ -7,7 +7,7 @@ use self::exec::exec_command;
 use self::scheduled_job::{ElapsedRuns, ScheduledJob};
 use self::sleep::sleep_until;
 use crate::chronfile::{Chronfile, Config, JobDefinition, RetryConfig};
-use crate::database::{HostDatabase, JobConfig, TriggerResult};
+use crate::database::{HostDatabase, JobConfig, TerminateResult, TriggerResult};
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use chrono_humanize::{Accuracy, HumanTime, Tense};
@@ -178,6 +178,19 @@ impl ChronService {
     pub async fn stop(mut self) -> Result<()> {
         let jobs = take(&mut self.jobs);
         self.terminate_jobs(jobs).await
+    }
+
+    /// Terminate a job's running process
+    pub async fn terminate(&self, name: &str) -> TerminateResult {
+        match self.get_job(name) {
+            Some(job) => job
+                .terminate()
+                .await
+                .map_or(TerminateResult::NotRunning, |pid| {
+                    TerminateResult::Terminated { pid }
+                }),
+            None => TerminateResult::NotFound,
+        }
     }
 
     /// Trigger a one-off job run if it's not already running

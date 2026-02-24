@@ -3,7 +3,7 @@ use crate::chronfile::Chronfile;
 use crate::chronfile::env::Env;
 use crate::cli::{KillArgs, LogsArgs, RunArgs, RunsArgs, StatusArgs, TriggerArgs};
 use crate::database::{
-    ClientDatabase, HostDatabase, HostServer, JobStatus, RunStatus, TriggerResult,
+    ClientDatabase, HostDatabase, HostServer, JobStatus, RunStatus, TerminateResult, TriggerResult,
 };
 use crate::format;
 use crate::http;
@@ -297,10 +297,10 @@ pub async fn trigger(mut db: ClientDatabase, args: TriggerArgs) -> Result<()> {
 /// Implementation for the `kill` CLI command
 pub async fn kill(mut db: ClientDatabase, args: KillArgs) -> Result<()> {
     let KillArgs { job } = args;
-    let Some(pid) = db.terminate_job(&job).await? else {
-        bail!("Job {job} is not running");
-    };
-    println!("Terminated process {pid}");
-
+    match db.terminate_job(&job).await? {
+        TerminateResult::Terminated { pid } => println!("Terminated process {pid}"),
+        TerminateResult::NotRunning => bail!("Job {job} is not running"),
+        TerminateResult::NotFound => bail!("Job {job} not found"),
+    }
     Ok(())
 }

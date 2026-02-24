@@ -110,12 +110,9 @@ impl HostServer {
                             }
                             Request::Terminate { name } => {
                                 let chron_lock = chron.read().await;
-                                let pid = match chron_lock.get_job(&name) {
-                                    Some(job) => job.terminate().await,
-                                    None => None,
-                                };
+                                let result = chron_lock.terminate(&name).await;
                                 drop(chron_lock);
-                                Response::Terminate { pid }
+                                Response::Terminate { result }
                             }
                         };
                         ipc::send(&mut tx, &res).await?;
