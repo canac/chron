@@ -5,12 +5,21 @@ use wincode::{SchemaRead, SchemaWrite, config::DefaultConfig};
 #[derive(SchemaRead, SchemaWrite)]
 pub enum Request {
     Connect,
+    Trigger { name: String },
     Terminate { name: String },
+}
+
+#[derive(SchemaRead, SchemaWrite)]
+pub enum TriggerResult {
+    Started,
+    Running { pid: u32 },
+    NotFound,
 }
 
 #[derive(SchemaRead, SchemaWrite)]
 pub enum Response {
     Connect,
+    Trigger { result: TriggerResult },
     Terminate { pid: Option<u32> },
 }
 

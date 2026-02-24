@@ -102,6 +102,12 @@ impl HostServer {
                         };
                         let res = match req {
                             Request::Connect => Response::Connect,
+                            Request::Trigger { name } => {
+                                let mut chron_lock = chron.write().await;
+                                let result = chron_lock.trigger(&name).await;
+                                drop(chron_lock);
+                                Response::Trigger { result }
+                            }
                             Request::Terminate { name } => {
                                 let chron_lock = chron.read().await;
                                 let pid = match chron_lock.get_job(&name) {

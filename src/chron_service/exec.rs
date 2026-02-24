@@ -162,7 +162,7 @@ pub async fn exec_command(
     job: &Arc<Job>,
     retry_config: &RetryConfig,
     scheduled_time: &DateTime<Utc>,
-) -> Result<()> {
+) {
     let name = job.name.clone();
     let num_attempts = match retry_config.limit {
         RetryLimit::Unlimited => "unlimited".to_owned(),
@@ -177,14 +177,15 @@ pub async fn exec_command(
             scheduled_time,
             attempt,
         };
-        let next_attempt = exec_command_once(db, job, retry_config, &attempt).await?;
-        match next_attempt {
+        match exec_command_once(db, job, retry_config, &attempt).await {
             // Wait until the next attempt before looping again
-            Some(next_attempt) => sleep_until(next_attempt).await,
+            Ok(Some(next_attempt)) => sleep_until(next_attempt).await,
             // There are no more attempts
-            None => break,
+            Ok(None) => break,
+            Err(err) => {
+                debug!("{name}: failed with error:\n{err:?}");
+                break;
+            }
         }
     }
-
-    Ok(())
 }

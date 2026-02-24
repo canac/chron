@@ -7,7 +7,7 @@ use self::exec::exec_command;
 use self::scheduled_job::{ElapsedRuns, ScheduledJob};
 use self::sleep::sleep_until;
 use crate::chronfile::{Chronfile, Config, JobDefinition, RetryConfig};
-use crate::database::{HostDatabase, JobConfig};
+use crate::database::{HostDatabase, JobConfig, TriggerResult};
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use chrono_humanize::{Accuracy, HumanTime, Tense};
@@ -180,6 +180,26 @@ impl ChronService {
         self.terminate_jobs(jobs).await
     }
 
+    /// Trigger a one-off job run if it's not already running
+    pub async fn trigger(&mut self, name: &str) -> TriggerResult {
+        let Some(task) = self.jobs.get_mut(name) else {
+            return TriggerResult::NotFound;
+        };
+        let job = Arc::clone(&task.job);
+        let process_guard = job.running_process.read().await;
+        if let Some(process) = process_guard.as_ref() {
+            return TriggerResult::Running { pid: process.pid };
+        }
+        drop(process_guard);
+
+        let db = Arc::clone(&self.db);
+        task.handle = spawn(async move {
+            exec_command(&db, &job, &RetryConfig::default(), &Utc::now()).await;
+        });
+
+        TriggerResult::Started
+    }
+
     /// Terminate a collection of jobs and wait for all of their tasks complete
     async fn terminate_jobs(&self, jobs: HashMap<String, Task>) -> Result<()> {
         if jobs.is_empty() {
@@ -259,9 +279,7 @@ impl ChronService {
 
         let db = Arc::clone(&self.db);
         let handle = spawn(async move {
-            if let Err(err) = exec_command(&db, &job, &job.definition.retry, &Utc::now()).await {
-                debug!("{}: failed with error:\n{err:?}", job.name);
-            }
+            exec_command(&db, &job, &job.definition.retry, &Utc::now()).await;
         });
         self.jobs.insert(
             job_copy.name.clone(),
@@ -329,19 +347,19 @@ impl ChronService {
                             let db = Arc::clone(&db);
                             let job = Arc::clone(&job);
                             spawn(async move {
-                                exec_command(&db, &job, &retry_config, &scheduled_time).await
+                                exec_command(&db, &job, &retry_config, &scheduled_time).await;
                             })
                         };
                         if let Some(next_run) = next_run {
                             tokio::select! {
-                                result = &mut handle => result??,
+                                result = &mut handle => result?,
                                 () = sleep_until(next_run) => {
                                     warn!("{name}: terminating existing run");
                                     job.terminate().await;
                                 }
                             }
                         } else {
-                            handle.await??;
+                            handle.await?;
                         }
 
                         let resume_time = elapsed_runs.newest;

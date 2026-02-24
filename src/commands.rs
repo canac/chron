@@ -1,8 +1,10 @@
 use crate::chron_service::ChronService;
 use crate::chronfile::Chronfile;
 use crate::chronfile::env::Env;
-use crate::cli::{KillArgs, LogsArgs, RunArgs, RunsArgs, StatusArgs};
-use crate::database::{ClientDatabase, HostDatabase, HostServer, JobStatus, RunStatus};
+use crate::cli::{KillArgs, LogsArgs, RunArgs, RunsArgs, StatusArgs, TriggerArgs};
+use crate::database::{
+    ClientDatabase, HostDatabase, HostServer, JobStatus, RunStatus, TriggerResult,
+};
 use crate::format;
 use crate::http;
 use anyhow::{Context, Result, bail};
@@ -278,6 +280,17 @@ pub async fn logs(db: ClientDatabase, args: LogsArgs) -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+/// Implementation for the `trigger` CLI command
+pub async fn trigger(mut db: ClientDatabase, args: TriggerArgs) -> Result<()> {
+    let TriggerArgs { job } = args;
+    match db.trigger_job(&job).await? {
+        TriggerResult::Started => println!("Triggered job {job}"),
+        TriggerResult::Running { pid } => bail!("Job {job} is already running (pid {pid})"),
+        TriggerResult::NotFound => bail!("Job {job} not found"),
+    }
     Ok(())
 }
 

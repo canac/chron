@@ -195,6 +195,15 @@ $ chron logs online-backup
 [2025-01-01 12:00:20] Backup completed successfully
 ```
 
+### `trigger` Subcommand
+
+`chron trigger [job]` will trigger a one-off run of a job if it is not already running.
+
+```sh
+$ chron trigger online-backup
+Triggered job online-backup
+```
+
 ### `kill` Subcommand
 
 `chron kill [job]` will kill the job's running process, if it is running. The job will run again the next time that it is scheduled to.

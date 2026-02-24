@@ -64,6 +64,10 @@ async fn main() -> Result<()> {
             let db = ClientDatabase::open(&data_dir).await?;
             commands::logs(db, args).await?;
         }
+        Command::Trigger(args) => {
+            let db = ClientDatabase::open(&data_dir).await?;
+            commands::trigger(db, args).await?;
+        }
         Command::Kill(args) => {
             let db = ClientDatabase::open(&data_dir).await?;
             commands::kill(db, args).await?;

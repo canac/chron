@@ -1,7 +1,7 @@
 use super::db::Database;
+use super::ipc::{self, Request, Response, TriggerResult};
 use super::models::{Job, Run, RunStatus};
 use crate::database::HostServer;
-use crate::database::ipc::{self, Request, Response};
 use anyhow::{Result, bail};
 use interprocess::local_socket::tokio::{RecvHalf, SendHalf};
 use std::path::Path;
@@ -26,6 +26,19 @@ impl ClientDatabase {
 
         let db = Database::new(chron_dir).await?;
         Ok(Self { db, tx, rx })
+    }
+
+    /// Trigger a one-off job run
+    pub async fn trigger_job(&mut self, name: &str) -> Result<TriggerResult> {
+        let req = Request::Trigger {
+            name: name.to_owned(),
+        };
+        ipc::send(&mut self.tx, &req).await?;
+        let res = ipc::receive::<Response, _>(&mut self.rx).await?;
+        let Response::Trigger { result } = res else {
+            bail!("Unexpected response")
+        };
+        Ok(result)
     }
 
     /// Terminate a running job by name, returning the pid of the terminated process

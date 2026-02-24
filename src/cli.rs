@@ -42,6 +42,12 @@ pub struct LogsArgs {
 }
 
 #[derive(Parser)]
+pub struct TriggerArgs {
+    /// The job's name
+    pub job: String,
+}
+
+#[derive(Parser)]
 pub struct KillArgs {
     /// The job's name
     pub job: String,
@@ -63,6 +69,9 @@ pub enum Command {
 
     /// Print the logs of the job's most recent run
     Logs(LogsArgs),
+
+    /// Trigger a one-off run of a job
+    Trigger(TriggerArgs),
 
     /// Kill the job's currently running process
     Kill(KillArgs),
