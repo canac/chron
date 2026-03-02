@@ -20,7 +20,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tokio::spawn;
 use tokio::sync::RwLock;
-use tokio::sync::oneshot::{Receiver, Sender};
+use tokio::sync::oneshot::{Receiver, Sender, channel};
 use tokio::task::JoinHandle;
 
 pub struct Process {
@@ -194,23 +194,24 @@ impl ChronService {
     }
 
     /// Trigger a one-off job run if it's not already running
-    pub async fn trigger(&mut self, name: &str) -> TriggerResult {
+    pub async fn trigger(&mut self, name: &str) -> Result<TriggerResult> {
         let Some(task) = self.jobs.get_mut(name) else {
-            return TriggerResult::NotFound;
+            return Ok(TriggerResult::NotFound);
         };
         let job = Arc::clone(&task.job);
         let process_guard = job.running_process.read().await;
         if let Some(process) = process_guard.as_ref() {
-            return TriggerResult::Running { pid: process.pid };
+            return Ok(TriggerResult::Running { pid: process.pid });
         }
         drop(process_guard);
 
+        let (tx, rx) = channel();
         let db = Arc::clone(&self.db);
         task.handle = spawn(async move {
-            exec_command(&db, &job, &RetryConfig::default(), &Utc::now()).await;
+            exec_command(&db, &job, &RetryConfig::default(), &Utc::now(), Some(tx)).await;
         });
 
-        TriggerResult::Started
+        Ok(TriggerResult::Started { run_id: rx.await? })
     }
 
     /// Terminate a collection of jobs and wait for all of their tasks complete
@@ -292,7 +293,7 @@ impl ChronService {
 
         let db = Arc::clone(&self.db);
         let handle = spawn(async move {
-            exec_command(&db, &job, &job.definition.retry, &Utc::now()).await;
+            exec_command(&db, &job, &job.definition.retry, &Utc::now(), None).await;
         });
         self.jobs.insert(
             job_copy.name.clone(),
@@ -360,7 +361,7 @@ impl ChronService {
                             let db = Arc::clone(&db);
                             let job = Arc::clone(&job);
                             spawn(async move {
-                                exec_command(&db, &job, &retry_config, &scheduled_time).await;
+                                exec_command(&db, &job, &retry_config, &scheduled_time, None).await;
                             })
                         };
                         if let Some(next_run) = next_run {

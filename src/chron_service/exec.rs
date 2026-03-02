@@ -12,7 +12,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 use tokio::fs::{OpenOptions, create_dir_all};
 use tokio::process::Command;
-use tokio::sync::oneshot::channel;
+use tokio::sync::oneshot::{Sender, channel};
 
 /// Handle job failure by running the job's `error_command` script if configured
 async fn run_error_handler(job: &Arc<Job>, exit_code: i32) -> Result<()> {
@@ -41,6 +41,7 @@ async fn exec_command_once(
     job: &Arc<Job>,
     retry_config: &RetryConfig,
     attempt: &Attempt<'_>,
+    run_id_tx: Option<Sender<u32>>,
 ) -> Result<Option<DateTime<Utc>>> {
     let name = job.name.clone();
     info!(
@@ -97,6 +98,9 @@ async fn exec_command_once(
         .id()
         .ok_or_else(|| anyhow!("Process has already exited"))?;
     db.set_run_pid(name.clone(), pid).await?;
+    if let Some(tx) = run_id_tx {
+        let _ = tx.send(run.id);
+    }
 
     let (tx_terminate, rx_terminate) = channel();
     let (tx_terminated, rx_terminated) = channel();
@@ -162,12 +166,14 @@ pub async fn exec_command(
     job: &Arc<Job>,
     retry_config: &RetryConfig,
     scheduled_time: &DateTime<Utc>,
+    run_id_tx: Option<Sender<u32>>,
 ) {
     let name = job.name.clone();
     let num_attempts = match retry_config.limit {
         RetryLimit::Unlimited => "unlimited".to_owned(),
         RetryLimit::Limited(limit) => limit.to_string(),
     };
+    let mut run_id_tx = run_id_tx;
     for attempt in 0.. {
         if attempt > 0 {
             debug!("{name}: retry attempt {attempt} of {num_attempts}");
@@ -177,7 +183,7 @@ pub async fn exec_command(
             scheduled_time,
             attempt,
         };
-        match exec_command_once(db, job, retry_config, &attempt).await {
+        match exec_command_once(db, job, retry_config, &attempt, run_id_tx.take()).await {
             // Wait until the next attempt before looping again
             Ok(Some(next_attempt)) => sleep_until(next_attempt).await,
             // There are no more attempts

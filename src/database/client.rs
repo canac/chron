@@ -4,7 +4,7 @@ use super::models::{Job, Run, RunStatus};
 use crate::database::HostServer;
 use anyhow::{Result, bail};
 use interprocess::local_socket::tokio::{RecvHalf, SendHalf};
-use std::path::Path;
+use std::path::PathBuf;
 
 pub struct ClientDatabase {
     db: Database,
@@ -15,8 +15,8 @@ pub struct ClientDatabase {
 impl ClientDatabase {
     /// Open the database as a read-only client
     /// The database will be able to read job information from an open `Host`.
-    pub async fn open(chron_dir: &Path) -> Result<Self> {
-        let (mut rx, mut tx) = HostServer::connect(chron_dir).await?;
+    pub async fn open(chron_dir: PathBuf) -> Result<Self> {
+        let (mut rx, mut tx) = HostServer::connect(&chron_dir).await?;
         let req = Request::Connect;
         ipc::send(&mut tx, &req).await?;
         let res = ipc::receive::<Response, _>(&mut rx).await?;
@@ -24,7 +24,7 @@ impl ClientDatabase {
             bail!("chron is not running");
         };
 
-        let db = Database::new(chron_dir).await?;
+        let db = Database::new(&chron_dir).await?;
         Ok(Self { db, tx, rx })
     }
 

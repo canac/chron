@@ -11,7 +11,7 @@ pub enum Request {
 
 #[derive(SchemaRead, SchemaWrite)]
 pub enum TriggerResult {
-    Started,
+    Started { run_id: u32 },
     Running { pid: u32 },
     NotFound,
 }

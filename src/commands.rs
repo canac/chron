@@ -14,7 +14,7 @@ use log::{LevelFilter, debug, error, info};
 use notify::RecursiveMode;
 use notify_debouncer_mini::{DebounceEventResult, new_debouncer};
 use std::io::{BufWriter, IsTerminal, Write, stdin};
-use std::path::Path;
+use std::path::PathBuf;
 use std::process::exit;
 use std::sync::Arc;
 use std::time::Duration;
@@ -25,7 +25,7 @@ use tokio::sync::RwLock;
 use tokio::sync::oneshot::channel;
 
 /// Implementation for the `run` CLI command
-pub async fn run(chron_dir: &Path, args: RunArgs) -> Result<()> {
+pub async fn run(chron_dir: PathBuf, args: RunArgs) -> Result<()> {
     let RunArgs {
         port,
         quiet,
@@ -45,10 +45,10 @@ pub async fn run(chron_dir: &Path, args: RunArgs) -> Result<()> {
     let env = Env::from_host()?;
     let chronfile = Chronfile::load(&chronfile_path, &env).await?;
 
-    let host_server = HostServer::new(chron_dir).await?;
+    let host_server = HostServer::new(&chron_dir).await?;
 
-    let db = Arc::new(HostDatabase::open(chron_dir).await?);
-    let mut chron = ChronService::new(chron_dir, Arc::clone(&db));
+    let db = Arc::new(HostDatabase::open(&chron_dir).await?);
+    let mut chron = ChronService::new(&chron_dir, Arc::clone(&db));
     chron.start(chronfile).await?;
     let chron_lock = Arc::new(RwLock::new(chron));
 
@@ -209,6 +209,33 @@ pub async fn runs(db: ClientDatabase, args: RunsArgs) -> Result<()> {
     Ok(())
 }
 
+/// Stream a run's log file to stdout until the run completes
+async fn stream_logs(
+    db: &ClientDatabase,
+    run_id: u32,
+    reader: &mut BufReader<tokio::fs::File>,
+) -> Result<Option<RunStatus>> {
+    loop {
+        let status = db.get_run_status(run_id).await?;
+        if !matches!(status, Some(RunStatus::Running { .. })) {
+            let mut remaining = String::new();
+            reader.read_to_string(&mut remaining).await?;
+            if !remaining.is_empty() {
+                print!("{remaining}");
+            }
+            return Ok(status);
+        }
+
+        let mut line = String::new();
+        let bytes_read = reader.read_line(&mut line).await?;
+        if bytes_read > 0 {
+            print!("{line}");
+        } else {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+}
+
 /// Implementation for the `logs` CLI command
 pub async fn logs(db: ClientDatabase, args: LogsArgs) -> Result<()> {
     let LogsArgs {
@@ -254,25 +281,7 @@ pub async fn logs(db: ClientDatabase, args: LogsArgs) -> Result<()> {
     }
 
     if follow {
-        loop {
-            let status = db.get_run_status(run_id).await?;
-            if !matches!(status, Some(RunStatus::Running { .. })) {
-                let mut remaining = String::new();
-                reader.read_to_string(&mut remaining).await?;
-                if !remaining.is_empty() {
-                    print!("{remaining}");
-                }
-                break;
-            }
-
-            let mut line = String::new();
-            let bytes_read = reader.read_line(&mut line).await?;
-            if bytes_read > 0 {
-                print!("{line}");
-            } else {
-                tokio::time::sleep(Duration::from_secs(1)).await;
-            }
-        }
+        stream_logs(&db, run_id, &mut reader).await?;
     }
 
     Ok(())
@@ -280,11 +289,31 @@ pub async fn logs(db: ClientDatabase, args: LogsArgs) -> Result<()> {
 
 /// Implementation for the `trigger` CLI command
 pub async fn trigger(mut db: ClientDatabase, args: TriggerArgs) -> Result<()> {
-    let TriggerArgs { job } = args;
-    match db.trigger_job(&job).await? {
-        TriggerResult::Started => println!("Triggered job {job}"),
-        TriggerResult::Running { pid } => bail!("Job {job} is already running (pid {pid})"),
-        TriggerResult::NotFound => bail!("Job {job} not found"),
+    let TriggerArgs { job, wait } = args;
+    let (run_id, job) = match (
+        db.trigger_job(&job).await?,
+        db.get_active_job(job.clone()).await?,
+    ) {
+        (TriggerResult::Started { run_id }, Some(job)) => (run_id, job),
+        (TriggerResult::Running { pid }, _) => bail!("Job {job} is already running (pid {pid})"),
+        _ => bail!("Job {job} not found"),
+    };
+
+    if !wait {
+        println!("Triggered job {}", job.name);
+        return Ok(());
+    }
+
+    let file = OpenOptions::new()
+        .read(true)
+        .open(&job.config.log_dir.join(format!("{run_id}.log")))
+        .await
+        .context("Failed to open log file")?;
+    let mut reader = BufReader::new(file);
+    let status = stream_logs(&db, run_id, &mut reader).await?;
+
+    if let Some(RunStatus::Completed { status_code, .. }) = status {
+        exit(status_code)
     }
     Ok(())
 }

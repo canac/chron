@@ -46,30 +46,30 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Command::Run(args) => {
-            commands::run(&data_dir, args).await?;
+            commands::run(data_dir, args).await?;
         }
         Command::Jobs => {
-            let db = ClientDatabase::open(&data_dir).await?;
+            let db = ClientDatabase::open(data_dir).await?;
             commands::jobs(db).await?;
         }
         Command::Status(args) => {
-            let db = ClientDatabase::open(&data_dir).await?;
+            let db = ClientDatabase::open(data_dir).await?;
             commands::status(db, args).await?;
         }
         Command::Runs(args) => {
-            let db = ClientDatabase::open(&data_dir).await?;
+            let db = ClientDatabase::open(data_dir).await?;
             commands::runs(db, args).await?;
         }
         Command::Logs(args) => {
-            let db = ClientDatabase::open(&data_dir).await?;
+            let db = ClientDatabase::open(data_dir).await?;
             commands::logs(db, args).await?;
         }
         Command::Trigger(args) => {
-            let db = ClientDatabase::open(&data_dir).await?;
+            let db = ClientDatabase::open(data_dir).await?;
             commands::trigger(db, args).await?;
         }
         Command::Kill(args) => {
-            let db = ClientDatabase::open(&data_dir).await?;
+            let db = ClientDatabase::open(data_dir).await?;
             commands::kill(db, args).await?;
         }
     }

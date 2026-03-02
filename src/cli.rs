@@ -45,6 +45,10 @@ pub struct LogsArgs {
 pub struct TriggerArgs {
     /// The job's name
     pub job: String,
+
+    /// Wait for the run to complete and show its output
+    #[clap(short, long)]
+    pub wait: bool,
 }
 
 #[derive(Parser)]

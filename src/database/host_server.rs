@@ -104,7 +104,7 @@ impl HostServer {
                             Request::Connect => Response::Connect,
                             Request::Trigger { name } => {
                                 let mut chron_lock = chron.write().await;
-                                let result = chron_lock.trigger(&name).await;
+                                let result = chron_lock.trigger(&name).await?;
                                 drop(chron_lock);
                                 Response::Trigger { result }
                             }

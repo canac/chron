@@ -197,11 +197,16 @@ $ chron logs online-backup
 
 ### `trigger` Subcommand
 
-`chron trigger [job]` will trigger a one-off run of a job if it is not already running.
+`chron trigger [job]` will trigger a one-off run of a job if it is not already running. Pass the `--wait` flag to wait for the run to complete, streaming its output to the terminal and exiting with the job's exit code.
 
 ```sh
 $ chron trigger online-backup
 Triggered job online-backup
+
+$ chron trigger --wait online-backup
+[2025-01-01 12:00:00] Starting backup process...
+[2025-01-01 12:00:15] Backing up database...
+[2025-01-01 12:00:20] Backup completed successfully
 ```
 
 ### `kill` Subcommand
