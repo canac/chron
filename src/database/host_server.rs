@@ -140,7 +140,16 @@ impl HostServer {
     pub(super) async fn connect(chron_dir: &Path) -> Result<(RecvHalf, SendHalf)> {
         let path = Self::get_socket_path(chron_dir);
         let name = path.as_path().to_fs_name::<GenericFilePath>()?;
-        Ok(LocalSocketStream::connect(name).await?.split())
+        let stream = LocalSocketStream::connect(name).await.map_err(|err| {
+            if err.kind() == std::io::ErrorKind::NotFound
+                || err.kind() == std::io::ErrorKind::ConnectionRefused
+            {
+                anyhow!("chron is not running")
+            } else {
+                err.into()
+            }
+        })?;
+        Ok(stream.split())
     }
 
     /// Return the location of the socket file that clients use to communicate with the host
