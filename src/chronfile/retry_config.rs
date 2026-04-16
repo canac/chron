@@ -143,7 +143,7 @@ mod tests {
             parse_retry("retry = { limit = 3, delay = '10m' }")?,
             RetryConfig {
                 limit: RetryLimit::Limited(3),
-                delay: Some(Duration::from_secs(600)),
+                delay: Some(Duration::from_mins(10)),
             },
         );
         Ok(())
