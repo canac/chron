@@ -418,8 +418,8 @@ ORDER BY name",
 #[cfg(test)]
 mod tests {
     use crate::database::{JobStatus, RunStatus};
-    use assert_matches::assert_matches;
     use chrono::Days;
+    use std::assert_matches;
     use tokio::test;
 
     use super::*;

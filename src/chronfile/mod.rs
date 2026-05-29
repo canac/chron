@@ -81,8 +81,6 @@ fn validate_name(name: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use assert_matches::assert_matches;
-
     use super::*;
 
     fn load_chronfile(toml: &str) -> Result<Chronfile> {
@@ -108,16 +106,15 @@ command = 'echo'",
         .jobs;
 
         assert_eq!(jobs.len(), 2);
-        assert_matches!(jobs.get("startup"), Some(JobDefinition { schedule, command, working_dir, .. }) => {
-            assert_eq!(schedule, &None);
-            assert_eq!(command, &"echo");
-            assert_eq!(working_dir, &Some(PathBuf::from("/directory")));
-        });
-        assert_matches!(jobs.get("scheduled"), Some(JobDefinition { schedule, working_dir, command, .. }) => {
-            assert_eq!(schedule, &Some("* * * * * *".to_owned()));
-            assert_eq!(command, &"echo");
-            assert_eq!(working_dir, &None);
-        });
+        let job = jobs.get("startup").unwrap();
+        assert_eq!(job.schedule, None);
+        assert_eq!(job.command, "echo");
+        assert_eq!(job.working_dir, Some(PathBuf::from("/directory")));
+
+        let job = jobs.get("scheduled").unwrap();
+        assert_eq!(job.schedule, Some("* * * * * *".to_owned()));
+        assert_eq!(job.command, "echo");
+        assert_eq!(job.working_dir, None);
         Ok(())
     }
 
