@@ -10,6 +10,7 @@ use crate::http;
 use anyhow::{Context, Result, bail};
 use chrono::Local;
 use cli_tables::Table;
+use colored::Colorize;
 use log::{LevelFilter, debug, error, info};
 use notify::RecursiveMode;
 use notify_debouncer_mini::{DebounceEventResult, new_debouncer};
@@ -134,20 +135,30 @@ pub async fn jobs(db: ClientDatabase) -> Result<()> {
         println!("No jobs are running");
         return Ok(());
     }
-    let mut table = Table::new();
-    table.push_row(&vec!["name", "command", "status"])?;
-    for job in jobs {
+    let tty = std::io::stdout().is_terminal();
+    for (index, job) in jobs.into_iter().enumerate() {
+        if index > 0 {
+            println!();
+        }
+
+        println!("{}", job.name.bold().underline());
+        println!("{}", job.config.command);
+
         let status = match job.status {
-            JobStatus::Running { .. } => "running".to_owned(),
+            JobStatus::Running { .. } => "running".green(),
             JobStatus::Waiting { next_run } => {
                 let next_run = next_run.with_timezone(&Local);
-                format!("next run {}", format::relative_date(&next_run))
+                let next_run_formatted = if tty {
+                    format::relative_date(&next_run)
+                } else {
+                    next_run.to_string()
+                };
+                format!("next run {next_run_formatted}").into()
             }
-            JobStatus::Completed => "next run never".to_owned(),
+            JobStatus::Completed => "next run never".red(),
         };
-        table.push_row_string(&vec![job.name, job.config.command, status])?;
+        println!("{status}");
     }
-    println!("{}", table.to_string());
 
     Ok(())
 }
@@ -204,7 +215,6 @@ pub async fn runs(db: ClientDatabase, args: RunsArgs) -> Result<()> {
             status,
         ])?;
     }
-    println!("{}", table.to_string());
 
     Ok(())
 }

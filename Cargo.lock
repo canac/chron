@@ -418,6 +418,7 @@ dependencies = [
  "clap_complete",
  "clap_mangen",
  "cli-tables",
+ "colored",
  "cron",
  "directories",
  "humantime-serde",

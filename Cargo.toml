@@ -14,6 +14,7 @@ chrono = { version = "0.4.19", default-features = false }
 chrono-humanize = "0.2.2"
 clap = { version = "4.1.6", features = ["derive", "env"] }
 cli-tables = "0.2.1"
+colored = "3.1.1"
 cron = "0.15.0"
 directories = "6.0.0"
 humantime-serde = "1.1.1"
