@@ -137,7 +137,11 @@ async fn exec_command_once(
     };
 
     // Update the run status code in the database
-    let next_attempt = attempt.next_attempt(status_code, retry_config);
+    let next_attempt = if terminated {
+        None
+    } else {
+        attempt.next_attempt(status_code, retry_config)
+    };
     *job.next_attempt.write().await = next_attempt;
     let next_scheduled_run = job.next_scheduled_run().await;
     db.complete_run(

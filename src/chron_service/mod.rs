@@ -67,7 +67,7 @@ impl Job {
         }
     }
 
-    /// Tick the scheduler and compute retry config, without executing the command.
+    /// Tick the scheduler and compute retry config
     async fn tick(&self) -> Result<JobTick> {
         let Some(scheduled_job) = self.scheduled_job.as_ref() else {
             bail!("{}: job is not a scheduled job", self.name);
@@ -374,6 +374,7 @@ impl ChronService {
                                 () = sleep_until(next_run) => {
                                     warn!("{name}: terminating existing run");
                                     job.terminate().await;
+                                    handle.abort();
                                 }
                             }
                         } else {
