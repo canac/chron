@@ -70,9 +70,11 @@ async fn exec_command_once(
         .await
         .with_context(|| format!("Failed to create log dir {}", job.log_dir.display()))?;
     let log_path = job.log_dir.join(format!("{}.log", run.id));
-    let log_file = OpenOptions::new()
-        .create(true)
-        .append(true)
+    let mut open_options = OpenOptions::new();
+    open_options.create(true).append(true);
+    #[cfg(unix)]
+    open_options.mode(0o600);
+    let log_file = open_options
         .open(&log_path)
         .await
         .with_context(|| format!("Failed to open log file {}", log_path.display()))?
