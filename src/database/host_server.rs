@@ -65,6 +65,14 @@ impl HostServer {
             }
         };
 
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            tokio::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600))
+                .await
+                .context("Failed to restrict socket permissions")?;
+        }
+
         Ok(Self {
             ipc_listener: RwLock::new(Some(listener)),
             server_handle: RwLock::new(None),

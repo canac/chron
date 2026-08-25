@@ -21,6 +21,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use cli::Command;
 use std::path::PathBuf;
+#[cfg(not(unix))]
 use tokio::fs::create_dir_all;
 
 #[actix_web::main]
@@ -42,7 +43,12 @@ async fn main() -> Result<()> {
             }
         }
     };
-    create_dir_all(&data_dir).await?;
+
+    let mut builder = tokio::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    builder.mode(0o700);
+    builder.create(&data_dir).await?;
 
     match cli.command {
         Command::Run(args) => {
