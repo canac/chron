@@ -36,6 +36,7 @@ async fn run_error_handler(job: &Arc<Job>, exit_code: i32) -> Result<()> {
 
 /// Execute the specified command without retries
 /// Return its next attempt time, if any
+#[allow(clippy::too_many_lines)]
 async fn exec_command_once(
     db: &Arc<HostDatabase>,
     job: &Arc<Job>,
@@ -87,7 +88,8 @@ async fn exec_command_once(
         .args(["-c", &job.definition.command])
         .stdin(Stdio::null())
         .stdout(log_file.try_clone().context("Failed to clone log file")?)
-        .stderr(log_file);
+        .stderr(log_file)
+        .kill_on_drop(true);
     if let Some(working_dir) = &job.definition.working_dir {
         command.current_dir(working_dir);
     }
@@ -95,21 +97,25 @@ async fn exec_command_once(
         .spawn()
         .with_context(|| format!("Failed to run command {}", job.definition.command))?;
 
-    // Link the process to the database run
     let pid = process
         .id()
         .ok_or_else(|| anyhow!("Process has already exited"))?;
-    db.set_run_pid(run.id, pid).await?;
-    if let Some(tx) = run_id_tx {
-        let _ = tx.send(run.id);
-    }
 
     let (tx_terminate, rx_terminate) = channel();
     let (tx_terminated, rx_terminated) = channel();
-    *job.running_process.write().await = process.id().map(|pid| Process {
+    *job.running_process.write().await = Some(Process {
         pid,
         terminate: Some((tx_terminate, rx_terminated)),
     });
+
+    // Link the process to the database run
+    if let Err(err) = db.set_run_pid(run.id, pid).await {
+        *job.running_process.write().await = None;
+        return Err(err);
+    }
+    if let Some(tx) = run_id_tx {
+        let _ = tx.send(run.id);
+    }
 
     // Wait for the process to exit
     let (status_code, terminated) = tokio::select! {
