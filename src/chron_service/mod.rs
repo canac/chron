@@ -115,6 +115,7 @@ impl Job {
 pub struct Task {
     pub job: Arc<Job>,
     pub handle: JoinHandle<()>,
+    pub trigger_handle: Option<JoinHandle<()>>,
 }
 
 pub struct ChronService {
@@ -214,9 +215,9 @@ impl ChronService {
 
         let (tx, rx) = channel();
         let db = Arc::clone(&self.db);
-        task.handle = spawn(async move {
+        task.trigger_handle = Some(spawn(async move {
             exec_command(&db, &job, &RetryConfig::default(), &Utc::now(), Some(tx)).await;
-        });
+        }));
 
         Ok(TriggerResult::Started { run_id: rx.await? })
     }
@@ -237,6 +238,11 @@ impl ChronService {
                 && err.is_panic()
             {
                 debug!("{name}: failed with error: {err:?}");
+            }
+
+            if let Some(trigger_handle) = task.trigger_handle {
+                trigger_handle.abort();
+                let _ = trigger_handle.await;
             }
 
             self.db.uninitialize_job(name).await?;
@@ -304,6 +310,7 @@ impl ChronService {
             Task {
                 job: job_copy,
                 handle,
+                trigger_handle: None,
             },
         );
 
@@ -404,6 +411,7 @@ impl ChronService {
             Task {
                 job: job_copy,
                 handle,
+                trigger_handle: None,
             },
         );
 
