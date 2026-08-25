@@ -73,8 +73,6 @@ struct JobTemplate {
 
 #[get("/job/{name}")]
 async fn job_handler(name: Path<String>, data: AppData) -> Result<impl Responder> {
-    let data_guard = data.chron.read().await;
-
     let name = name.into_inner();
     let job = data
         .db
@@ -101,7 +99,6 @@ async fn job_handler(name: Path<String>, data: AppData) -> Result<impl Responder
         })
         .collect::<anyhow::Result<_>>()
         .map_err(|_| HttpError::from_status_code(StatusCode::INTERNAL_SERVER_ERROR))?;
-    drop(data_guard);
 
     let template = JobTemplate { job, runs };
     Ok(HttpResponse::Ok()
