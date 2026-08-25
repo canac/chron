@@ -1,6 +1,8 @@
-use anyhow::Result;
+use anyhow::{Result, bail};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use wincode::{SchemaRead, SchemaWrite, config::DefaultConfig};
+
+const MAX_MESSAGE_LEN: usize = 64 * 1024;
 
 #[derive(SchemaRead, SchemaWrite)]
 pub enum Request {
@@ -48,6 +50,9 @@ pub async fn receive<T: for<'a> SchemaRead<'a, DefaultConfig, Dst = T>, R: Async
     let mut len_bytes = [0u8; size_of::<usize>()];
     reader.read_exact(&mut len_bytes).await?;
     let length = usize::from_le_bytes(len_bytes);
+    if length > MAX_MESSAGE_LEN {
+        bail!("Message length {length} exceeds maximum of {MAX_MESSAGE_LEN} bytes");
+    }
     let mut buf = vec![0u8; length];
     reader.read_exact(&mut buf).await?;
     Ok(wincode::deserialize(&buf)?)
