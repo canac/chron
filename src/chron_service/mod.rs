@@ -157,6 +157,9 @@ impl ChronService {
             new_jobs.insert(name, definition);
         }
 
+        // Terminate removed and changed jobs that weren't reused
+        self.terminate_jobs(existing_jobs).await?;
+
         // Determine any newly added jobs and lock them in the database
         if !new_jobs.is_empty() {
             let created_jobs = new_jobs.keys().cloned().collect::<Vec<_>>();
@@ -170,8 +173,7 @@ impl ChronService {
                 .await?;
         }
 
-        // Terminate all existing jobs that weren't reused
-        self.terminate_jobs(existing_jobs).await
+        Ok(())
     }
 
     /// Stop the chron service and all running jobs, consuming it
@@ -237,10 +239,7 @@ impl ChronService {
                 debug!("{name}: failed with error: {err:?}");
             }
 
-            if !self.jobs.contains_key(&name) {
-                // Keep jobs initialized that were updated instead of removed
-                self.db.uninitialize_job(name).await?;
-            }
+            self.db.uninitialize_job(name).await?;
         }
         debug!("Finished waiting for all jobs to terminate");
 
