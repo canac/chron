@@ -99,7 +99,7 @@ async fn exec_command_once(
     let pid = process
         .id()
         .ok_or_else(|| anyhow!("Process has already exited"))?;
-    db.set_run_pid(name.clone(), pid).await?;
+    db.set_run_pid(run.id, pid).await?;
     if let Some(tx) = run_id_tx {
         let _ = tx.send(run.id);
     }
@@ -136,6 +136,7 @@ async fn exec_command_once(
     let next_scheduled_run = job.next_scheduled_run().await;
     db.complete_run(
         name.clone(),
+        run.id,
         status_code,
         next_attempt.or(next_scheduled_run).as_ref(),
     )

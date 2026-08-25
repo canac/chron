@@ -124,21 +124,17 @@ RETURNING *",
             .context("Failed to save run to the database")
     }
 
-    /// Set a job's current run's process id
-    pub async fn set_run_pid(&self, name: String, pid: u32) -> Result<()> {
+    /// Set a run's process id
+    pub async fn set_run_pid(&self, run_id: u32, pid: u32) -> Result<()> {
         self.client
             .conn(move |conn| {
-                conn.prepare(
+                conn.execute(
                     "
 UPDATE run
 SET pid = ?1, state = 'running'
-WHERE id = (
-    SELECT MAX(id) as id
-    FROM run
-    WHERE job_name = ?2 AND state = 'starting'
-)",
-                )?
-                .execute((pid, name))
+WHERE id = ?2",
+                    (pid, run_id),
+                )
             })
             .await
             .context("Failed to set run process id in the database")?;
@@ -146,10 +142,11 @@ WHERE id = (
         Ok(())
     }
 
-    /// Mark a job's current run as completed with a given status code and set its next run time
+    /// Mark a run as completed with a given status code and set its job's next run time
     pub async fn complete_run(
         &self,
         name: String,
+        run_id: u32,
         status_code: Option<i32>,
         next_run: Option<&DateTime<Utc>>,
     ) -> Result<()> {
@@ -163,19 +160,15 @@ WHERE id = (
 UPDATE job
 SET next_run = ?1
 WHERE name = ?2",
-                    (next_run, name.clone()),
+                    (next_run, name),
                 )?;
 
                 conn.execute(
                     "
 UPDATE run
 SET state = 'completed', ended_at = STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW'), status_code = ?1
-WHERE id = (
-    SELECT MAX(id)
-    FROM run
-    WHERE job_name = ?2 AND state = 'running'
-)",
-                    (status_code, name),
+WHERE id = ?2",
+                    (status_code, run_id),
                 )?;
 
                 conn.execute_batch("COMMIT")
@@ -439,11 +432,11 @@ mod tests {
 
     async fn insert_run(db: &Database, name: String) -> u32 {
         let id = db
-            .insert_run(name.clone(), Utc::now().naive_utc(), 0, None)
+            .insert_run(name, Utc::now().naive_utc(), 0, None)
             .await
             .unwrap()
             .id;
-        db.set_run_pid(name, 0).await.unwrap();
+        db.set_run_pid(id, 0).await.unwrap();
         id
     }
 
@@ -489,8 +482,10 @@ mod tests {
         db.initialize_job(name.clone(), JobConfig::default(), None)
             .await
             .unwrap();
-        insert_run(&db, name.clone()).await;
-        db.complete_run(name.clone(), Some(0), None).await.unwrap();
+        let run_id = insert_run(&db, name.clone()).await;
+        db.complete_run(name.clone(), run_id, Some(0), None)
+            .await
+            .unwrap();
 
         let runs = db.get_last_runs(name, 1).await.unwrap();
         let run = runs.first().unwrap();
@@ -510,15 +505,17 @@ mod tests {
         let db = open_db().await;
         let name = "job".to_owned();
         db.create_jobs(vec![name.clone()]).await.unwrap();
-        db.insert_run(name.clone(), Utc::now().naive_utc(), 2, Some(3))
+        let run_id = db
+            .insert_run(name.clone(), Utc::now().naive_utc(), 2, Some(3))
             .await
-            .unwrap();
+            .unwrap()
+            .id;
 
         // The run is in the starting state and is ignored
         assert_eq!(db.get_last_runs(name.clone(), 1).await.unwrap().len(), 0);
 
         // Now the run is running
-        db.set_run_pid(name.clone(), 0).await.unwrap();
+        db.set_run_pid(run_id, 0).await.unwrap();
 
         let runs = db.get_last_runs(name.clone(), 1).await.unwrap();
         assert_eq!(runs.len(), 1);
@@ -528,11 +525,15 @@ mod tests {
         assert_eq!(run.max_attempts, Some(3));
         assert_eq!(run.status().unwrap(), RunStatus::Running { pid: 0 });
 
-        db.complete_run(name.clone(), Some(0), None).await.unwrap();
-        db.insert_run(name.clone(), Utc::now().naive_utc(), 1, Some(3))
+        db.complete_run(name.clone(), run_id, Some(0), None)
             .await
             .unwrap();
-        db.set_run_pid(name.clone(), 1).await.unwrap();
+        let run_id = db
+            .insert_run(name.clone(), Utc::now().naive_utc(), 1, Some(3))
+            .await
+            .unwrap()
+            .id;
+        db.set_run_pid(run_id, 1).await.unwrap();
         let runs = db.get_last_runs(name.clone(), 2).await.unwrap();
         assert_eq!(runs.len(), 2);
         // The runs are sorted by started_at descending
@@ -545,7 +546,9 @@ mod tests {
             RunStatus::Completed { status_code: 0, .. }
         );
 
-        db.complete_run(name.clone(), None, None).await.unwrap();
+        db.complete_run(name.clone(), run_id, None, None)
+            .await
+            .unwrap();
         let runs = db.get_last_runs(name, 1).await.unwrap();
         let run = runs.first().unwrap();
         assert_eq!(run.status().unwrap(), RunStatus::Terminated);

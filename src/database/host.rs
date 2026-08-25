@@ -35,17 +35,20 @@ impl HostDatabase {
             .await
     }
 
-    pub async fn set_run_pid(&self, name: String, pid: u32) -> Result<()> {
-        self.db.set_run_pid(name, pid).await
+    pub async fn set_run_pid(&self, run_id: u32, pid: u32) -> Result<()> {
+        self.db.set_run_pid(run_id, pid).await
     }
 
     pub async fn complete_run(
         &self,
         name: String,
+        run_id: u32,
         status_code: Option<i32>,
         next_run: Option<&DateTime<Utc>>,
     ) -> Result<()> {
-        self.db.complete_run(name, status_code, next_run).await
+        self.db
+            .complete_run(name, run_id, status_code, next_run)
+            .await
     }
 
     pub async fn get_resume_time(&self, name: String) -> Result<DateTime<Utc>> {
