@@ -152,10 +152,10 @@ WHERE id = ?2",
     ) -> Result<()> {
         let next_run = next_run.map(chrono::DateTime::naive_utc);
         self.client
-            .conn(move |conn| {
-                conn.execute_batch("BEGIN TRANSACTION")?;
+            .conn_mut(move |conn| {
+                let tx = conn.transaction()?;
 
-                conn.execute(
+                tx.execute(
                     "
 UPDATE job
 SET next_run = ?1
@@ -163,7 +163,7 @@ WHERE name = ?2",
                     (next_run, name),
                 )?;
 
-                conn.execute(
+                tx.execute(
                     "
 UPDATE run
 SET state = 'completed', ended_at = STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW'), status_code = ?1
@@ -171,7 +171,7 @@ WHERE id = ?2",
                     (status_code, run_id),
                 )?;
 
-                conn.execute_batch("COMMIT")
+                tx.commit()
             })
             .await
             .context("Failed to update run status in the database")?;
@@ -353,8 +353,8 @@ WHERE name = ?1",
     /// Supports optionally filtering down to a single active job
     async fn internal_get_active_jobs(&self, job: Option<String>) -> Result<Vec<Job>> {
         self.client
-            .conn(move |conn| {
-                conn.execute_batch("BEGIN TRANSACTION")?;
+            .conn_mut(move |conn| {
+                let tx = conn.transaction()?;
 
                 let mut params: Vec<(&str, &dyn ToSql)> = vec![];
                 let name_field = if job.is_some() {
@@ -366,9 +366,10 @@ WHERE name = ?1",
                 };
 
                 // Data integrity: uninitialized jobs are ignored
-                let mut statement = conn.prepare(
-                    format!(
-                        "
+                let jobs = {
+                    let mut statement = tx.prepare(
+                        format!(
+                            "
 WITH current_runs AS (
     SELECT job_name, pid
     FROM run r
@@ -384,14 +385,15 @@ FROM job
 LEFT JOIN current_runs ON current_runs.job_name = job.name
 WHERE name = {name_field} AND initialized = TRUE
 ORDER BY name",
-                    )
-                    .as_str(),
-                )?;
-                let jobs = statement
-                    .query_map(params.as_slice(), RawJob::from_row)?
-                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                        )
+                        .as_str(),
+                    )?;
+                    statement
+                        .query_map(params.as_slice(), RawJob::from_row)?
+                        .collect::<rusqlite::Result<Vec<_>>>()?
+                };
 
-                conn.execute_batch("COMMIT")?;
+                tx.commit()?;
 
                 Ok(jobs)
             })
