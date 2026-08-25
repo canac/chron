@@ -10,7 +10,7 @@ use log::info;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tokio::task::JoinHandle;
+use tokio::task::{JoinHandle, JoinSet};
 use tokio_util::sync::CancellationToken;
 
 struct ServerHandle {
@@ -85,16 +85,18 @@ impl HostServer {
         let cancel_token = CancellationToken::new();
         let token = cancel_token.clone();
         let handle = tokio::spawn(async move {
+            let mut connections = JoinSet::new();
             loop {
                 let result = tokio::select! {
                     () = token.cancelled() => break,
+                    Some(_) = connections.join_next() => continue,
                     result = listener.accept() => result
                 };
                 let Ok(conn) = result else { break };
                 let (mut rx, mut tx) = conn.split();
                 let chron = Arc::clone(&chron);
                 let token = token.child_token();
-                tokio::spawn(async move {
+                connections.spawn(async move {
                     loop {
                         let req = tokio::select! {
                             () = token.cancelled() => return Ok::<(), anyhow::Error>(()),
@@ -119,6 +121,8 @@ impl HostServer {
                     }
                 });
             }
+
+            connections.shutdown().await;
         });
 
         ServerHandle {

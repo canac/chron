@@ -138,7 +138,7 @@ impl ChronService {
         self.jobs.get(name).map(|task| &task.job)
     }
 
-    /// Start or start the chron service using the jobs defined in the provided chronfile
+    /// Start or restart chron service using the jobs defined in the provided chronfile
     pub async fn start(&mut self, chronfile: Chronfile) -> Result<()> {
         let mut existing_jobs = take(&mut self.jobs);
         let mut new_jobs = HashMap::new();
@@ -174,8 +174,13 @@ impl ChronService {
         self.terminate_jobs(existing_jobs).await
     }
 
-    /// Start or start the chron service using the jobs defined in the provided chronfile
+    /// Stop the chron service and all running jobs, consuming it
     pub async fn stop(mut self) -> Result<()> {
+        self.stop_in_place().await
+    }
+
+    /// Stop the chron service and all running jobs, without consuming it
+    pub async fn stop_in_place(&mut self) -> Result<()> {
         let jobs = take(&mut self.jobs);
         self.terminate_jobs(jobs).await
     }

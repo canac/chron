@@ -116,13 +116,16 @@ pub async fn run(chron_dir: PathBuf, args: RunArgs) -> Result<()> {
 
     host_server.close().await?;
 
-    let Some(chron) = Arc::into_inner(chron_lock) else {
-        bail!("Failed to shutdown because the chron service is still in use");
-    };
-    chron.into_inner().stop().await?;
+    match Arc::try_unwrap(chron_lock) {
+        Ok(lock) => {
+            lock.into_inner().stop().await?;
 
-    if Arc::into_inner(db).is_none() {
-        bail!("Failed to shutdown because the database is still in use")
+            if Arc::into_inner(db).is_none() {
+                bail!("Failed to shutdown because the database is still in use")
+            }
+        }
+        // The chron service holds a database reference, so the database is necessarily still in use
+        Err(chron_lock) => chron_lock.write().await.stop_in_place().await?,
     }
 
     Ok(())
