@@ -228,7 +228,18 @@ async fn stream_logs(
     run_id: u32,
     reader: &mut BufReader<tokio::fs::File>,
 ) -> Result<Option<RunStatus>> {
+    let mut last_status_check = tokio::time::Instant::now();
     loop {
+        let mut line = String::new();
+        let bytes_read = reader.read_line(&mut line).await?;
+        if bytes_read > 0 {
+            print!("{line}");
+            if last_status_check.elapsed() < Duration::from_millis(500) {
+                continue;
+            }
+        }
+        last_status_check = tokio::time::Instant::now();
+
         let status = db.get_run_status(run_id).await?;
         if !matches!(status, Some(RunStatus::Running { .. })) {
             let mut remaining = String::new();
@@ -239,11 +250,7 @@ async fn stream_logs(
             return Ok(status);
         }
 
-        let mut line = String::new();
-        let bytes_read = reader.read_line(&mut line).await?;
-        if bytes_read > 0 {
-            print!("{line}");
-        } else {
+        if bytes_read == 0 {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
