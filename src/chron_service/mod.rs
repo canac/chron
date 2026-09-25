@@ -22,6 +22,7 @@ use tokio::spawn;
 use tokio::sync::RwLock;
 use tokio::sync::oneshot::{Receiver, Sender, channel};
 use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 
 pub struct Process {
     pub pid: u32,
@@ -50,6 +51,7 @@ pub struct Job {
     #[allow(clippy::struct_field_names)]
     pub scheduled_job: Option<RwLock<ScheduledJob>>,
     pub next_attempt: RwLock<Option<DateTime<Utc>>>,
+    pub cancel: CancellationToken,
 }
 
 struct JobTick {
@@ -231,6 +233,7 @@ impl ChronService {
         // Wait for each of the tasks to complete
         for (name, task) in jobs {
             debug!("{name}: waiting for job to terminate...");
+            task.job.cancel.cancel();
             task.job.terminate().await;
             task.handle.abort();
 
@@ -290,6 +293,7 @@ impl ChronService {
             running_process: RwLock::new(None),
             scheduled_job: None,
             next_attempt: RwLock::new(None),
+            cancel: CancellationToken::new(),
         });
         let job_copy = Arc::clone(&job);
 
@@ -340,6 +344,7 @@ impl ChronService {
             running_process: RwLock::new(None),
             scheduled_job: Some(RwLock::new(scheduled_job)),
             next_attempt: RwLock::new(None),
+            cancel: CancellationToken::new(),
         });
         let job_copy = Arc::clone(&job);
 

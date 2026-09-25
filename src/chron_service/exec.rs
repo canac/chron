@@ -198,7 +198,13 @@ pub async fn exec_command(
         };
         match exec_command_once(db, job, retry_config, &attempt, run_id_tx.take()).await {
             // Wait until the next attempt before looping again
-            Ok(Some(next_attempt)) => sleep_until(next_attempt).await,
+            Ok(Some(next_attempt)) => {
+                tokio::select! {
+                    biased;
+                    () = job.cancel.cancelled() => break,
+                    () = sleep_until(next_attempt) => {}
+                }
+            }
             // There are no more attempts
             Ok(None) => break,
             Err(err) => {
