@@ -103,58 +103,60 @@ async fn exec_command_once(
 
     let (tx_terminate, rx_terminate) = channel();
     let (tx_terminated, rx_terminated) = channel();
-    *job.running_process.write().await = Some(Process {
-        pid,
-        terminate: Some((tx_terminate, rx_terminated)),
-    });
+    job.running_processes.write().await.insert(
+        run.id,
+        Process {
+            pid,
+            terminate: Some((tx_terminate, rx_terminated)),
+        },
+    );
 
-    // Link the process to the database run
-    if let Err(err) = db.set_run_pid(run.id, pid).await {
-        *job.running_process.write().await = None;
-        return Err(err);
-    }
-    if let Some(tx) = run_id_tx {
-        let _ = tx.send(run.id);
-    }
+    let result = async {
+        // Link the process to the database run
+        db.set_run_pid(run.id, pid).await?;
+        if let Some(tx) = run_id_tx {
+            let _ = tx.send(run.id);
+        }
 
-    // Wait for the process to exit
-    let (status_code, terminated) = tokio::select! {
-        tx_result = rx_terminate => {
-            let terminated = tx_result.is_ok();
-            if terminated {
+        // Wait for the process to exit
+        let (status_code, terminated) = tokio::select! {
+            Ok(()) = rx_terminate => {
                 info!("{}: killing running process \"{}\"", job.name, job.definition.command);
 
                 // Ignore InvalidInput errors, which are because the process already terminated
                 process.kill().await.filter_err(|err| err.kind() != std::io::ErrorKind::InvalidInput).with_context(|| {
                     format!("Failed to terminate command {}", job.definition.command)
                 })?;
+                (None, true)
             }
-            (None, terminated)
-        }
-        status = process.wait() => {
-            (status?.code(), false)
-        }
-    };
+            status = process.wait() => {
+                (status?.code(), false)
+            }
+        };
 
-    // Update the run status code in the database
-    let next_attempt = if terminated {
-        None
-    } else {
-        attempt.next_attempt(status_code, retry_config)
-    };
-    *job.next_attempt.write().await = next_attempt;
-    let next_scheduled_run = job.next_scheduled_run().await;
-    db.complete_run(
-        name.clone(),
-        run.id,
-        status_code,
-        next_attempt.or(next_scheduled_run).as_ref(),
-    )
-    .await?;
+        // Update the run status code in the database
+        let next_attempt = if terminated {
+            None
+        } else {
+            attempt.next_attempt(status_code, retry_config)
+        };
+        *job.next_attempt.write().await = next_attempt;
+        let next_scheduled_run = job.next_scheduled_run().await;
+        db.complete_run(
+            name.clone(),
+            run.id,
+            status_code,
+            next_attempt.or(next_scheduled_run).as_ref(),
+        )
+        .await?;
 
-    // Wait to clear the process until after saving the run status to the database to avoid a race condition where the
-    // process is None because the job terminated, but the most recent run in the database still has a status of None.
-    *job.running_process.write().await = None;
+        Ok::<_, anyhow::Error>((status_code, terminated, next_attempt))
+    }
+    .await;
+
+    // Clear the process only after saving the run status to the database and even on error for data consistency
+    job.running_processes.write().await.remove(&run.id);
+    let (status_code, terminated, next_attempt) = result?;
 
     if let Some(code) = status_code
         && code != 0

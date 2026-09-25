@@ -47,7 +47,8 @@ pub struct Job {
     pub definition: JobDefinition,
     pub config: Arc<Config>,
     pub log_dir: PathBuf,
-    pub running_process: RwLock<Option<Process>>,
+    /// Current regular and triggered runs keyed by run id
+    pub running_processes: RwLock<HashMap<u32, Process>>,
     #[allow(clippy::struct_field_names)]
     pub scheduled_job: Option<RwLock<ScheduledJob>>,
     pub next_attempt: RwLock<Option<DateTime<Utc>>>,
@@ -102,15 +103,17 @@ impl Job {
         })
     }
 
-    /// Terminate the running process and return its pid
+    /// Terminate the running processes and return its pid
     pub async fn terminate(&self) -> Option<u32> {
-        let process = self.running_process.write().await.take()?;
-        let pid = process.pid;
-        if process.terminate().await {
-            Some(pid)
-        } else {
-            None
+        let processes = take(&mut *self.running_processes.write().await);
+        let mut terminated_pid = None;
+        for process in processes.into_values() {
+            let pid = process.pid;
+            if process.terminate().await {
+                terminated_pid = Some(pid);
+            }
         }
+        terminated_pid
     }
 }
 
@@ -209,11 +212,11 @@ impl ChronService {
             return Ok(TriggerResult::NotFound);
         };
         let job = Arc::clone(&task.job);
-        let process_guard = job.running_process.read().await;
-        if let Some(process) = process_guard.as_ref() {
+        let processes_guard = job.running_processes.read().await;
+        if let Some(process) = processes_guard.values().next() {
             return Ok(TriggerResult::Running { pid: process.pid });
         }
-        drop(process_guard);
+        drop(processes_guard);
 
         let (tx, rx) = channel();
         let db = Arc::clone(&self.db);
@@ -290,9 +293,9 @@ impl ChronService {
             definition,
             config,
             log_dir: self.calculate_log_dir(name),
-            running_process: RwLock::new(None),
+            running_processes: RwLock::default(),
             scheduled_job: None,
-            next_attempt: RwLock::new(None),
+            next_attempt: RwLock::default(),
             cancel: CancellationToken::new(),
         });
         let job_copy = Arc::clone(&job);
@@ -341,9 +344,9 @@ impl ChronService {
             definition,
             config,
             log_dir: self.calculate_log_dir(name),
-            running_process: RwLock::new(None),
+            running_processes: RwLock::default(),
             scheduled_job: Some(RwLock::new(scheduled_job)),
-            next_attempt: RwLock::new(None),
+            next_attempt: RwLock::default(),
             cancel: CancellationToken::new(),
         });
         let job_copy = Arc::clone(&job);
