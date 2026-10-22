@@ -671,11 +671,11 @@ mod tests {
         let db = open_db().await;
         db.create_jobs(vec!["job1".to_owned()]).await.unwrap();
         initialize_job(&db, "job1".to_owned()).await;
-        assert!(!db.get_active_jobs().await.unwrap().is_empty());
+        assert_ne!(db.get_active_jobs().await.unwrap(), [] as [Job; 0]);
 
         db.uninitialize_job("job1".to_owned()).await.unwrap();
 
-        assert!(db.get_active_jobs().await.unwrap().is_empty());
+        assert_eq!(db.get_active_jobs().await.unwrap(), [] as [Job; 0]);
     }
 
     #[test]
