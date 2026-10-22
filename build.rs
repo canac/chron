@@ -3,7 +3,7 @@ mod cli;
 
 use clap::CommandFactory;
 use cli::Cli;
-use std::fs::{create_dir_all, write};
+use std::fs::create_dir_all;
 use std::io::Result;
 use std::path::PathBuf;
 
@@ -39,10 +39,5 @@ fn generate_completions() -> Result<()> {
 fn generate_manpage() -> Result<()> {
     let out_dir = &PathBuf::from("man/man1");
     create_dir_all(out_dir)?;
-
-    let mut buffer: Vec<u8> = Default::default();
-    clap_mangen::Man::new(Cli::command()).render(&mut buffer)?;
-    write(out_dir.join("chron.1"), buffer)?;
-
-    Ok(())
+    clap_mangen::generate_to(Cli::command(), out_dir)
 }
