@@ -91,3 +91,61 @@ jobs:
           files: |
             *.zip
             *.tar.gz
+
+  packslip:
+    name: Sign packslip
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Sign release
+        id: packslip
+        uses: jdx/packslip@v1
+        with:
+          download: chron-*.tar.gz chron-*.zip
+          bin: chron
+          upload: false
+          resources: |
+            completion/bash=archive:completions/chron.bash
+            completion/zsh=archive:completions/_chron
+            completion/fish=archive:completions/chron.fish
+            completion/powershell=archive:completions/_chron.ps1
+            completion/elvish=archive:completions/chron.elv
+            man=archive:man/man1/chron-jobs.1
+            man=archive:man/man1/chron-kill.1
+            man=archive:man/man1/chron-logs.1
+            man=archive:man/man1/chron-run.1
+            man=archive:man/man1/chron-runs.1
+            man=archive:man/man1/chron-status.1
+            man=archive:man/man1/chron-trigger.1
+            man=archive:man/man1/chron.1
+
+      - name: Upload bundle artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: packslip-bundle
+          path: ${{ steps.packslip.outputs.bundle }}
+          if-no-files-found: error
+
+  publish-packslip:
+    name: Publish packslip
+    needs: packslip
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download bundle artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: packslip-bundle
+          path: packslip
+
+      - name: Upload bundle to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release upload "$GITHUB_REF_NAME" packslip/packslip.sigstore.json
+          --repo "$GITHUB_REPOSITORY" --clobber
