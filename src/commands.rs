@@ -8,7 +8,7 @@ use crate::database::{
 use crate::format;
 use crate::http;
 use anyhow::{Context, Result, bail};
-use chrono::Local;
+use chrono::{DateTime, Local, Utc};
 use cli_tables::Table;
 use colored::Colorize;
 use log::{LevelFilter, debug, error, info};
@@ -131,6 +131,16 @@ pub async fn run(chron_dir: PathBuf, args: RunArgs) -> Result<()> {
     Ok(())
 }
 
+/// Format a next run time relative to now on a terminal, or as an absolute timestamp otherwise
+fn format_next_run(next_run: DateTime<Utc>) -> String {
+    let next_run = next_run.with_timezone(&Local);
+    if std::io::stdout().is_terminal() {
+        format::relative_date(&next_run)
+    } else {
+        next_run.to_string()
+    }
+}
+
 /// Implementation for the `jobs` CLI command
 pub async fn jobs(db: ClientDatabase) -> Result<()> {
     let jobs = db.get_active_jobs().await?;
@@ -138,7 +148,6 @@ pub async fn jobs(db: ClientDatabase) -> Result<()> {
         println!("No jobs are running");
         return Ok(());
     }
-    let tty = std::io::stdout().is_terminal();
     for (index, job) in jobs.into_iter().enumerate() {
         if index > 0 {
             println!();
@@ -150,13 +159,7 @@ pub async fn jobs(db: ClientDatabase) -> Result<()> {
         let status = match job.status {
             JobStatus::Running { .. } => "running".green(),
             JobStatus::Waiting { next_run } => {
-                let next_run = next_run.with_timezone(&Local);
-                let next_run_formatted = if tty {
-                    format::relative_date(&next_run)
-                } else {
-                    next_run.to_string()
-                };
-                format!("next run {next_run_formatted}").into()
+                format!("next run {}", format_next_run(next_run)).into()
             }
             JobStatus::Completed => "next run never".red(),
         };
@@ -184,7 +187,9 @@ pub async fn status(db: ClientDatabase, args: StatusArgs) -> Result<()> {
     let status = match job.status {
         JobStatus::Running { pid } => format!("running (pid {pid})"),
         JobStatus::Completed => "not running".to_owned(),
-        JobStatus::Waiting { next_run } => format!("not running (next run at {next_run})"),
+        JobStatus::Waiting { next_run } => {
+            format!("not running (next run {})", format_next_run(next_run))
+        }
     };
     println!("status: {status}");
 
