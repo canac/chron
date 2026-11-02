@@ -9,7 +9,6 @@ use crate::format;
 use crate::http;
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Local, Utc};
-use cli_tables::Table;
 use colored::Colorize;
 use log::{LevelFilter, debug, error, info};
 use notify::RecursiveMode;
@@ -159,7 +158,7 @@ pub async fn jobs(db: ClientDatabase) -> Result<()> {
         let status = match job.status {
             JobStatus::Running { .. } => "running".green(),
             JobStatus::Waiting { next_run } => {
-                format!("next run {}", format_next_run(next_run)).into()
+                format!("next run {}", format_next_run(next_run)).cyan()
             }
             JobStatus::Completed => "next run never".red(),
         };
@@ -185,10 +184,12 @@ pub async fn status(db: ClientDatabase, args: StatusArgs) -> Result<()> {
     }
 
     let status = match job.status {
-        JobStatus::Running { pid } => format!("running (pid {pid})"),
-        JobStatus::Completed => "not running".to_owned(),
+        JobStatus::Running { pid } => format!("{} (pid {pid})", "running".green()),
+        JobStatus::Completed => "not running".red().to_string(),
         JobStatus::Waiting { next_run } => {
             format!("not running (next run {})", format_next_run(next_run))
+                .cyan()
+                .to_string()
         }
     };
     println!("status: {status}");
@@ -207,21 +208,49 @@ pub async fn runs(db: ClientDatabase, args: RunsArgs) -> Result<()> {
         bail!("No runs found for job {name}");
     }
 
-    let mut table = Table::new();
-    table.push_row(&vec!["time", "execution time", "status"])?;
-    for run in runs {
-        let status = match run.status()? {
-            RunStatus::Running { pid } => format!("running (pid {pid})"),
-            RunStatus::Completed { status_code, .. } => status_code.to_string(),
-            RunStatus::Terminated => "terminated".to_owned(),
-        };
-        table.push_row_string(&vec![
-            format::relative_date(&run.started_at()),
-            run.execution_time()
+    let rows = runs
+        .iter()
+        .map(|run| {
+            let status = match run.status()? {
+                RunStatus::Running { pid } => format!("{} (pid {pid})", "running".green()),
+                RunStatus::Completed { status_code: 0, .. } => "0".green().to_string(),
+                RunStatus::Completed { status_code, .. } => {
+                    status_code.to_string().red().to_string()
+                }
+                RunStatus::Terminated => "terminated".yellow().to_string(),
+            };
+            let execution_time = run
+                .execution_time()
                 .map(|duration| format::duration(&duration))
-                .unwrap_or_default(),
-            status,
-        ])?;
+                .unwrap_or_default();
+            Ok((
+                format::relative_date(&run.started_at()),
+                execution_time,
+                status,
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let time_width = rows
+        .iter()
+        .map(|(time, _, _)| time.chars().count())
+        .chain(["time".len()])
+        .max()
+        .unwrap_or_default();
+    let execution_width = rows
+        .iter()
+        .map(|(_, execution_time, _)| execution_time.chars().count())
+        .chain(["execution time".len()])
+        .max()
+        .unwrap_or_default();
+    println!(
+        "{}  {}  {}",
+        format!("{:<time_width$}", "time").bold(),
+        format!("{:<execution_width$}", "execution time").bold(),
+        "status".bold()
+    );
+    for (time, execution_time, status) in rows {
+        println!("{time:<time_width$}  {execution_time:<execution_width$}  {status}");
     }
 
     Ok(())
