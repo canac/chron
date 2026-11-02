@@ -3,29 +3,28 @@ use super::ipc::{self, Request, Response, TriggerResult};
 use super::models::{Job, Run, RunStatus};
 use crate::database::HostServer;
 use anyhow::{Result, bail};
-use interprocess::local_socket::tokio::{RecvHalf, SendHalf};
+use interprocess::local_socket::tokio::Stream;
 use std::path::PathBuf;
 
 pub struct ClientDatabase {
     db: Database,
-    tx: SendHalf,
-    rx: RecvHalf,
+    stream: Stream,
 }
 
 impl ClientDatabase {
     /// Open the database as a read-only client
     /// The database will be able to read job information from an open `Host`.
     pub async fn open(chron_dir: PathBuf) -> Result<Self> {
-        let (mut rx, mut tx) = HostServer::connect(&chron_dir).await?;
+        let mut stream = HostServer::connect(&chron_dir).await?;
         let req = Request::Connect;
-        ipc::send(&mut tx, &req).await?;
-        let res = ipc::receive::<Response, _>(&mut rx).await?;
+        ipc::send(&mut stream, &req).await?;
+        let res = ipc::receive::<Response, _>(&mut stream).await?;
         let Response::Connect = res else {
             bail!("chron is not running");
         };
 
         let db = Database::new(&chron_dir).await?;
-        Ok(Self { db, tx, rx })
+        Ok(Self { db, stream })
     }
 
     /// Trigger a one-off job run
@@ -33,8 +32,8 @@ impl ClientDatabase {
         let req = Request::Trigger {
             name: name.to_owned(),
         };
-        ipc::send(&mut self.tx, &req).await?;
-        let res = ipc::receive::<Response, _>(&mut self.rx).await?;
+        ipc::send(&mut self.stream, &req).await?;
+        let res = ipc::receive::<Response, _>(&mut self.stream).await?;
         let Response::Trigger { result } = res else {
             bail!("Unexpected response")
         };
@@ -46,8 +45,8 @@ impl ClientDatabase {
         let req = Request::Terminate {
             name: name.to_owned(),
         };
-        ipc::send(&mut self.tx, &req).await?;
-        let res = ipc::receive::<Response, _>(&mut self.rx).await?;
+        ipc::send(&mut self.stream, &req).await?;
+        let res = ipc::receive::<Response, _>(&mut self.stream).await?;
         let Response::Terminate { result } = res else {
             bail!("Unexpected response")
         };

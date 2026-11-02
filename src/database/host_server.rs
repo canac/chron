@@ -3,7 +3,7 @@ use crate::chron_service::ChronService;
 use anyhow::{Context, Result, anyhow, bail};
 use interprocess::local_socket::{
     GenericFilePath, ListenerOptions, ToFsName,
-    tokio::{Listener, RecvHalf, SendHalf, prelude::*},
+    tokio::{Listener, prelude::*},
     traits::tokio::Stream,
 };
 use log::info;
@@ -103,15 +103,14 @@ impl HostServer {
                     Some(_) = connections.join_next() => continue,
                     result = listener.accept() => result
                 };
-                let Ok(conn) = result else { break };
-                let (mut rx, mut tx) = conn.split();
+                let Ok(mut conn) = result else { break };
                 let chron = Arc::clone(&chron);
                 let token = token.child_token();
                 connections.spawn(async move {
                     loop {
                         let req = tokio::select! {
                             () = token.cancelled() => return Ok::<(), anyhow::Error>(()),
-                            req = ipc::receive::<Request, _>(&mut rx) => req?,
+                            req = ipc::receive::<Request, _>(&mut conn) => req?,
                         };
                         let res = match req {
                             Request::Connect => Response::Connect,
@@ -128,7 +127,7 @@ impl HostServer {
                                 Response::Terminate { result }
                             }
                         };
-                        ipc::send(&mut tx, &res).await?;
+                        ipc::send(&mut conn, &res).await?;
                     }
                 });
             }
@@ -156,7 +155,7 @@ impl HostServer {
     }
 
     /// Connect with a host and return its port
-    pub(super) async fn connect(chron_dir: &Path) -> Result<(RecvHalf, SendHalf)> {
+    pub(super) async fn connect(chron_dir: &Path) -> Result<LocalSocketStream> {
         let path = Self::get_socket_path(chron_dir);
         let name = path.as_path().to_fs_name::<GenericFilePath>()?;
         let stream = LocalSocketStream::connect(name).await.map_err(|err| {
@@ -168,7 +167,7 @@ impl HostServer {
                 err.into()
             }
         })?;
-        Ok(stream.split())
+        Ok(stream)
     }
 
     /// Return the location of the socket file that clients use to communicate with the host
