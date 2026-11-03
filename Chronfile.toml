@@ -1,0 +1,3 @@
+[jobs.echo]
+# schedule = "* * 0 * * *"
+command = "echo hello; sleep 3"
